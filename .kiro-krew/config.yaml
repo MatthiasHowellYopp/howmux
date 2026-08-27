@@ -22,6 +22,11 @@ logging:
   max_file_size_mb: 100
   log_dir: ".kiro-krew/logs"
 
+jira:
+    board_url: "https://bitquill.atlassian.net/jira/software/projects/AEA/boards/526"
+    assignee: "currentUser()"
+    # jql: ""   # leave unset to auto-derive: assignee = currentUser() AND status = "To Do"
+
 # Sandbox configuration (optional, for containerized agent execution)
 # sandbox:
 #   image: "alpine:3.19"           # Docker image for agent containers
