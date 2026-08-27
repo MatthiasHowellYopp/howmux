@@ -14,7 +14,7 @@ func TestLoad_SandboxConfigDefaults(t *testing.T) {
 		t.Fatalf("Failed to create config dir: %v", err)
 	}
 
-	configContent := `repo: test/repo`
+	configContent := `githubrepo: test/repo`
 	configFile := configDir + string(os.PathSeparator) + "config.yaml"
 	if err := os.WriteFile(configFile, []byte(configContent), 0644); err != nil {
 		t.Fatalf("Failed to write config file: %v", err)
@@ -58,7 +58,7 @@ func TestLoad_SandboxConfigParsing(t *testing.T) {
 	}{
 		{
 			name: "complete sandbox config",
-			configContent: `repo: test/repo
+			configContent: `githubrepo: test/repo
 sandbox:
   workspace_dir: /app
   cpu_cores: 2.0
@@ -73,7 +73,7 @@ sandbox:
 		},
 		{
 			name: "partial sandbox config with defaults",
-			configContent: `repo: test/repo
+			configContent: `githubrepo: test/repo
 sandbox:
   memory_mb: 512`,
 			expectedConfig: SandboxConfig{
@@ -85,7 +85,7 @@ sandbox:
 		},
 		{
 			name: "empty sandbox section uses defaults",
-			configContent: `repo: test/repo
+			configContent: `githubrepo: test/repo
 sandbox:`,
 			expectedConfig: SandboxConfig{
 				WorkspaceDir: "/workspace",
@@ -142,56 +142,56 @@ func TestLoad_SandboxConfigValidation(t *testing.T) {
 	}{
 		{
 			name: "negative cpu_cores",
-			configContent: `repo: test/repo
+			configContent: `githubrepo: test/repo
 sandbox:
   cpu_cores: -1.0`,
 			expectError: "sandbox.cpu_cores must be greater than 0",
 		},
 		{
 			name: "zero cpu_cores",
-			configContent: `repo: test/repo
+			configContent: `githubrepo: test/repo
 sandbox:
   cpu_cores: 0`,
 			expectError: "sandbox.cpu_cores must be greater than 0",
 		},
 		{
 			name: "negative memory_mb",
-			configContent: `repo: test/repo
+			configContent: `githubrepo: test/repo
 sandbox:
   memory_mb: -512`,
 			expectError: "sandbox.memory_mb must be greater than 0",
 		},
 		{
 			name: "zero memory_mb",
-			configContent: `repo: test/repo
+			configContent: `githubrepo: test/repo
 sandbox:
   memory_mb: 0`,
 			expectError: "sandbox.memory_mb must be greater than 0",
 		},
 		{
 			name: "memory_mb below minimum",
-			configContent: `repo: test/repo
+			configContent: `githubrepo: test/repo
 sandbox:
   memory_mb: 128`,
 			expectError: "sandbox.memory_mb must be at least 256",
 		},
 		{
 			name: "negative timeout",
-			configContent: `repo: test/repo
+			configContent: `githubrepo: test/repo
 sandbox:
   timeout: -5m`,
 			expectError: "sandbox.timeout must be greater than 0",
 		},
 		{
 			name: "zero timeout",
-			configContent: `repo: test/repo
+			configContent: `githubrepo: test/repo
 sandbox:
   timeout: 0s`,
 			expectError: "sandbox.timeout must be greater than 0",
 		},
 		{
 			name: "empty workspace_dir",
-			configContent: `repo: test/repo
+			configContent: `githubrepo: test/repo
 sandbox:
   workspace_dir: ""`,
 			expectError: "sandbox.workspace_dir cannot be empty",
@@ -276,7 +276,7 @@ func TestLoad_DurationParsing(t *testing.T) {
 				t.Fatalf("Failed to create config dir: %v", err)
 			}
 
-			configContent := `repo: test/repo
+			configContent := `githubrepo: test/repo
 sandbox:
   timeout: ` + tt.timeoutValue
 			configFile := configDir + string(os.PathSeparator) + "config.yaml"

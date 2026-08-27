@@ -14,20 +14,20 @@ func TestLoad_EnableCopilotReviewDefaults(t *testing.T) {
 	}{
 		{
 			name: "enable_copilot_review not specified - should default to true",
-			configContent: `repo: test/repo
+			configContent: `githubrepo: test/repo
 label: test-label`,
 			expectedValue: true,
 		},
 		{
 			name: "enable_copilot_review explicitly set to true",
-			configContent: `repo: test/repo
+			configContent: `githubrepo: test/repo
 label: test-label
 enable_copilot_review: true`,
 			expectedValue: true,
 		},
 		{
 			name: "enable_copilot_review explicitly set to false",
-			configContent: `repo: test/repo
+			configContent: `githubrepo: test/repo
 label: test-label
 enable_copilot_review: false`,
 			expectedValue: false,
@@ -83,7 +83,7 @@ func TestLoad_AllDefaultValues(t *testing.T) {
 		t.Fatalf("Failed to create config dir: %v", err)
 	}
 
-	configContent := `repo: test/repo`
+	configContent := `githubrepo: test/repo`
 	configFile := configDir + string(os.PathSeparator) + "config.yaml"
 	if err := os.WriteFile(configFile, []byte(configContent), 0644); err != nil {
 		t.Fatalf("Failed to write config file: %v", err)

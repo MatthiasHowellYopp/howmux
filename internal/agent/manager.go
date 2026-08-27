@@ -330,7 +330,7 @@ func (m *Manager) HandleExit(id string, exitCode int) {
 		log.Printf("[agent] %s completed with exit code 0 (issue #%d), verifying PR exists", id, issueNumber)
 
 		// Verify PR exists before marking as done
-		prExists, err := github.PRExistsForIssue(m.config.Repo, issueNumber)
+		prExists, err := github.PRExistsForIssue(m.config.GithubRepo, issueNumber)
 		if err != nil {
 			log.Printf("[agent] failed to check for PR for issue #%d: %v", issueNumber, err)
 		}
@@ -347,7 +347,7 @@ func (m *Manager) HandleExit(id string, exitCode int) {
 			doneLabel := m.config.Label + "-done"
 			m.mu.Unlock()
 
-			if err := github.AddLabel(m.config.Repo, issueNumber, doneLabel); err != nil {
+			if err := github.AddLabel(m.config.GithubRepo, issueNumber, doneLabel); err != nil {
 				log.Printf("[agent] failed to add %s label to issue #%d: %v", doneLabel, issueNumber, err)
 			}
 		} else {
@@ -370,7 +370,7 @@ func (m *Manager) HandleExit(id string, exitCode int) {
 				failedLabel := m.config.Label + "-failed"
 				log.Printf("[agent] %s exhausted retries, labeling issue #%d as %s", id, updatedAgent.IssueNumber, failedLabel)
 				m.mu.Unlock()
-				github.AddLabel(m.config.Repo, issueNumber, failedLabel)
+				github.AddLabel(m.config.GithubRepo, issueNumber, failedLabel)
 			}
 		}
 		// Perform cleanup after successful completion
@@ -395,7 +395,7 @@ func (m *Manager) HandleExit(id string, exitCode int) {
 		} else {
 			failedLabel := m.config.Label + "-failed"
 			log.Printf("[agent] %s exhausted retries, labeling issue #%d as %s", id, agent.IssueNumber, failedLabel)
-			github.AddLabel(m.config.Repo, agent.IssueNumber, failedLabel)
+			github.AddLabel(m.config.GithubRepo, agent.IssueNumber, failedLabel)
 		}
 	}
 }
@@ -489,7 +489,7 @@ func (m *Manager) retryAgent(agent *Agent) {
 		"--agent", "krew-lead",
 		"--no-interactive",
 		"--trust-all-tools",
-		fmt.Sprintf("Process issue #%d from repo %s. Worktree name: %s. You are already in the worktree directory — all file operations happen here. Skip worktree creation (step 2).", agent.IssueNumber, m.config.Repo, worktreeName))
+		fmt.Sprintf("Process issue #%d from repo %s. Worktree name: %s. You are already in the worktree directory — all file operations happen here. Skip worktree creation (step 2).", agent.IssueNumber, m.config.GithubRepo, worktreeName))
 	cmd.Dir = worktreePath
 
 	// Always capture output for TUI output view; terminal logging is optional.
@@ -502,7 +502,7 @@ func (m *Manager) retryAgent(agent *Agent) {
 	cmd.Stderr = outputWriter
 	cmd.Env = append(os.Environ(),
 		fmt.Sprintf("ISSUE_NUMBER=%d", agent.IssueNumber),
-		fmt.Sprintf("REPO=%s", m.config.Repo),
+		fmt.Sprintf("REPO=%s", m.config.GithubRepo),
 		fmt.Sprintf("KIRO_KREW_WATCHER_PID=%d", os.Getpid()),
 		fmt.Sprintf("WORKTREE_PATH=%s", worktreePath))
 
@@ -569,7 +569,7 @@ func (m *Manager) cleanupRetryFile(issueNumber int) error {
 // performCleanup verifies PR creation and cleans up worktree and retry files
 func (m *Manager) performCleanup(issueNumber, pid int) {
 	// Verify PR exists with expected branch name
-	prExists, err := github.VerifyPRExists(m.config.Repo, issueNumber, pid)
+	prExists, err := github.VerifyPRExists(m.config.GithubRepo, issueNumber, pid)
 	if err != nil {
 		log.Printf("[cleanup] failed to verify PR for issue #%d: %v", issueNumber, err)
 		return

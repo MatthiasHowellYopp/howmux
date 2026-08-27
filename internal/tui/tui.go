@@ -64,6 +64,7 @@ type consoleState struct {
 
 type model struct {
 	watcher               *watcher.Watcher
+	jiraWatcher           *watcher.JiraWatcher
 	manager               *agent.Manager
 	sessionManager        *session.SessionManager
 	config                *config.Config
@@ -135,6 +136,7 @@ func newModel(w *watcher.Watcher, m *agent.Manager, cfg *config.Config, logFile 
 
 	return model{
 		watcher:          w,
+		jiraWatcher:      watcher.NewJiraWatcher(cfg),
 		manager:          m,
 		sessionManager:   session.NewSessionManager(),
 		config:           cfg,
@@ -1214,6 +1216,12 @@ func (m model) executeCommand(input string) (model, tea.Cmd) {
 			return m, nil
 		}
 		return m.handleWatch(parts[1])
+	case "jirawatch":
+		arg := ""
+		if len(parts) >= 2 {
+			arg = parts[1]
+		}
+		return m.handleJiraWatch(arg)
 	case "status":
 		return m.handleStatus()
 	case "stop":

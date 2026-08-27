@@ -117,8 +117,8 @@ func getRepoName() (string, error) {
 
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "repo:") {
-			repo := strings.TrimSpace(strings.TrimPrefix(line, "repo:"))
+		if strings.HasPrefix(line, "githubrepo:") {
+			repo := strings.TrimSpace(strings.TrimPrefix(line, "githubrepo:"))
 			repo = strings.Trim(repo, "\"'")
 			if parts := strings.Split(repo, "/"); len(parts) == 2 {
 				return parts[1], nil
@@ -127,5 +127,5 @@ func getRepoName() (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("repo field not found in config")
+	return "", fmt.Errorf("githubrepo field not found in config")
 }

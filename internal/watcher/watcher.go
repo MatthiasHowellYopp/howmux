@@ -44,7 +44,7 @@ func (w *Watcher) Start() {
 	w.cleanupOrphanedWorktrees()
 	w.stop = make(chan struct{})
 	w.started = true
-	log.Printf("[watcher] started — polling %s every %s for label %q", w.config.Repo, w.config.PollInterval, w.config.Label)
+	log.Printf("[watcher] started — polling %s every %s for label %q", w.config.GithubRepo, w.config.PollInterval, w.config.Label)
 	go w.pollLoop()
 }
 
@@ -79,7 +79,7 @@ func (w *Watcher) checkIssues() {
 	w.backoffTracker.IncrementRound()
 
 	log.Printf("[watcher] polling for issues...")
-	issues, err := github.ListIssues(w.config.Repo, w.config.Label)
+	issues, err := github.ListIssues(w.config.GithubRepo, w.config.Label)
 	if err != nil {
 		log.Printf("[watcher] error fetching issues: %v", err)
 		return
@@ -111,7 +111,7 @@ func (w *Watcher) checkIssues() {
 			continue
 		}
 
-		validationResult, err := w.dependencyValidator.ValidateIssue(w.config.Repo, issue.Number, issue.Body)
+		validationResult, err := w.dependencyValidator.ValidateIssue(w.config.GithubRepo, issue.Number, issue.Body)
 		if err != nil {
 			log.Printf("[watcher] dependency validation error for issue #%d: %v", issue.Number, err)
 			w.backoffTracker.RecordFailure(issue.Number)
@@ -137,7 +137,7 @@ func (w *Watcher) checkIssues() {
 		w.incrementGlobalRetryCount(issue.Number)
 		attempt := w.getCurrentRetryCount(issue.Number)
 		log.Printf("[watcher] spawning agent for issue #%d %q (attempt %d)", issue.Number, issue.Title, attempt)
-		if _, err := w.manager.Spawn(issue.Number, w.config.Repo); err != nil {
+		if _, err := w.manager.Spawn(issue.Number, w.config.GithubRepo); err != nil {
 			log.Printf("[watcher] failed to spawn agent for issue #%d: %v", issue.Number, err)
 		}
 	}

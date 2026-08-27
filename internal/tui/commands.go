@@ -53,6 +53,72 @@ func (m model) handleWatch(action string) (model, tea.Cmd) {
 	return m, nil
 }
 
+// handleJiraWatch parses the jirawatch argument, which is a union of a keyword
+// (start|stop) or a positive integer loop count. An empty argument means 1
+// (a single one-shot poll).
+func (m model) handleJiraWatch(arg string) (model, tea.Cmd) {
+	// Require a Jira source to be configured.
+	if !m.config.Jira.IsConfigured() {
+		m = m.appendActivity(m.styles.Error.Render("Jira is not configured — set jira.board_url in .kiro-krew/config.yaml"))
+		return m, nil
+	}
+
+	switch strings.ToLower(strings.TrimSpace(arg)) {
+	case "stop":
+		if !watcherIsRunning(any(m.jiraWatcher)) {
+			m = m.appendActivity(m.styles.Warning.Render("Jira watcher not running"))
+			return m, nil
+		}
+		m.jiraWatcher.Stop()
+		m = m.appendActivity(m.styles.Success.Render("Jira watcher stopped"))
+		return m, nil
+
+	case "start":
+		if watcherIsRunning(any(m.jiraWatcher)) {
+			m = m.appendActivity(m.styles.Warning.Render("Jira watcher already running"))
+			return m, nil
+		}
+		if info, err := m.logReader.Stat(); err == nil {
+			m.lastLogPos = info.Size()
+		}
+		m.jiraWatcher.Start()
+		m = m.appendActivity(m.styles.Success.Render("Jira watcher started (infinite — use 'jirawatch stop' to halt)"))
+		return m, nil
+
+	case "":
+		// No argument: single one-shot poll.
+		return m.startBoundedJiraWatch(1)
+
+	default:
+		// Must be a positive integer loop count.
+		n, err := strconv.Atoi(strings.TrimSpace(arg))
+		if err != nil || n < 1 {
+			m = m.appendActivity(m.styles.Error.Render("Usage: jirawatch [count|start|stop]  (count is a positive integer; omitted = 1)"))
+			return m, nil
+		}
+		return m.startBoundedJiraWatch(n)
+	}
+}
+
+// startBoundedJiraWatch launches a bounded run of n iterations, guarding
+// against a watcher that is already active.
+func (m model) startBoundedJiraWatch(n int) (model, tea.Cmd) {
+	if watcherIsRunning(any(m.jiraWatcher)) {
+		m = m.appendActivity(m.styles.Warning.Render("Jira watcher already running"))
+		return m, nil
+	}
+	if info, err := m.logReader.Stat(); err == nil {
+		m.lastLogPos = info.Size()
+	}
+	m.jiraWatcher.RunBounded(n)
+	if n == 1 {
+		m = m.appendActivity(m.styles.Success.Render("Jira watcher: one-shot poll started"))
+	} else {
+		m = m.appendActivity(m.styles.Success.Render(fmt.Sprintf("Jira watcher: running %d iterations", n)))
+	}
+	return m, nil
+}
+
 func (m model) handleStatus() (model, tea.Cmd) {
 	agents := m.manager.List()
 	content := []string{}
@@ -188,6 +254,9 @@ func (m model) handleHelp() (model, tea.Cmd) {
 		m.styles.Prompt.Render("Available commands:"),
 		"  watch start    - Start watching for labeled issues",
 		"  watch stop     - Stop watching",
+		"  jirawatch [n]  - Poll Jira n times (default 1, one-shot) and retrieve work",
+		"  jirawatch start - Poll Jira continuously until 'jirawatch stop'",
+		"  jirawatch stop - Stop the Jira watcher",
 		"  status         - List all agents with details",
 		"  stop <issue>   - Stop agent for specific issue number",
 		"  plan [desc]    - Create new ACP-based Planning tab",

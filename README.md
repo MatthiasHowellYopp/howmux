@@ -89,7 +89,7 @@ This creates:
 Edit `.kiro-krew/config.yaml`:
 
 ```yaml
-repo: owner/repo-name
+githubrepo: owner/repo-name
 label: kiro-krew
 poll_interval: 5m
 max_retries: 3
@@ -97,10 +97,13 @@ max_retries: 3
 
 | Field | Description | Default |
 |-------|-------------|---------|
-| `repo` | GitHub repository (owner/name) | *required* |
+| `githubrepo` | GitHub repository (owner/name) | *see note* |
 | `label` | Issue label to watch for | `kiro-krew` |
 | `poll_interval` | How often to poll GitHub | `5m` |
 | `max_retries` | Max retry attempts per issue | `3` |
+
+> **Note:** At least one work source must be configured — either `githubrepo`
+> (for the GitHub issue watcher) or `jira.board_url` (for the Jira watcher).
 
 ### 3. Run
 

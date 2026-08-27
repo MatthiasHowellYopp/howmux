@@ -40,6 +40,14 @@ func NewCommandRegistry(agentManager *agent.Manager) *CommandRegistry {
 	})
 
 	registry.register(&Command{
+		Name:        "jirawatch",
+		Description: "Poll Jira for work: [count] one-shot/loop, or start|stop",
+		Subcommands: []string{"start", "stop"},
+		HasArgs:     true,
+		ArgPattern:  "[count|start|stop]",
+	})
+
+	registry.register(&Command{
 		Name:        "status",
 		Description: "Show system status and running agents",
 	})

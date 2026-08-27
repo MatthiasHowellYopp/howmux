@@ -1,4 +1,4 @@
-repo: ""
+githubrepo: ""
 label: "kiro-krew"
 poll_interval: 5m
 max_retries: 3
@@ -10,3 +10,14 @@ enable_copilot_review: true  # Enable AI-powered code review feedback
 # Theme selection (optional, defaults to 'default')
 # Available themes: default, high-contrast, light
 # theme: default
+
+# Jira work source (optional). Configure to pull work from a Jira board via
+# the `jirawatch` command. At least one of `githubrepo` or `jira.board_url`
+# must be set.
+# jira:
+#   board_url: "https://your-org.atlassian.net/jira/software/projects/ABC/boards/1"
+#   assignee: "currentUser()"   # account email, or the currentUser() JQL function
+#   # jql is derived from assignee when omitted:
+#   #   assignee = currentUser() AND status = "To Do"
+#   jql: ""
+#   in_progress_transition: "In Progress"   # reserved for a later step

@@ -30,8 +30,29 @@ type LoggingConfig struct {
 	LogDir         string `yaml:"log_dir"`
 }
 
+// JiraConfig holds settings for the Jira work source. It is optional: when
+// BoardURL is empty the Jira source is considered unconfigured.
+type JiraConfig struct {
+	// BoardURL identifies the Jira board/project to pull work from.
+	BoardURL string `yaml:"board_url"`
+	// Assignee scopes the search to a single user. May be an account email or
+	// a JQL function such as "currentUser()".
+	Assignee string `yaml:"assignee"`
+	// JQL is the query used to find candidate work items. When empty a default
+	// is derived from Assignee.
+	JQL string `yaml:"jql"`
+	// InProgressTransition is the workflow transition name used to mark a
+	// retrieved ticket as in progress. Reserved for a later step.
+	InProgressTransition string `yaml:"in_progress_transition"`
+}
+
+// IsConfigured reports whether the Jira source has enough information to run.
+func (j JiraConfig) IsConfigured() bool {
+	return strings.TrimSpace(j.BoardURL) != ""
+}
+
 type Config struct {
-	Repo                string        `yaml:"repo"`
+	GithubRepo          string        `yaml:"githubrepo"`
 	Label               string        `yaml:"label"`
 	PollInterval        time.Duration `yaml:"poll_interval"`
 	MaxRetries          int           `yaml:"max_retries"`
@@ -43,6 +64,7 @@ type Config struct {
 	Session             SessionConfig `yaml:"session"`
 	Sandbox             SandboxConfig `yaml:"sandbox"`
 	Logging             LoggingConfig `yaml:"logging"`
+	Jira                JiraConfig    `yaml:"jira"`
 	LoadedTheme         *Theme        `yaml:"-"`
 }
 
@@ -88,8 +110,27 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	if cfg.Repo == "" {
-		return nil, fmt.Errorf("repo field is required")
+	// At least one work source must be configured. Additional sources may be
+	// added over time; for now GitHub (githubrepo) and Jira (jira.board_url)
+	// are the recognised sources.
+	if cfg.GithubRepo == "" && !cfg.Jira.IsConfigured() {
+		return nil, fmt.Errorf("at least one work source must be configured: set 'githubrepo' or 'jira.board_url'")
+	}
+
+	// Derive a default Jira JQL from the assignee when the board is configured
+	// but no explicit query was provided.
+	if cfg.Jira.IsConfigured() && strings.TrimSpace(cfg.Jira.JQL) == "" {
+		assignee := strings.TrimSpace(cfg.Jira.Assignee)
+		if assignee == "" {
+			assignee = "currentUser()"
+		}
+		// currentUser() is a JQL function and must not be quoted; a literal
+		// account/email is quoted.
+		if assignee == "currentUser()" {
+			cfg.Jira.JQL = `assignee = currentUser() AND status = "To Do"`
+		} else {
+			cfg.Jira.JQL = fmt.Sprintf(`assignee = %q AND status = "To Do"`, assignee)
+		}
 	}
 
 	// Validate session config

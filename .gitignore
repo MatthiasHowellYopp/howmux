@@ -13,6 +13,7 @@ test-results/
 cmd/kiro-krew/kiro-krew
 /specs/
 .kiro-krew/retries/
+.kiro-krew/jira-store/
 **/.kiro-krew/evals/tmp/
 /test-build
 .kiro-krew/sessions/
