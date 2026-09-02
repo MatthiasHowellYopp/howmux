@@ -1,4 +1,4 @@
-repo: "jbrinkman/kiro-krew"
+repo: "matthiashowellyopp/howmux"
 label: "kiro-krew"
 poll_interval: 1m
 max_retries: 3
