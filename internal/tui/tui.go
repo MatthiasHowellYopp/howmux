@@ -731,6 +731,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	return m, nil
 }
+
 // setPlanningFocus is the single source of truth for focus on a planning tab.
 // It synchronizes all three focus stores that previously drifted apart:
 //   - m.input (footer AutocompleteInput)
@@ -769,7 +770,6 @@ func (m *model) togglePlanningFocus() tea.Cmd {
 	}
 	return m.setPlanningFocus(FocusTargetFooter)
 }
-
 
 func (m model) activateOverlay(overlay overlayType, title string, content []string) model {
 	// Limit content size to prevent memory issues

@@ -275,6 +275,13 @@ func (m model) handlePlan(description string) (model, tea.Cmd) {
 	var focusCmd tea.Cmd
 	m, focusCmd = m.switchActiveTab(len(m.tabManager.GetTabs()) - 1)
 
+	// Override default focus state for newly created planning tab.
+	// New planning tabs should start with message input focused
+	// so users can type immediately without pressing Tab first.
+	m.tabFocusStates[planningTab.ID()] = FocusTargetMessage
+	messageFocusCmd := planningTab.RestoreFocusState(FocusTargetMessage)
+	m.input.SetFocus(false)
+
 	// Add initial message with connection status feedback
 	if description != "" {
 		planningTab.AddMessage("user", description)
@@ -289,7 +296,13 @@ func (m model) handlePlan(description string) (model, tea.Cmd) {
 
 	m = m.appendActivity(m.styles.Success.Render(fmt.Sprintf("✅ Created planning tab: %s", planningTab.Title())))
 
-	return m, focusCmd
+	// Batch all commands
+	allCmds := []tea.Cmd{focusCmd}
+	if messageFocusCmd != nil {
+		allCmds = append(allCmds, messageFocusCmd)
+	}
+
+	return m, tea.Batch(allCmds...)
 }
 
 func (m model) handlePlanClassic(description string) (model, tea.Cmd) {
