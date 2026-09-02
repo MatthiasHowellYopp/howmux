@@ -283,26 +283,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.input.Focus(), tea.ClearScreen)
 
 	case focusTransferMsg:
-		// Handle focus coordination between planning tab and footer input
+		// Handle focus coordination between planning tab and footer input.
+		// Route through the single focus helper so the three focus stores
+		// (footer, tab focusTarget, tabFocusStates) cannot drift apart.
 		activeTab := m.tabManager.GetActiveTab()
 		if activeTab != nil && activeTab.Type() == TabTypePlanning {
 			if msg.target == "footer" {
-				// Update centralized focus state
-				m.tabFocusStates[activeTab.ID()] = FocusTargetFooter
-
-				// Focus footer input, blur any tab input
-				m.input.SetFocus(true)
-				return m, m.input.Focus()
+				return m, m.setPlanningFocus(FocusTargetFooter)
 			} else if msg.target == "message" {
-				// Update centralized focus state
-				m.tabFocusStates[activeTab.ID()] = FocusTargetMessage
-
-				// Focus message input, blur footer input
-				m.input.SetFocus(false)
-				if pt, ok := activeTab.(*PlanningTab); ok {
-					pt.SetFocusInput(true)
-					return m, pt.RestoreFocus()
-				}
+				return m, m.setPlanningFocus(FocusTargetMessage)
 			}
 		}
 		return m, nil
@@ -460,20 +449,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.isClickInFooterInput(mouse.X, mouse.Y) {
 				activeTab := m.tabManager.GetActiveTab()
 				if activeTab != nil {
-					// Update tab's centralized focus state
-					m.tabFocusStates[activeTab.ID()] = FocusTargetFooter
-
-					// Restore focus state on the tab using the interface method
-					tabCmd := activeTab.RestoreFocusState(FocusTargetFooter)
-
-					// Apply focus to footer input
-					m.input.SetFocus(true)
-
 					logging.Debug("mouse click focus transfer to footer",
 						"tab_id", activeTab.ID(),
 						"mouse_x", mouse.X,
 						"mouse_y", mouse.Y)
 
+					// On planning tabs, route through the single focus helper so
+					// all three focus stores stay in sync. On other tabs the
+					// footer is always the focus target anyway.
+					if activeTab.Type() == TabTypePlanning {
+						return m, m.setPlanningFocus(FocusTargetFooter)
+					}
+
+					m.tabFocusStates[activeTab.ID()] = FocusTargetFooter
+					tabCmd := activeTab.RestoreFocusState(FocusTargetFooter)
+					m.input.SetFocus(true)
 					return m, tea.Batch(m.input.Focus(), tabCmd)
 				}
 			}
@@ -507,16 +497,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Priority handling for focus transfer in planning tabs
+		// Priority handling for focus in planning tabs: Esc always returns focus
+		// to the footer command line (the always-available default in Model A).
 		if msg.String() == "esc" {
 			activeTab := m.tabManager.GetActiveTab()
 			if activeTab != nil && activeTab.Type() == TabTypePlanning {
-				// When footer has focus on planning tab and Esc is pressed, transfer focus to message input
-				if m.input.Focused() {
-					m.input.SetFocus(false)
-					return m, func() tea.Msg {
-						return focusTransferMsg{target: "message"}
-					}
+				if !m.input.Focused() {
+					cmd := m.setPlanningFocus(FocusTargetFooter)
+					return m, cmd
 				}
 			}
 		}
@@ -669,17 +657,30 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.input, cmd = m.input.Update(msg)
 				return m, cmd
 			}
-			// Tab completion also works in footer when planning tab has footer focused
-			if activeTab != nil && activeTab.Type() == TabTypePlanning && m.input.Focused() {
-				var cmd tea.Cmd
-				m.input, cmd = m.input.Update(msg)
-				return m, cmd
+			// On a planning tab, Tab is context-sensitive (Model A):
+			//   - footer focused WITH an active completion suggestion -> complete
+			//   - otherwise -> toggle focus between footer and message input
+			if activeTab != nil && activeTab.Type() == TabTypePlanning {
+				if m.input.Focused() && m.input.HasMatchedSuggestions() {
+					var cmd tea.Cmd
+					m.input, cmd = m.input.Update(msg)
+					return m, cmd
+				}
+				return m, m.togglePlanningFocus()
 			}
 			// Forward to active tab for other handling
 			if activeTab != nil {
 				if cmd := m.tabManager.Update(msg); cmd != nil {
 					return m, cmd
 				}
+			}
+			return m, nil
+		case "shift+tab":
+			// Shift+Tab always toggles footer<->message focus on a planning tab,
+			// so the toggle is discoverable regardless of completion state.
+			activeTab := m.tabManager.GetActiveTab()
+			if activeTab != nil && activeTab.Type() == TabTypePlanning {
+				return m, m.togglePlanningFocus()
 			}
 			return m, nil
 		case "enter":
@@ -730,6 +731,45 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	return m, nil
 }
+// setPlanningFocus is the single source of truth for focus on a planning tab.
+// It synchronizes all three focus stores that previously drifted apart:
+//   - m.input (footer AutocompleteInput)
+//   - the tab's focusTarget (via RestoreFocusState)
+//   - m.tabFocusStates[tabID]
+//
+// target must be FocusTargetFooter or FocusTargetMessage. It returns the tea.Cmd
+// needed to apply focus to the newly focused surface. Callers must route all
+// footer<->message transitions through here so the stores cannot disagree.
+func (m *model) setPlanningFocus(target FocusTarget) tea.Cmd {
+	activeTab := m.tabManager.GetActiveTab()
+	if activeTab == nil || activeTab.Type() != TabTypePlanning {
+		return nil
+	}
+
+	m.tabFocusStates[activeTab.ID()] = target
+
+	switch target {
+	case FocusTargetMessage:
+		// Message input takes focus; footer yields it.
+		m.input.SetFocus(false)
+		return activeTab.RestoreFocusState(FocusTargetMessage)
+	default: // FocusTargetFooter
+		// Footer takes focus; message input yields it.
+		tabCmd := activeTab.RestoreFocusState(FocusTargetFooter)
+		m.input.SetFocus(true)
+		return tea.Batch(m.input.Focus(), tabCmd)
+	}
+}
+
+// togglePlanningFocus flips focus between the footer and the message input on the
+// active planning tab, returning the cmd to apply it. Used by Tab/shift+tab.
+func (m *model) togglePlanningFocus() tea.Cmd {
+	if m.input.Focused() {
+		return m.setPlanningFocus(FocusTargetMessage)
+	}
+	return m.setPlanningFocus(FocusTargetFooter)
+}
+
 
 func (m model) activateOverlay(overlay overlayType, title string, content []string) model {
 	// Limit content size to prevent memory issues

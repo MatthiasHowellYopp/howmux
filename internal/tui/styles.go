@@ -123,8 +123,8 @@ func NewStyles(theme *config.Theme) *Styles {
 			Bold(true),
 		PlanningAssistant: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(theme.Colors.TextPrimary)),
-		PlanningInputActive:   lipgloss.NewStyle(), // Minimal style - no borders or padding
-		PlanningInputInactive: lipgloss.NewStyle(), // Minimal style - no borders or padding
+		PlanningInputActive:   lipgloss.NewStyle().Foreground(lipgloss.Color(theme.Colors.Prompt)).Bold(true),
+		PlanningInputInactive: lipgloss.NewStyle().Foreground(lipgloss.Color(theme.Colors.Separator)),
 		PlanningError: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(theme.Colors.Error)).
 			Bold(true),
