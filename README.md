@@ -155,6 +155,29 @@ Press **Ctrl+Alt+P** (or **Ctrl+Option+P** on macOS) to toggle between console a
 
 Both modes preserve their state when you switch, allowing seamless workflow transitions. See [docs/hotkey-toggle.md](docs/hotkey-toggle.md) for detailed usage information.
 
+### Keyboard Shortcuts
+
+**Navigation:**
+- `F2` — Toggle between main and agent tabs
+- `[` / `]` — Previous / Next tab
+- `Ctrl+W` — Close current tab (if closable)
+- `↑` / `↓` / `PgUp` / `PgDn` — Scroll viewport
+- `Home` / `End` — Jump to top / bottom of viewport
+- `Tab` / `Shift+Tab` — Toggle focus between command line and message input (planning tabs)
+
+**Clipboard:**
+- `Ctrl+C` (or `Cmd+C` on macOS) — Copy visible viewport content to clipboard
+- `Ctrl+V` (or `Cmd+V` on macOS) — Paste from clipboard into message input (planning tabs only, when focused)
+
+**Application:**
+- `Ctrl+D` — Quit (immediate exit with cleanup)
+- `Ctrl+Alt+P` (or `Ctrl+Option+P` on macOS) — Toggle console / planning mode
+- `ESC` — Close overlay or return focus to command line
+
+**Platform Notes:**
+- macOS automatically translates `Cmd` to `Ctrl` for keyboard shortcuts
+- Clipboard operations gracefully degrade in headless/SSH environments (silent no-op)
+
 ## Architecture
 
 ### Agent Pipeline

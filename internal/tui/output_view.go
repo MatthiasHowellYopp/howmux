@@ -76,6 +76,12 @@ func (ov *OutputView) Update(msg tea.Msg) (*OutputView, tea.Cmd) {
 			ov.viewport.GotoTop()
 		case "end":
 			ov.viewport.GotoBottom()
+		case "ctrl+c":
+			// Copy visible viewport content to clipboard
+			content := ov.viewport.View()
+			if content != "" {
+				CopyToClipboard(content)
+			}
 		}
 	}
 

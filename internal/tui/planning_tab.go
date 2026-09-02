@@ -763,6 +763,26 @@ func (pt *PlanningTab) Update(msg tea.Msg) (Tab, tea.Cmd) {
 			pt.viewport.GotoBottom()
 			pt.focusTarget = FocusTargetFooter
 			pt.textinput.Blur()
+		case "ctrl+c":
+			// Copy visible viewport content to clipboard
+			content := pt.viewport.View()
+			if content != "" {
+				CopyToClipboard(content)
+			}
+		case "ctrl+v":
+			// Paste from clipboard into message input (only when message input has focus)
+			if pt.focusTarget == FocusTargetMessage {
+				text, err := PasteFromClipboard()
+				if err == nil && text != "" {
+					// Insert at cursor position
+					current := pt.textinput.Value()
+					cursorPos := pt.textinput.Position()
+					newValue := current[:cursorPos] + text + current[cursorPos:]
+					pt.textinput.SetValue(newValue)
+					// Move cursor to end of pasted text
+					pt.textinput.SetCursor(cursorPos + len(text))
+				}
+			}
 		case "esc":
 			// Transfer focus from message input to footer
 			if pt.focusTarget == FocusTargetMessage {
