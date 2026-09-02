@@ -76,6 +76,14 @@ func (ov *OutputView) Update(msg tea.Msg) (*OutputView, tea.Cmd) {
 			ov.viewport.GotoTop()
 		case "end":
 			ov.viewport.GotoBottom()
+		case "ctrl+y":
+			// Copy the underlying output text (not the rendered viewport, which
+			// is padded/styled/visible-only) so the clipboard gets the real,
+			// complete output.
+			content := strings.Join(ov.cachedOutput, "\n")
+			if content != "" {
+				CopyToClipboard(content)
+			}
 		}
 	}
 

@@ -482,13 +482,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, hotkeyCmd
 		}
 
-		// Ctrl+C is an unconditional hard-quit escape hatch. It runs before
+		// Ctrl+C is the unconditional hard-quit escape hatch. It runs before
 		// overlays, exit confirmation, and focus routing so there is always a
 		// reliable way out regardless of UI state. Best-effort cleanup, then quit.
+		// (Copy is on Ctrl+Y — terminals can't reliably deliver Cmd+C to the app,
+		// and rebinding Ctrl+C away from quit/SIGINT is surprising cross-platform.)
 		if msg.String() == "ctrl+c" {
 			m = m.performExitCleanup()
 			m.quitting = true
 			return m, tea.Quit
+		}
+
+		// Ctrl+Y: forward to the active tab for clipboard copy. Tabs that support
+		// copy (planning, agent output) handle it in their Update methods; others
+		// ignore it.
+		if msg.String() == "ctrl+y" {
+			activeTab := m.tabManager.GetActiveTab()
+			if activeTab != nil {
+				if cmd := m.tabManager.Update(msg); cmd != nil {
+					return m, cmd
+				}
+			}
+			return m, nil
 		}
 
 		// Priority handling for overlay dismissal
@@ -731,6 +746,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	return m, nil
 }
+
 // setPlanningFocus is the single source of truth for focus on a planning tab.
 // It synchronizes all three focus stores that previously drifted apart:
 //   - m.input (footer AutocompleteInput)
@@ -769,7 +785,6 @@ func (m *model) togglePlanningFocus() tea.Cmd {
 	}
 	return m.setPlanningFocus(FocusTargetFooter)
 }
-
 
 func (m model) activateOverlay(overlay overlayType, title string, content []string) model {
 	// Limit content size to prevent memory issues

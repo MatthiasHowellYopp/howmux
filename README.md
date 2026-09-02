@@ -155,6 +155,29 @@ Press **Ctrl+Alt+P** (or **Ctrl+Option+P** on macOS) to toggle between console a
 
 Both modes preserve their state when you switch, allowing seamless workflow transitions. See [docs/hotkey-toggle.md](docs/hotkey-toggle.md) for detailed usage information.
 
+### Keyboard Shortcuts
+
+**Navigation:**
+- `F2` — Toggle between main and agent tabs
+- `[` / `]` — Previous / Next tab
+- `Ctrl+W` — Close current tab (if closable)
+- `↑` / `↓` / `PgUp` / `PgDn` — Scroll viewport
+- `Home` / `End` — Jump to top / bottom of viewport
+- `Tab` / `Shift+Tab` — Toggle focus between command line and message input (planning tabs)
+
+**Clipboard:**
+- `Ctrl+Y` — Copy the conversation/agent-output text to the clipboard (the full underlying text, not just the visible window)
+- `Ctrl+V` — Paste from the clipboard into the message input (planning tabs only, when the message input is focused)
+
+**Application:**
+- `Ctrl+C` — Quit (immediate exit with cleanup; always available as an escape hatch)
+- `Ctrl+Alt+P` (or `Ctrl+Option+P` on macOS) — Toggle console / planning mode
+- `ESC` — Close overlay or return focus to command line
+
+**Platform Notes:**
+- Copy uses `Ctrl+Y` rather than `Ctrl+C` on every platform: `Ctrl+C` stays as quit (SIGINT convention), and terminals don't deliver `Cmd+C` to the application — your terminal's own copy (`Cmd+C` on macOS, `Ctrl+Shift+C` on many Linux terminals, or mouse selection) continues to work independently.
+- Clipboard operations gracefully degrade in headless/SSH environments (silent no-op)
+
 ## Architecture
 
 ### Agent Pipeline

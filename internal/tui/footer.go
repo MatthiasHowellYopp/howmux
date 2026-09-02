@@ -124,7 +124,7 @@ func (fm *FooterManager) renderStatusRow(activeTabType TabType) string {
 
 // renderBaseInfo renders the base information shown on all tabs
 func (fm *FooterManager) renderBaseInfo() string {
-	return fmt.Sprintf("theme: %s", fm.config.Theme)
+	return fmt.Sprintf("theme: %s | Ctrl+Y copy · Ctrl+C quit", fm.config.Theme)
 }
 
 // renderPlanningInfo renders context usage and directory information for planning tabs
