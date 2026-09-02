@@ -307,6 +307,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case planningStreamStartMsg, planningStreamMsg, planningResponseMsg:
+		// Streaming/response messages from a planning tab's sendMessage command
+		// are addressed to the active planning tab. The top-level Update must
+		// forward them; otherwise they fall through to the footer input and the
+		// stream is never drained (planner appears to hang after send).
+		if cmd := m.tabManager.Update(msg); cmd != nil {
+			return m, cmd
+		}
+		return m, nil
+
 	case updateCheckMsg:
 		updateLines := []string{}
 		if msg.err != nil {
@@ -480,6 +490,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Handle hotkey detection first
 		if hotkeyCmd := hotkey.HandleKeyMsg(msg); hotkeyCmd != nil {
 			return m, hotkeyCmd
+		}
+
+		// Ctrl+C is an unconditional hard-quit escape hatch. It runs before
+		// overlays, exit confirmation, and focus routing so there is always a
+		// reliable way out regardless of UI state. Best-effort cleanup, then quit.
+		if msg.String() == "ctrl+c" {
+			m = m.performExitCleanup()
+			m.quitting = true
+			return m, tea.Quit
 		}
 
 		// Priority handling for overlay dismissal
