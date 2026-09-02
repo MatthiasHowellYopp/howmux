@@ -504,8 +504,14 @@ func (pt *PlanningTab) updateViewportContent() {
 
 	pt.viewport.SetContent(content.String())
 
-	// Auto-scroll to bottom for new messages
-	if pt.viewport.ScrollPercent() >= 0.85 || len(pt.messages) == 1 {
+	// Auto-scroll behavior:
+	//   - While a response is actively streaming, always pin to the bottom so
+	//     new chunks stay visible (the reported bug: output scrolled off-screen
+	//     once the response grew past one screen).
+	//   - Otherwise, only follow the bottom if the user is already near it
+	//     (within the last 15%), so we don't yank a user who scrolled up to
+	//     read history. The first message always scrolls to bottom.
+	if pt.streamingResponse || pt.viewport.ScrollPercent() >= 0.85 || len(pt.messages) == 1 {
 		pt.viewport.GotoBottom()
 	}
 }
