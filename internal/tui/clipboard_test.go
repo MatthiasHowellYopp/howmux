@@ -2,139 +2,77 @@ package tui
 
 import (
 	"testing"
-
-	"github.com/atotto/clipboard"
 )
 
-// TestCopyToClipboard verifies the copy functionality
-func TestCopyToClipboard(t *testing.T) {
+// TestInsertAtCursor is the core regression test for the paste path. The bug in
+// the original implementation byte-sliced the string with a rune index, which
+// corrupted multi-byte characters. These cases lock in rune-safe behavior and
+// exercise the boundary/clamping cases. No OS clipboard is touched.
+func TestInsertAtCursor(t *testing.T) {
 	tests := []struct {
-		name     string
-		text     string
-		wantErr  bool
-		validate func(t *testing.T)
+		name       string
+		current    string
+		insert     string
+		cursor     int // rune index
+		wantValue  string
+		wantCursor int // rune index
 	}{
-		{
-			name:    "copy non-empty text",
-			text:    "test clipboard content",
-			wantErr: false,
-			validate: func(t *testing.T) {
-				// Try to read back - if clipboard is available
-				content, err := clipboard.ReadAll()
-				if err == nil && content != "test clipboard content" {
-					t.Errorf("clipboard content = %q, want %q", content, "test clipboard content")
-				}
-			},
-		},
-		{
-			name:    "copy empty text (no-op)",
-			text:    "",
-			wantErr: false,
-			validate: func(t *testing.T) {
-				// Empty string should be a no-op, no error
-			},
-		},
-		{
-			name:    "copy multiline text",
-			text:    "line1\nline2\nline3",
-			wantErr: false,
-			validate: func(t *testing.T) {
-				content, err := clipboard.ReadAll()
-				if err == nil && content != "line1\nline2\nline3" {
-					t.Errorf("clipboard content = %q, want %q", content, "line1\nline2\nline3")
-				}
-			},
-		},
-		{
-			name:    "copy unicode text",
-			text:    "Hello 世界 🚀",
-			wantErr: false,
-			validate: func(t *testing.T) {
-				content, err := clipboard.ReadAll()
-				if err == nil && content != "Hello 世界 🚀" {
-					t.Errorf("clipboard content = %q, want %q", content, "Hello 世界 🚀")
-				}
-			},
-		},
+		{"empty into empty", "", "hello", 0, "hello", 5},
+		{"append at end (ascii)", "abc", "XY", 3, "abcXY", 5},
+		{"insert in middle (ascii)", "abc", "X", 1, "aXbc", 2},
+		{"insert at start", "abc", "X", 0, "Xabc", 1},
+		// The bug: cursor after a multi-byte char. Byte-slicing "é"[:1] splits
+		// the 2-byte rune; rune-slicing must keep it intact.
+		{"insert after multibyte rune", "é", "x", 1, "éx", 2},
+		{"insert before multibyte rune", "é", "x", 0, "xé", 1},
+		{"multibyte insert into multibyte", "aé", "世界", 1, "a世界é", 3},
+		{"emoji insert", "ab", "🚀", 1, "a🚀b", 2},
+		// Clamping: out-of-range cursor indices must not panic.
+		{"cursor past end is clamped", "ab", "X", 99, "abX", 3},
+		{"negative cursor is clamped", "ab", "X", -5, "Xab", 1},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := CopyToClipboard(tt.text)
-
-			// In headless environments, clipboard operations may fail
-			// This is expected and should not cause test failures
-			if err != nil && !isHeadlessEnvironment() {
-				t.Logf("clipboard copy failed (may be expected in CI): %v", err)
+			gotValue, gotCursor := insertAtCursor(tt.current, tt.insert, tt.cursor)
+			if gotValue != tt.wantValue {
+				t.Errorf("value = %q, want %q", gotValue, tt.wantValue)
 			}
-
-			// Only validate if clipboard is available
-			if err == nil && tt.validate != nil {
-				tt.validate(t)
+			if gotCursor != tt.wantCursor {
+				t.Errorf("cursor = %d, want %d", gotCursor, tt.wantCursor)
 			}
 		})
 	}
 }
 
-// TestPasteFromClipboard verifies the paste functionality
-func TestPasteFromClipboard(t *testing.T) {
-	// First, set clipboard content if available
-	testContent := "paste test content"
-	setupErr := clipboard.WriteAll(testContent)
+// TestPlanningTabPlainTextContent verifies copy pulls the underlying, unstyled
+// conversation text (all of it) rather than the rendered viewport frame.
+func TestPlanningTabPlainTextContent(t *testing.T) {
+	styles := NewStyles(createMinimalTheme())
+	pt := NewPlanningTabWithSession("copy-test", "Copy Test", styles, NewContextTracker(), nil, nil)
 
-	tests := []struct {
-		name         string
-		setup        func()
-		wantContains string
-		wantErr      bool
-	}{
-		{
-			name: "paste after copy",
-			setup: func() {
-				// Content already set above
-			},
-			wantContains: testContent,
-			wantErr:      false,
-		},
-		{
-			name: "paste empty clipboard",
-			setup: func() {
-				clipboard.WriteAll("")
-			},
-			wantContains: "",
-			wantErr:      false,
-		},
+	pt.AddMessage("user", "hello")
+	pt.AddMessage("assistant", "hi there")
+
+	got := pt.plainTextContent()
+	want := "[planner] hello\nhi there"
+	if got != want {
+		t.Errorf("plainTextContent() = %q, want %q", got, want)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Skip validation if initial setup failed (headless environment)
-			if setupErr != nil && isHeadlessEnvironment() {
-				t.Skip("clipboard not available (headless environment)")
-			}
-
-			if tt.setup != nil {
-				tt.setup()
-			}
-
-			text, err := PasteFromClipboard()
-
-			// In headless environments, paste may fail - this is expected
-			if err != nil && !isHeadlessEnvironment() {
-				t.Logf("clipboard paste failed (may be expected in CI): %v", err)
-			}
-
-			// Only validate content if paste succeeded
-			if err == nil && text != tt.wantContains {
-				t.Errorf("PasteFromClipboard() = %q, want %q", text, tt.wantContains)
-			}
-		})
+	// In-progress streaming response is included.
+	pt.streamingResponse = true
+	pt.currentResponse.WriteString("streaming...")
+	got = pt.plainTextContent()
+	want = "[planner] hello\nhi there\nstreaming..."
+	if got != want {
+		t.Errorf("plainTextContent() with stream = %q, want %q", got, want)
 	}
 }
 
-// TestClipboardGracefulDegradation verifies error handling
+// TestClipboardGracefulDegradation verifies the wrappers never panic and treat
+// empty copy as a no-op, regardless of whether a system clipboard is available.
 func TestClipboardGracefulDegradation(t *testing.T) {
-	// Test that operations don't panic in any scenario
 	t.Run("copy doesn't panic", func(t *testing.T) {
 		defer func() {
 			if r := recover(); r != nil {
@@ -153,74 +91,9 @@ func TestClipboardGracefulDegradation(t *testing.T) {
 		_, _ = PasteFromClipboard()
 	})
 
-	t.Run("copy returns on empty", func(t *testing.T) {
-		err := CopyToClipboard("")
-		if err != nil {
+	t.Run("copy empty is a no-op", func(t *testing.T) {
+		if err := CopyToClipboard(""); err != nil {
 			t.Errorf("empty string should return nil, got: %v", err)
 		}
 	})
-}
-
-// TestClipboardConcurrency verifies thread-safety
-func TestClipboardConcurrency(t *testing.T) {
-	// Test concurrent access doesn't cause races or panics
-	done := make(chan bool)
-
-	// Multiple goroutines copying
-	for i := 0; i < 10; i++ {
-		go func(id int) {
-			defer func() {
-				if r := recover(); r != nil {
-					t.Errorf("goroutine %d panicked: %v", id, r)
-				}
-				done <- true
-			}()
-			_ = CopyToClipboard("concurrent test")
-		}(i)
-	}
-
-	// Multiple goroutines pasting
-	for i := 0; i < 10; i++ {
-		go func(id int) {
-			defer func() {
-				if r := recover(); r != nil {
-					t.Errorf("goroutine %d panicked: %v", id, r)
-				}
-				done <- true
-			}()
-			_, _ = PasteFromClipboard()
-		}(i)
-	}
-
-	// Wait for all goroutines
-	for i := 0; i < 20; i++ {
-		<-done
-	}
-}
-
-// isHeadlessEnvironment detects if we're running in a headless environment
-// where clipboard operations are expected to fail
-func isHeadlessEnvironment() bool {
-	// Try a simple clipboard operation
-	err := clipboard.WriteAll("test")
-	return err != nil
-}
-
-// BenchmarkCopyToClipboard measures copy performance
-func BenchmarkCopyToClipboard(b *testing.B) {
-	text := "benchmark clipboard content that is reasonably sized"
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = CopyToClipboard(text)
-	}
-}
-
-// BenchmarkPasteFromClipboard measures paste performance
-func BenchmarkPasteFromClipboard(b *testing.B) {
-	// Setup: put something in clipboard
-	_ = clipboard.WriteAll("benchmark content")
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, _ = PasteFromClipboard()
-	}
 }

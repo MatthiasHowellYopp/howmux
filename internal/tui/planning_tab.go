@@ -454,6 +454,30 @@ func (pt *PlanningTab) AddMessage(role, content string) {
 	logging.Info("message added", "tab_id", pt.id, "role", role, "message_count", len(pt.messages))
 }
 
+// plainTextContent returns the full conversation as unstyled plain text —
+// every message plus any in-progress streaming response. This is what Ctrl+Y
+// copies, rather than the rendered viewport (which is padded, styled, and only
+// the currently visible lines).
+func (pt *PlanningTab) plainTextContent() string {
+	var b strings.Builder
+	for i, msg := range pt.messages {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		if msg.Role == "user" {
+			b.WriteString("[planner] ")
+		}
+		b.WriteString(msg.Content)
+	}
+	if pt.streamingResponse && pt.currentResponse.Len() > 0 {
+		if len(pt.messages) > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(pt.currentResponse.String())
+	}
+	return b.String()
+}
+
 // updateViewportContent rebuilds the viewport content from messages with minimal styling
 func (pt *PlanningTab) updateViewportContent() {
 	var content strings.Builder
@@ -668,9 +692,9 @@ func (pt *PlanningTab) renderInputArea() string {
 	var hint string
 	if pt.state != session.PlanningStateActive {
 		if pt.focusTarget == FocusTargetMessage {
-			hint = "  " + pt.styles.PlanningInputActive.Render("● message — Tab/Esc: command line")
+			hint = "  " + pt.styles.PlanningInputActive.Render("● message — Tab/Esc: command line · Ctrl+Y copy · Ctrl+V paste")
 		} else {
-			hint = "  " + pt.styles.PlanningInputInactive.Render("○ message — Tab: type here")
+			hint = "  " + pt.styles.PlanningInputInactive.Render("○ message — Tab: type here · Ctrl+Y copy")
 		}
 	}
 
@@ -763,9 +787,11 @@ func (pt *PlanningTab) Update(msg tea.Msg) (Tab, tea.Cmd) {
 			pt.viewport.GotoBottom()
 			pt.focusTarget = FocusTargetFooter
 			pt.textinput.Blur()
-		case "ctrl+c":
-			// Copy visible viewport content to clipboard
-			content := pt.viewport.View()
+		case "ctrl+y":
+			// Copy the underlying conversation text (not the rendered viewport,
+			// which is padded/styled/visible-only) so the clipboard gets the
+			// real, complete, unstyled text.
+			content := pt.plainTextContent()
 			if content != "" {
 				CopyToClipboard(content)
 			}
@@ -774,13 +800,14 @@ func (pt *PlanningTab) Update(msg tea.Msg) (Tab, tea.Cmd) {
 			if pt.focusTarget == FocusTargetMessage {
 				text, err := PasteFromClipboard()
 				if err == nil && text != "" {
-					// Insert at cursor position
+					// Rune-safe insert at the cursor. textinput stores value as
+					// []rune and Position() is a rune index, so splicing the
+					// string with a byte index would split multi-byte characters.
 					current := pt.textinput.Value()
 					cursorPos := pt.textinput.Position()
-					newValue := current[:cursorPos] + text + current[cursorPos:]
+					newValue, newCursor := insertAtCursor(current, text, cursorPos)
 					pt.textinput.SetValue(newValue)
-					// Move cursor to end of pasted text
-					pt.textinput.SetCursor(cursorPos + len(text))
+					pt.textinput.SetCursor(newCursor)
 				}
 			}
 		case "esc":

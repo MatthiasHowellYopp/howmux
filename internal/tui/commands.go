@@ -203,6 +203,10 @@ func (m model) handleHelp() (model, tea.Cmd) {
 		m.styles.Prompt.Render("Hotkeys:"),
 		"  F2             - Toggle between console and agent output views",
 		"  Ctrl+Alt+P     - Toggle between console and planning modes",
+		"  Tab / Shift+Tab- Toggle focus: command line <-> planning message input",
+		"  Ctrl+Y         - Copy conversation/output text to clipboard",
+		"  Ctrl+V         - Paste into the message input (when focused)",
+		"  Ctrl+C         - Quit",
 	}
 
 	m = m.activateOverlay(overlayHelp, "Help", content)

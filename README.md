@@ -166,16 +166,16 @@ Both modes preserve their state when you switch, allowing seamless workflow tran
 - `Tab` / `Shift+Tab` — Toggle focus between command line and message input (planning tabs)
 
 **Clipboard:**
-- `Ctrl+C` (or `Cmd+C` on macOS) — Copy visible viewport content to clipboard
-- `Ctrl+V` (or `Cmd+V` on macOS) — Paste from clipboard into message input (planning tabs only, when focused)
+- `Ctrl+Y` — Copy the conversation/agent-output text to the clipboard (the full underlying text, not just the visible window)
+- `Ctrl+V` — Paste from the clipboard into the message input (planning tabs only, when the message input is focused)
 
 **Application:**
-- `Ctrl+D` — Quit (immediate exit with cleanup)
+- `Ctrl+C` — Quit (immediate exit with cleanup; always available as an escape hatch)
 - `Ctrl+Alt+P` (or `Ctrl+Option+P` on macOS) — Toggle console / planning mode
 - `ESC` — Close overlay or return focus to command line
 
 **Platform Notes:**
-- macOS automatically translates `Cmd` to `Ctrl` for keyboard shortcuts
+- Copy uses `Ctrl+Y` rather than `Ctrl+C` on every platform: `Ctrl+C` stays as quit (SIGINT convention), and terminals don't deliver `Cmd+C` to the application — your terminal's own copy (`Cmd+C` on macOS, `Ctrl+Shift+C` on many Linux terminals, or mouse selection) continues to work independently.
 - Clipboard operations gracefully degrade in headless/SSH environments (silent no-op)
 
 ## Architecture

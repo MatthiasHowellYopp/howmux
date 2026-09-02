@@ -482,22 +482,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, hotkeyCmd
 		}
 
-		// Ctrl+D is the unconditional hard-quit escape hatch. It runs before
+		// Ctrl+C is the unconditional hard-quit escape hatch. It runs before
 		// overlays, exit confirmation, and focus routing so there is always a
 		// reliable way out regardless of UI state. Best-effort cleanup, then quit.
-		// (Ctrl+C is reserved for clipboard copy operations in viewports)
-		if msg.String() == "ctrl+d" {
+		// (Copy is on Ctrl+Y — terminals can't reliably deliver Cmd+C to the app,
+		// and rebinding Ctrl+C away from quit/SIGINT is surprising cross-platform.)
+		if msg.String() == "ctrl+c" {
 			m = m.performExitCleanup()
 			m.quitting = true
 			return m, tea.Quit
 		}
 
-		// Ctrl+C in non-viewport contexts: forward to active tab for clipboard copy
-		// Tabs that support copy (planning, agent output) handle this in their Update methods
-		if msg.String() == "ctrl+c" {
+		// Ctrl+Y: forward to the active tab for clipboard copy. Tabs that support
+		// copy (planning, agent output) handle it in their Update methods; others
+		// ignore it.
+		if msg.String() == "ctrl+y" {
 			activeTab := m.tabManager.GetActiveTab()
 			if activeTab != nil {
-				// Forward to tab for clipboard copy handling
 				if cmd := m.tabManager.Update(msg); cmd != nil {
 					return m, cmd
 				}
