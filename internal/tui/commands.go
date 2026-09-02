@@ -275,13 +275,21 @@ func (m model) handlePlan(description string) (model, tea.Cmd) {
 	var focusCmd tea.Cmd
 	m, focusCmd = m.switchActiveTab(len(m.tabManager.GetTabs()) - 1)
 
+	// UX: `plan` is the one command that auto-switches focus to the message
+	// input. Typing `plan` signals intent to type an idea next, so land the
+	// cursor in the planning window instead of the footer. Every other way of
+	// creating/opening a planning tab keeps the Model-A footer-focused default;
+	// Tab/Esc still toggle back to the footer here. Routed through the single
+	// focus helper so all three focus stores stay in sync.
+	messageFocusCmd := m.setPlanningFocus(FocusTargetMessage)
+
 	// Add initial message with connection status feedback
 	if description != "" {
 		planningTab.AddMessage("user", description)
 		planningTab.AddMessage("system", "💡 Planning tab ready. ACP connection will be established when you send your first message.")
 	} else {
 		planningTab.AddMessage("system", "🚀 ACP-based Planning Tab ready. Type your message to start planning.")
-		planningTab.AddMessage("system", "📝 Use Tab to switch focus between message history and input area.")
+		planningTab.AddMessage("system", "📝 Tab/Esc switch focus between the message input and the footer command line.")
 	}
 
 	// Update session with initial state
@@ -289,7 +297,7 @@ func (m model) handlePlan(description string) (model, tea.Cmd) {
 
 	m = m.appendActivity(m.styles.Success.Render(fmt.Sprintf("✅ Created planning tab: %s", planningTab.Title())))
 
-	return m, focusCmd
+	return m, tea.Batch(focusCmd, messageFocusCmd)
 }
 
 func (m model) handlePlanClassic(description string) (model, tea.Cmd) {
