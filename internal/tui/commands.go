@@ -537,7 +537,8 @@ func (m model) switchToPlanningMode() (model, tea.Cmd) {
 
 		m = m.appendActivity(m.styles.Success.Render(fmt.Sprintf("Switched to active planning tab (found %d planning tabs)", activePlanningTabs)))
 		m.currentMode = session.Planning
-		m.input.Blur()
+		// Model A: the footer command line stays focused/available on planning
+		// tabs. Do not blur it here; Tab explicitly moves focus to the message input.
 		return m, tea.ClearScreen
 	}
 
@@ -584,7 +585,8 @@ func (m model) switchToPlanningMode() (model, tea.Cmd) {
 
 	m = m.appendActivity(m.styles.Success.Render(sessionMsg))
 	m.currentMode = session.Planning
-	m.input.Blur()
+	// Model A: the footer command line stays focused/available on planning tabs.
+	// Do not blur it here; Tab explicitly moves focus to the message input.
 
 	return m, tea.ClearScreen
 }

@@ -178,7 +178,7 @@ func NewPlanningTabWithSession(id, title string, styles *Styles, contextTracker 
 	currentStyles.Cursor.Blink = false
 	ti.SetStyles(currentStyles)
 
-	ti.Focus() // Start focused since focusTarget defaults to FocusTargetMessage
+	ti.Blur() // Model A: start with the footer command line focused, not the message input
 
 	pt := &PlanningTab{
 		id:             id,
@@ -188,8 +188,8 @@ func NewPlanningTabWithSession(id, title string, styles *Styles, contextTracker 
 		textinput:      ti,
 		messages:       make([]PlanningMessage, 0),
 		styles:         styles,
-		focusTarget:    FocusTargetMessage, // Start with message input focused
-		inputHeight:    1,                  // Height for prompt line (separator handled by footer system)
+		focusTarget:    FocusTargetFooter, // Model A: footer is the always-available default; Tab toggles to message
+		inputHeight:    1,                 // Height for prompt line (separator handled by footer system)
 		contextTracker: contextTracker,
 		sessionManager: sessionManager,
 	}
@@ -656,7 +656,25 @@ func (pt *PlanningTab) renderInputArea() string {
 		return styledPrompt
 	}
 
-	return styledPrompt + pt.textinput.View()
+	// Model A focus indicator: show which surface is active and how to switch.
+	// The footer command line is the always-available default; Tab toggles to
+	// this message input. Streaming state has no toggle hint (input is busy).
+	var hint string
+	if pt.state != session.PlanningStateActive {
+		if pt.focusTarget == FocusTargetMessage {
+			hint = "  " + pt.styles.PlanningInputActive.Render("● message — Tab/Esc: command line")
+		} else {
+			hint = "  " + pt.styles.PlanningInputInactive.Render("○ message — Tab: type here")
+		}
+	}
+
+	// Dim the prompt when the message input is not the focused surface so the
+	// active target is visually obvious.
+	if pt.focusTarget != FocusTargetMessage && pt.state == session.PlanningStateIdle {
+		styledPrompt = pt.styles.PlanningInputInactive.Render(prompt)
+	}
+
+	return styledPrompt + pt.textinput.View() + hint
 }
 
 // Update handles messages for the planning tab
