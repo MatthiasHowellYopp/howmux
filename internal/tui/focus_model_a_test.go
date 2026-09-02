@@ -124,3 +124,23 @@ func TestFooterFocusedExecutesCommandFromPlanningTab(t *testing.T) {
 		t.Errorf("expected command to execute (input cleared) from planning tab with footer focused, got %q", m.input.Value())
 	}
 }
+
+// TestPlanCommandAutoFocusesMessageInput verifies the UX refinement: the `plan`
+// command auto-switches focus to the message input on the newly created tab so
+// the user can keep typing their idea, while every other planning tab keeps the
+// Model-A footer-focused default. Tab/Esc still toggle back to the footer.
+func TestPlanCommandAutoFocusesMessageInput(t *testing.T) {
+	m := createTestModelWithTab(t, TabTypeMain)
+	// Footer starts focused (console default).
+	m.input.SetFocus(true)
+
+	updated, _ := m.handlePlan("build a thing")
+	m = updated
+
+	active := m.tabManager.GetActiveTab()
+	if active == nil || active.Type() != TabTypePlanning {
+		t.Fatalf("plan did not create/activate a planning tab (got %v)", active)
+	}
+	// After `plan`, focus must be on the message input, in sync across stores.
+	assertFocusInSync(t, m, false /* footer focused? no — message is */)
+}
