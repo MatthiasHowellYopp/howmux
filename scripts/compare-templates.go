@@ -40,15 +40,27 @@ func main() {
 
 	templateBase := "cmd/kiro-krew/templates"
 
-	// Compare kiro-krew directory
-	compareDirectory(templateBase+"/kiro-krew", ".kiro-krew", &report)
+	// --agents-only compares just the agent configs (used by `task sync:check`,
+	// which relies on this tool's JSON-aware, local-only-allowlist comparison
+	// instead of a raw `diff` so intentionally local-only entries like the
+	// creds-agent MCP server don't register as drift). Default mode compares
+	// everything (used by the template-sync summary helper).
+	agentsOnly := len(os.Args) > 1 && os.Args[1] == "--agents-only"
 
-	// Compare kiro directory
-	compareDirectory(templateBase+"/kiro", ".kiro", &report)
+	if agentsOnly {
+		compareDirectory(templateBase+"/kiro/agents", ".kiro/agents", &report)
+		report.Summary.TotalTemplateFiles = countFiles(templateBase + "/kiro/agents")
+		report.Summary.TotalLiveFiles = countFiles(".kiro/agents")
+	} else {
+		// Compare kiro-krew directory
+		compareDirectory(templateBase+"/kiro-krew", ".kiro-krew", &report)
+		// Compare kiro directory
+		compareDirectory(templateBase+"/kiro", ".kiro", &report)
+		report.Summary.TotalTemplateFiles = countFiles(templateBase)
+		report.Summary.TotalLiveFiles = countFiles(".kiro-krew") + countFiles(".kiro")
+	}
 
 	// Calculate summary
-	report.Summary.TotalTemplateFiles = countFiles(templateBase)
-	report.Summary.TotalLiveFiles = countFiles(".kiro-krew") + countFiles(".kiro")
 	report.Summary.SyncNeeded = len(report.MissingInTemplates) + len(report.ContentDifferences)
 
 	if report.Summary.SyncNeeded == 0 {
@@ -150,6 +162,20 @@ func shouldSkip(path string) bool {
 }
 
 func compareFiles(templatePath, livePath string) (bool, string) {
+	// Agent (and other) JSON files are compared structurally, not byte-for-byte:
+	//   - formatting/whitespace differences are ignored (the files are
+	//     canonicalized before hashing), and
+	//   - a named allowlist of local-only entries is stripped from BOTH sides
+	//     before comparison, so personal runtime config that intentionally lives
+	//     only in the live agents does not register as template drift.
+	//
+	// This prevents the recurring leak where a local-only addition (e.g. the
+	// creds-agent MCP server) shows up as "sync required" and then gets copied
+	// into the shipped //go:embed templates to make the check pass.
+	if strings.HasSuffix(templatePath, ".json") && strings.HasSuffix(livePath, ".json") {
+		return compareJSONFiles(templatePath, livePath)
+	}
+
 	templateHash, err1 := fileHash(templatePath)
 	liveHash, err2 := fileHash(livePath)
 
@@ -165,6 +191,99 @@ func compareFiles(templatePath, livePath string) (bool, string) {
 	}
 
 	return false, ""
+}
+
+// localOnlyMCPServers is the named allowlist of MCP servers that are permitted
+// to exist only in the live agent configs and NOT in the shipped templates.
+// Adding a name here is a deliberate, reviewable declaration that the server is
+// local-only (e.g. it vends credentials from the developer's machine) and must
+// not be propagated into the embedded templates that ship to end users.
+var localOnlyMCPServers = map[string]bool{
+	"creds-agent": true,
+}
+
+// localOnlyTools is the named allowlist of tool grants tied to the local-only
+// MCP servers above (an "@<server>" tool reference). Stripped from both sides
+// before comparison for the same reason.
+var localOnlyTools = map[string]bool{
+	"@creds-agent": true,
+}
+
+// compareJSONFiles compares two JSON files after canonicalizing them and
+// stripping the named local-only entries from both sides.
+func compareJSONFiles(templatePath, livePath string) (bool, string) {
+	tmplNorm, err := normalizedJSON(templatePath)
+	if err != nil {
+		return true, fmt.Sprintf("template read error: %v", err)
+	}
+	liveNorm, err := normalizedJSON(livePath)
+	if err != nil {
+		return true, fmt.Sprintf("live read error: %v", err)
+	}
+
+	if tmplNorm != liveNorm {
+		return true, "content differs (after normalizing and stripping local-only entries)"
+	}
+	return false, ""
+}
+
+// normalizedJSON reads a JSON file, strips the named local-only entries, and
+// returns a canonical (sorted-key) serialization for comparison.
+func normalizedJSON(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+
+	var v interface{}
+	if err := json.Unmarshal(data, &v); err != nil {
+		// Not valid JSON — fall back to raw content so we still detect drift.
+		return string(data), nil
+	}
+
+	stripLocalOnly(v)
+
+	// json.Marshal sorts map keys, giving a canonical form independent of the
+	// original spacing/key order/trailing newline.
+	out, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+// stripLocalOnly removes the named local-only MCP servers and their associated
+// tool grants from a decoded agent JSON document, in place.
+func stripLocalOnly(v interface{}) {
+	obj, ok := v.(map[string]interface{})
+	if !ok {
+		return
+	}
+
+	// Remove named local-only servers from mcpServers; drop mcpServers entirely
+	// if it becomes empty so its mere presence doesn't count as drift.
+	if servers, ok := obj["mcpServers"].(map[string]interface{}); ok {
+		for name := range localOnlyMCPServers {
+			delete(servers, name)
+		}
+		if len(servers) == 0 {
+			delete(obj, "mcpServers")
+		}
+	}
+
+	// Remove the associated "@<server>" tool grants from tools/allowedTools.
+	for _, key := range []string{"tools", "allowedTools"} {
+		if arr, ok := obj[key].([]interface{}); ok {
+			filtered := make([]interface{}, 0, len(arr))
+			for _, item := range arr {
+				if s, ok := item.(string); ok && localOnlyTools[s] {
+					continue
+				}
+				filtered = append(filtered, item)
+			}
+			obj[key] = filtered
+		}
+	}
 }
 
 func fileHash(path string) (string, error) {

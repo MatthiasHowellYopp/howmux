@@ -29,9 +29,25 @@ Sync is **one-way** (live → template). CI enforces this via `task sync:check` 
 
 **Never sync `*-conventions` skills** — they are project-specific and must NOT be distributed in templates.
 
+**Never sync local-only agent config into templates** — some entries in the live
+`.kiro/agents/*.json` are intentionally local-only and must NOT ship in the
+embedded templates that reach end users. In particular the **`creds-agent` MCP
+server** and the **`@creds-agent`** tool grant vend developer-machine
+credentials and belong only in the live agents. `task sync:check` compares
+agent JSON with a JSON-aware tool that ignores these named entries (see
+`scripts/compare-templates.go`), so a live-only creds-agent block does not count
+as drift — do not "fix" a nonexistent drift by copying it into the templates.
+
 ### Sync Commands
 
-Run the appropriate commands after modifying any template-synchronized files:
+Run the appropriate commands after modifying any template-synchronized files.
+
+> **Agent JSON:** do not blindly `cp` live agents over the templates — that
+> would carry local-only entries (e.g. the creds-agent MCP block) into the
+> shipped artifact. Copy the file, then strip any local-only `mcpServers` and
+> `@creds-agent`/local-only tool grants from the template copy, or edit the
+> template to mirror only the intended change. `task sync:check` will pass as
+> long as the non-local-only content matches.
 
 ```bash
 # Agent files (JSON configs and prompt files)
