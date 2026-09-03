@@ -33,6 +33,7 @@ type LoggingConfig struct {
 type Config struct {
 	Repo                string        `yaml:"repo"`
 	Label               string        `yaml:"label"`
+	BaseBranch          string        `yaml:"base_branch"`
 	PollInterval        time.Duration `yaml:"poll_interval"`
 	MaxRetries          int           `yaml:"max_retries"`
 	MaxQARetries        int           `yaml:"max_qa_retries"`
@@ -53,6 +54,7 @@ func extractLeadingWhitespace(line string) string {
 func Load() (*Config, error) {
 	cfg := &Config{
 		Label:               "kiro-krew",
+		BaseBranch:          "main",
 		PollInterval:        5 * time.Minute,
 		MaxRetries:          3,
 		MaxQARetries:        3,

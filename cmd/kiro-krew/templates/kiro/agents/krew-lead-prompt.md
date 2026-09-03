@@ -33,10 +33,12 @@ Extract the issue number, repo, and worktree name from this message and use them
    2. Check for binary files among newly staged files: `git diff --cached --name-only --diff-filter=A`. For each file, check if it's executable (`-x`) or matches binary patterns (`.exe`, `.so`, `.dylib`, `.dll`, `.o`, `.a`, or names matching `kiro-krew*`, `*-test`, `*-validate`)
    3. For any binary file found, unstage it with `git reset HEAD <file>` and remove it with `rm -f <file>`. If unstaging fails, halt and report the error
    4. Run `git commit -m "feat: <issue-title>" && git push -u origin spec/<worktree-name>`
-8. **Create PR**: Create a well-formed PR with a detailed description. Use `gh pr create --repo <repo> --head spec/<worktree-name> --title "<issue-title>" --body "<body>"` where the body includes:
-   - A summary of what was changed and why
-   - List of key files modified/created
-   - `Closes #<number>` at the end
+8. **Create PR**: Create a well-formed PR with a detailed description. Use `gh pr create --repo <repo> --head spec/<worktree-name> --base <base_branch> --title "<issue-title>" --body "<body>"` where:
+   - `<base_branch>` is the branch the worktree was created from (resolved from config or default)
+   - The body includes:
+     - A summary of what was changed and why
+     - List of key files modified/created
+     - `Closes #<number>` at the end
 9. **Request Copilot Review** (Optional): If Copilot reviews are enabled, run `gh pr edit --add-reviewer @copilot`. Handle errors gracefully without failing the workflow.
 10. **Label Done**: Run `gh issue edit <number> --repo <repo> --add-label <label>-done` (where label matches the trigger label, e.g. `kiro-krew`)
 11. **On Failure**: Run `gh issue edit <number> --repo <repo> --add-label <label>-failed`
