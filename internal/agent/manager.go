@@ -25,6 +25,31 @@ const (
 	StatusFailed    Status = "failed"
 )
 
+// extractBaseBranchOverride parses issue body for "Base-Branch: <value>" line.
+// Returns the trimmed value if found, empty string otherwise.
+func extractBaseBranchOverride(issueBody string) string {
+	lines := strings.Split(issueBody, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(strings.ToLower(trimmed), "base-branch:") {
+			parts := strings.SplitN(trimmed, ":", 2)
+			if len(parts) == 2 {
+				return strings.TrimSpace(parts[1])
+			}
+		}
+	}
+	return ""
+}
+
+// resolveBaseBranch determines the base branch to use for worktree creation.
+// Precedence: per-issue override → config.BaseBranch (which already has "main" default).
+func resolveBaseBranch(cfg *config.Config, issueBody string) string {
+	if override := extractBaseBranchOverride(issueBody); override != "" {
+		return override
+	}
+	return cfg.BaseBranch
+}
+
 type Agent struct {
 	ID          string
 	IssueNumber int
@@ -187,9 +212,22 @@ func (m *Manager) Spawn(issueNumber int, repo string) (*Agent, error) {
 
 	worktreeName := fmt.Sprintf("issue-%d-%d", issueNumber, os.Getpid())
 
+	// Fetch issue body to resolve base branch
+	issueCmd := exec.Command("gh", "issue", "view", fmt.Sprintf("%d", issueNumber), "--repo", repo, "--json", "body", "--jq", ".body")
+	issueOutput, err := issueCmd.Output()
+	if err != nil {
+		log.Printf("[agent] failed to fetch issue body for issue #%d: %v", issueNumber, err)
+		return nil, fmt.Errorf("failed to fetch issue body: %w", err)
+	}
+	issueBody := strings.TrimSpace(string(issueOutput))
+
+	// Resolve base branch with precedence: issue override → config
+	baseBranch := resolveBaseBranch(m.config, issueBody)
+	log.Printf("[agent] resolved base branch for issue #%d: %s", issueNumber, baseBranch)
+
 	// Create worktree before spawning agent so it runs inside it
 	createScript := filepath.Join(".kiro-krew", "scripts", "worktree-create.sh")
-	createCmd := exec.Command("bash", createScript, worktreeName)
+	createCmd := exec.Command("bash", createScript, worktreeName, baseBranch)
 	wtOutput, err := createCmd.Output()
 	if err != nil {
 		log.Printf("[agent] failed to create worktree for issue #%d: %v", issueNumber, err)
@@ -452,10 +490,27 @@ func (m *Manager) retryAgent(agent *Agent) {
 	worktreeName := fmt.Sprintf("issue-%d-%d", agent.IssueNumber, os.Getpid())
 	worktreePath := filepath.Join(".worktrees", worktreeName)
 
+	// Fetch issue body to resolve base branch
+	issueCmd := exec.Command("gh", "issue", "view", fmt.Sprintf("%d", agent.IssueNumber), "--repo", m.config.Repo, "--json", "body", "--jq", ".body")
+	issueOutput, err := issueCmd.Output()
+	if err != nil {
+		log.Printf("[agent] retry failed to fetch issue body for issue #%d: %v", agent.IssueNumber, err)
+		m.mu.Lock()
+		agent.Status = StatusFailed
+		m.statusGen.Add(1)
+		m.mu.Unlock()
+		return
+	}
+	issueBody := strings.TrimSpace(string(issueOutput))
+
+	// Resolve base branch with precedence: issue override → config
+	baseBranch := resolveBaseBranch(m.config, issueBody)
+	log.Printf("[agent] resolved base branch for retry issue #%d: %s", agent.IssueNumber, baseBranch)
+
 	// Ensure worktree exists (it should from initial spawn, but recreate if needed)
 	if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
 		createScript := filepath.Join(".kiro-krew", "scripts", "worktree-create.sh")
-		createCmd := exec.Command("bash", createScript, worktreeName)
+		createCmd := exec.Command("bash", createScript, worktreeName, baseBranch)
 		if wtOutput, err := createCmd.Output(); err != nil {
 			log.Printf("[agent] retry failed to create worktree for issue #%d: %v", agent.IssueNumber, err)
 			m.mu.Lock()

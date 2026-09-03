@@ -9,12 +9,14 @@ NC='\033[0m' # No Color
 
 if [ $# -eq 0 ]; then
     echo -e "${RED}Error: Spec name required${NC}" >&2
-    echo "Usage: $0 <spec-name>" >&2
+    echo "Usage: $0 <spec-name> [base-ref]" >&2
     echo "Example: $0 add-auth-flow" >&2
+    echo "Example: $0 add-auth-flow dev" >&2
     exit 1
 fi
 
 SPEC_NAME=$1
+BASE_REF=${2:-}
 WORKTREE_PATH=".worktrees/${SPEC_NAME}"
 BRANCH_NAME="spec/${SPEC_NAME}"
 
@@ -34,7 +36,11 @@ if git branch --list "$BRANCH_NAME" | grep -q "$BRANCH_NAME"; then
 fi
 
 # Create the worktree on a new branch
-OUTPUT=$(git worktree add "$WORKTREE_PATH" -b "$BRANCH_NAME" 2>&1)
+if [ -n "$BASE_REF" ]; then
+    OUTPUT=$(git worktree add "$WORKTREE_PATH" -b "$BRANCH_NAME" "$BASE_REF" 2>&1)
+else
+    OUTPUT=$(git worktree add "$WORKTREE_PATH" -b "$BRANCH_NAME" 2>&1)
+fi
 EXIT_CODE=$?
 echo "$OUTPUT" | grep -v "^$" >&2
 if [ $EXIT_CODE -eq 0 ]; then
