@@ -1226,13 +1226,21 @@ func (m model) performExitCleanup() model {
 	var closeWG sync.WaitGroup
 	for _, tab := range m.tabManager.GetTabs() {
 		if planningTab, ok := tab.(*PlanningTab); ok {
-			// Force save session state before cleanup (fast, keep synchronous).
+			// Session I/O runs synchronously on this goroutine (it's fast local
+			// I/O, and SessionManager has no locking): save state, then apply the
+			// tab's own session cleanup. Keeping all session-directory writes
+			// single-threaded here means the parallel closes below — and the
+			// CleanupSessionsOnExit sweep — never race on session files, even
+			// when a close overruns the deadline.
 			planningTab.SaveSession()
+			planningTab.CleanupSession()
 
+			// Only the runtime-resource teardown (ACP client shutdown, which can
+			// block ~3s) runs in parallel under the overall deadline.
 			closeWG.Add(1)
 			go func(pt *PlanningTab) {
 				defer closeWG.Done()
-				pt.Close() // includes ACP client cleanup
+				pt.closeResources()
 			}(planningTab)
 		}
 	}

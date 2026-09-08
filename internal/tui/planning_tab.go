@@ -726,8 +726,12 @@ func (pt *PlanningTab) renderInputArea() string {
 		// Leading two spaces plus a small safety margin.
 		const hintLead = 2
 		avail := pt.width - used - hintLead
+		// When width is unknown (pre-first-render, pt.width == 0) avail is
+		// negative, so nothing fits and no hint is rendered — the safe default,
+		// since we can't know what fits yet. Once resized, the longest candidate
+		// that fits is chosen.
 		for _, c := range candidates {
-			if pt.width <= 0 || lipgloss.Width(c) <= avail {
+			if lipgloss.Width(c) <= avail {
 				hint = "  " + style.Render(c)
 				break
 			}
@@ -1071,15 +1075,24 @@ func (pt *PlanningTab) Reset() {
 
 // Close cleans up resources when the tab is closed
 func (pt *PlanningTab) Close() {
+	pt.closeResources()
+
+	// Cleanup session
+	pt.CleanupSession()
+}
+
+// closeResources tears down the tab's runtime resources (lifecycle context,
+// active stream, ACP client) WITHOUT touching the on-disk session. It is the
+// bounded/parallelizable part of shutdown; session cleanup is handled
+// separately (see performExitCleanup) so concurrent closes never race the
+// session-directory sweep.
+func (pt *PlanningTab) closeResources() {
 	pt.lifecycleCancel()
 	pt.cancelStream()
 
 	if pt.acpClient != nil {
 		pt.acpClient.Close()
 	}
-
-	// Cleanup session
-	pt.CleanupSession()
 }
 
 // cancelStream cancels the active stream context and clears stream state
