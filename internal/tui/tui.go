@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -50,6 +51,11 @@ const (
 	// tabHeaderHeight is the number of lines the tab header occupies in the view
 	tabHeaderHeight = 1
 )
+
+// exitCleanupTimeout bounds how long exit cleanup waits for planning tabs to
+// close (each can block ~3s on ACP process shutdown). Keeps Ctrl+C a fast,
+// reliable escape hatch even with many open planning tabs.
+var exitCleanupTimeout = 3 * time.Second
 
 type overlayContent struct {
 	title   string
@@ -1174,10 +1180,14 @@ func (m model) performExitCleanup() model {
 	cleanupErrors := []string{}
 
 	// Stop all agents
-	m.manager.StopAll()
+	if m.manager != nil {
+		m.manager.StopAll()
+	}
 
 	// Stop watcher
-	m.watcher.Stop()
+	if m.watcher != nil {
+		m.watcher.Stop()
+	}
 
 	// Deactivate logging if active
 	if m.loggingActive {
@@ -1186,15 +1196,36 @@ func (m model) performExitCleanup() model {
 		}
 	}
 
-	// Cleanup all planning tabs
+	// Cleanup all planning tabs. Save sessions synchronously (fast, local I/O),
+	// then close tabs concurrently under a single overall deadline. Each tab's
+	// Close() can block up to ~3s waiting for its ACP process to exit gracefully;
+	// doing them sequentially made Ctrl+C hang for roughly 3s × tab-count (~30s
+	// at the 10-tab max), defeating the "reliable escape hatch" guarantee. Run
+	// them in parallel and cap the total wait.
+	var closeWG sync.WaitGroup
 	for _, tab := range m.tabManager.GetTabs() {
 		if planningTab, ok := tab.(*PlanningTab); ok {
-			// Force save session state before cleanup
+			// Force save session state before cleanup (fast, keep synchronous).
 			planningTab.SaveSession()
 
-			// Close tab (includes ACP client cleanup)
-			planningTab.Close()
+			closeWG.Add(1)
+			go func(pt *PlanningTab) {
+				defer closeWG.Done()
+				pt.Close() // includes ACP client cleanup
+			}(planningTab)
 		}
+	}
+
+	// Wait for all closes, but never longer than the overall deadline.
+	closeDone := make(chan struct{})
+	go func() {
+		closeWG.Wait()
+		close(closeDone)
+	}()
+	select {
+	case <-closeDone:
+	case <-time.After(exitCleanupTimeout):
+		cleanupErrors = append(cleanupErrors, fmt.Sprintf("planning-tab cleanup exceeded %s; exiting anyway", exitCleanupTimeout))
 	}
 
 	// Cleanup planning sessions (remove orphaned/completed)
