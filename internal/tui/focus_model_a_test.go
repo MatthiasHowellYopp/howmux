@@ -144,3 +144,32 @@ func TestPlanCommandAutoFocusesMessageInput(t *testing.T) {
 	// After `plan`, focus must be on the message input, in sync across stores.
 	assertFocusInSync(t, m, false /* footer focused? no — message is */)
 }
+
+// TestViewportNavKeepsFocusInSync is a regression test for the bug where
+// pgup/pgdown/home/end in a planning tab blurred the footer directly, leaving
+// the three focus stores out of sync so the next Tab misfired and the command
+// line was unavailable. Navigation must route focus through setPlanningFocus.
+func TestViewportNavKeepsFocusInSync(t *testing.T) {
+	for _, key := range []rune{tea.KeyPgUp, tea.KeyPgDown, tea.KeyHome, tea.KeyEnd} {
+		m := createTestModelWithTab(t, TabTypePlanning)
+		// Start message-focused (the drift-prone starting state).
+		if cmd := m.setPlanningFocus(FocusTargetMessage); cmd != nil {
+			_ = cmd
+		}
+		assertFocusInSync(t, m, false /* message focused */)
+
+		// Navigate the viewport.
+		navMsg := tea.KeyPressMsg(tea.Key{Code: key})
+		updated, _ := m.Update(navMsg)
+		m = updated.(model)
+
+		// After navigation, all three stores must agree on footer focus.
+		assertFocusInSync(t, m, true /* footer focused */)
+
+		// And Tab must still toggle cleanly footer -> message.
+		tabMsg := tea.KeyPressMsg(tea.Key{Code: tea.KeyTab})
+		updated, _ = m.Update(tabMsg)
+		m = updated.(model)
+		assertFocusInSync(t, m, false /* message focused again */)
+	}
+}

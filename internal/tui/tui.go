@@ -652,16 +652,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, cmd
 				}
 			}
-			// Blur footer input during viewport navigation to prevent cursor artifacts
-			// when the planning tab enters scroll mode.
+			// During viewport navigation, ensure focus is consistently on the
+			// footer via the single focus helper. Routing through setPlanningFocus
+			// (rather than blurring m.input directly) keeps all three focus stores
+			// — m.input, the tab's focusTarget, and m.tabFocusStates — in sync, so
+			// the next Tab toggles correctly and the command line stays usable.
+			var navFocusCmd tea.Cmd
 			if activeTab != nil && activeTab.Type() == TabTypePlanning {
 				switch msg.String() {
 				case "pgup", "pgdown", "home", "end":
-					m.input.SetFocus(false)
+					navFocusCmd = m.setPlanningFocus(FocusTargetFooter)
 				}
 			}
-			if cmd := m.tabManager.Update(msg); cmd != nil {
-				return m, cmd
+			navCmd := m.tabManager.Update(msg)
+			if navFocusCmd != nil || navCmd != nil {
+				return m, tea.Batch(navFocusCmd, navCmd)
 			}
 			return m, nil
 		case "tab":
