@@ -699,11 +699,40 @@ func (pt *PlanningTab) renderInputArea() string {
 	// this message input. Streaming state has no toggle hint (input is busy).
 	var hint string
 	if pt.state != session.PlanningStateActive {
+		// The hint shares the single input line with the prompt and the text
+		// input. On narrow terminals a full hint would wrap and push the view
+		// into the footer, so pick the longest variant that fits the remaining
+		// width — or drop it entirely when there's no room.
+		var candidates []string
+		var style lipgloss.Style
 		if pt.focusTarget == FocusTargetMessage {
-			hint = "  " + pt.styles.PlanningInputActive.Render("● message — Tab/Esc: command line · Ctrl+Y copy · Ctrl+V paste")
+			style = pt.styles.PlanningInputActive
+			candidates = []string{
+				"● message — Tab/Esc: command line · Ctrl+Y copy · Ctrl+V paste",
+				"● message — Tab/Esc: command line",
+				"● message — Tab/Esc",
+			}
 		} else {
-			hint = "  " + pt.styles.PlanningInputInactive.Render("○ message — Tab: type here · Ctrl+Y copy")
+			style = pt.styles.PlanningInputInactive
+			candidates = []string{
+				"○ message — Tab: type here · Ctrl+Y copy",
+				"○ message — Tab: type here",
+				"○ Tab",
+			}
 		}
+
+		// Width already consumed on the line by the prompt and the input view.
+		used := lipgloss.Width(prompt) + lipgloss.Width(pt.textinput.View())
+		// Leading two spaces plus a small safety margin.
+		const hintLead = 2
+		avail := pt.width - used - hintLead
+		for _, c := range candidates {
+			if pt.width <= 0 || lipgloss.Width(c) <= avail {
+				hint = "  " + style.Render(c)
+				break
+			}
+		}
+		// If none fit, hint stays empty (no wrap).
 	}
 
 	// Dim the prompt when the message input is not the focused surface so the
