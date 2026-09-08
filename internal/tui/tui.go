@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -50,6 +51,11 @@ const (
 	// tabHeaderHeight is the number of lines the tab header occupies in the view
 	tabHeaderHeight = 1
 )
+
+// exitCleanupTimeout bounds how long exit cleanup waits for planning tabs to
+// close (each can block ~3s on ACP process shutdown). Keeps Ctrl+C a fast,
+// reliable escape hatch even with many open planning tabs.
+var exitCleanupTimeout = 3 * time.Second
 
 type overlayContent struct {
 	title   string
@@ -297,10 +303,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case planningStreamStartMsg, planningStreamMsg, planningResponseMsg:
-		// Streaming/response messages from a planning tab's sendMessage command
-		// are addressed to the active planning tab. The top-level Update must
-		// forward them; otherwise they fall through to the footer input and the
-		// stream is never drained (planner appears to hang after send).
+		// Streaming/response messages are addressed to the planning tab that
+		// started the stream, carried in the message's tabID. Dispatch to that
+		// specific tab rather than the active one — otherwise switching tabs
+		// mid-stream would append chunks to the wrong tab (or drop them on a
+		// non-planning tab) and the original stream would stop being drained.
+		var tabID string
+		switch mt := msg.(type) {
+		case planningStreamStartMsg:
+			tabID = mt.tabID
+		case planningStreamMsg:
+			tabID = mt.tabID
+		case planningResponseMsg:
+			tabID = mt.tabID
+		}
+		if pt := m.tabManager.GetPlanningTabByID(tabID); pt != nil {
+			// PlanningTab.Update mutates via pointer receiver and the tab manager
+			// holds the same pointer, so no write-back is needed.
+			_, cmd := pt.Update(msg)
+			if cmd != nil {
+				return m, cmd
+			}
+			return m, nil
+		}
+		// Fall back to the active tab if the origin tab is gone (e.g. closed
+		// mid-stream), so a late chunk can't wedge the update loop.
 		if cmd := m.tabManager.Update(msg); cmd != nil {
 			return m, cmd
 		}
@@ -652,16 +679,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, cmd
 				}
 			}
-			// Blur footer input during viewport navigation to prevent cursor artifacts
-			// when the planning tab enters scroll mode.
+			// During viewport navigation, ensure focus is consistently on the
+			// footer via the single focus helper. Routing through setPlanningFocus
+			// (rather than blurring m.input directly) keeps all three focus stores
+			// — m.input, the tab's focusTarget, and m.tabFocusStates — in sync, so
+			// the next Tab toggles correctly and the command line stays usable.
+			var navFocusCmd tea.Cmd
 			if activeTab != nil && activeTab.Type() == TabTypePlanning {
 				switch msg.String() {
 				case "pgup", "pgdown", "home", "end":
-					m.input.SetFocus(false)
+					navFocusCmd = m.setPlanningFocus(FocusTargetFooter)
 				}
 			}
-			if cmd := m.tabManager.Update(msg); cmd != nil {
-				return m, cmd
+			navCmd := m.tabManager.Update(msg)
+			if navFocusCmd != nil || navCmd != nil {
+				return m, tea.Batch(navFocusCmd, navCmd)
 			}
 			return m, nil
 		case "tab":
@@ -1169,10 +1201,14 @@ func (m model) performExitCleanup() model {
 	cleanupErrors := []string{}
 
 	// Stop all agents
-	m.manager.StopAll()
+	if m.manager != nil {
+		m.manager.StopAll()
+	}
 
 	// Stop watcher
-	m.watcher.Stop()
+	if m.watcher != nil {
+		m.watcher.Stop()
+	}
 
 	// Deactivate logging if active
 	if m.loggingActive {
@@ -1181,15 +1217,44 @@ func (m model) performExitCleanup() model {
 		}
 	}
 
-	// Cleanup all planning tabs
+	// Cleanup all planning tabs. Save sessions synchronously (fast, local I/O),
+	// then close tabs concurrently under a single overall deadline. Each tab's
+	// Close() can block up to ~3s waiting for its ACP process to exit gracefully;
+	// doing them sequentially made Ctrl+C hang for roughly 3s × tab-count (~30s
+	// at the 10-tab max), defeating the "reliable escape hatch" guarantee. Run
+	// them in parallel and cap the total wait.
+	var closeWG sync.WaitGroup
 	for _, tab := range m.tabManager.GetTabs() {
 		if planningTab, ok := tab.(*PlanningTab); ok {
-			// Force save session state before cleanup
+			// Session I/O runs synchronously on this goroutine (it's fast local
+			// I/O, and SessionManager has no locking): save state, then apply the
+			// tab's own session cleanup. Keeping all session-directory writes
+			// single-threaded here means the parallel closes below — and the
+			// CleanupSessionsOnExit sweep — never race on session files, even
+			// when a close overruns the deadline.
 			planningTab.SaveSession()
+			planningTab.CleanupSession()
 
-			// Close tab (includes ACP client cleanup)
-			planningTab.Close()
+			// Only the runtime-resource teardown (ACP client shutdown, which can
+			// block ~3s) runs in parallel under the overall deadline.
+			closeWG.Add(1)
+			go func(pt *PlanningTab) {
+				defer closeWG.Done()
+				pt.closeResources()
+			}(planningTab)
 		}
+	}
+
+	// Wait for all closes, but never longer than the overall deadline.
+	closeDone := make(chan struct{})
+	go func() {
+		closeWG.Wait()
+		close(closeDone)
+	}()
+	select {
+	case <-closeDone:
+	case <-time.After(exitCleanupTimeout):
+		cleanupErrors = append(cleanupErrors, fmt.Sprintf("planning-tab cleanup exceeded %s; exiting anyway", exitCleanupTimeout))
 	}
 
 	// Cleanup planning sessions (remove orphaned/completed)

@@ -135,16 +135,19 @@ func sanitizeErrorMessage(rawError string) string {
 
 // Planning tab messages
 type planningResponseMsg struct {
+	tabID      string
 	content    string
 	isError    bool
 	isComplete bool
 }
 
 type planningStreamMsg struct {
+	tabID    string
 	response *acp.StreamingResponse
 }
 
 type planningStreamStartMsg struct {
+	tabID        string
 	streamChan   <-chan *acp.StreamingResponse
 	streamCancel context.CancelFunc
 }
@@ -554,6 +557,7 @@ func (pt *PlanningTab) sendMessage(message string) tea.Cmd {
 				cancel()
 				logging.Error("failed to connect to planner agent via ACP", "tab_id", pt.id, "error", err)
 				return planningResponseMsg{
+					tabID:      pt.id,
 					content:    fmt.Sprintf("Failed to connect to planner agent: %v", err),
 					isError:    true,
 					isComplete: true,
@@ -579,6 +583,7 @@ func (pt *PlanningTab) sendMessage(message string) tea.Cmd {
 			cancel()
 			logging.Error("failed to send ACP message", "tab_id", pt.id, "error", err)
 			return planningResponseMsg{
+				tabID:      pt.id,
 				content:    fmt.Sprintf("Failed to send message: %v", err),
 				isError:    true,
 				isComplete: true,
@@ -589,6 +594,7 @@ func (pt *PlanningTab) sendMessage(message string) tea.Cmd {
 
 		// Return streaming start message instead of storing directly
 		return planningStreamStartMsg{
+			tabID:        pt.id,
 			streamChan:   streamChan,
 			streamCancel: cancel,
 		}
@@ -603,6 +609,7 @@ func (pt *PlanningTab) listenToStream() tea.Cmd {
 	return func() tea.Msg {
 		if ch == nil {
 			return planningResponseMsg{
+				tabID:      pt.id,
 				content:    "",
 				isError:    false,
 				isComplete: true,
@@ -612,12 +619,13 @@ func (pt *PlanningTab) listenToStream() tea.Cmd {
 		if !ok {
 			// Channel closed — stream ended without explicit done signal
 			return planningResponseMsg{
+				tabID:      pt.id,
 				content:    "",
 				isError:    false,
 				isComplete: true,
 			}
 		}
-		return planningStreamMsg{response: response}
+		return planningStreamMsg{tabID: pt.id, response: response}
 	}
 }
 
@@ -691,11 +699,44 @@ func (pt *PlanningTab) renderInputArea() string {
 	// this message input. Streaming state has no toggle hint (input is busy).
 	var hint string
 	if pt.state != session.PlanningStateActive {
+		// The hint shares the single input line with the prompt and the text
+		// input. On narrow terminals a full hint would wrap and push the view
+		// into the footer, so pick the longest variant that fits the remaining
+		// width — or drop it entirely when there's no room.
+		var candidates []string
+		var style lipgloss.Style
 		if pt.focusTarget == FocusTargetMessage {
-			hint = "  " + pt.styles.PlanningInputActive.Render("● message — Tab/Esc: command line · Ctrl+Y copy · Ctrl+V paste")
+			style = pt.styles.PlanningInputActive
+			candidates = []string{
+				"● message — Tab/Esc: command line · Ctrl+Y copy · Ctrl+V paste",
+				"● message — Tab/Esc: command line",
+				"● message — Tab/Esc",
+			}
 		} else {
-			hint = "  " + pt.styles.PlanningInputInactive.Render("○ message — Tab: type here · Ctrl+Y copy")
+			style = pt.styles.PlanningInputInactive
+			candidates = []string{
+				"○ message — Tab: type here · Ctrl+Y copy",
+				"○ message — Tab: type here",
+				"○ Tab",
+			}
 		}
+
+		// Width already consumed on the line by the prompt and the input view.
+		used := lipgloss.Width(prompt) + lipgloss.Width(pt.textinput.View())
+		// Leading two spaces plus a small safety margin.
+		const hintLead = 2
+		avail := pt.width - used - hintLead
+		// When width is unknown (pre-first-render, pt.width == 0) avail is
+		// negative, so nothing fits and no hint is rendered — the safe default,
+		// since we can't know what fits yet. Once resized, the longest candidate
+		// that fits is chosen.
+		for _, c := range candidates {
+			if lipgloss.Width(c) <= avail {
+				hint = "  " + style.Render(c)
+				break
+			}
+		}
+		// If none fit, hint stays empty (no wrap).
 	}
 
 	// Dim the prompt when the message input is not the focused surface so the
@@ -1034,15 +1075,24 @@ func (pt *PlanningTab) Reset() {
 
 // Close cleans up resources when the tab is closed
 func (pt *PlanningTab) Close() {
+	pt.closeResources()
+
+	// Cleanup session
+	pt.CleanupSession()
+}
+
+// closeResources tears down the tab's runtime resources (lifecycle context,
+// active stream, ACP client) WITHOUT touching the on-disk session. It is the
+// bounded/parallelizable part of shutdown; session cleanup is handled
+// separately (see performExitCleanup) so concurrent closes never race the
+// session-directory sweep.
+func (pt *PlanningTab) closeResources() {
 	pt.lifecycleCancel()
 	pt.cancelStream()
 
 	if pt.acpClient != nil {
 		pt.acpClient.Close()
 	}
-
-	// Cleanup session
-	pt.CleanupSession()
 }
 
 // cancelStream cancels the active stream context and clears stream state

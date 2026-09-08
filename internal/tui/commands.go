@@ -550,8 +550,12 @@ func (m model) switchToPlanningMode() (model, tea.Cmd) {
 		m = m.appendActivity(m.styles.Success.Render(fmt.Sprintf("Switched to active planning tab (found %d planning tabs)", activePlanningTabs)))
 		m.currentMode = session.Planning
 		// Model A: the footer command line stays focused/available on planning
-		// tabs. Do not blur it here; Tab explicitly moves focus to the message input.
-		return m, tea.ClearScreen
+		// tabs. Route the switch through the single focus helper so all three
+		// focus stores (m.input, the tab's focusTarget, m.tabFocusStates) agree on
+		// footer focus — otherwise a tab that was message-focused before switching
+		// to console returns with both the message input and footer focused.
+		focusCmd := m.setPlanningFocus(FocusTargetFooter)
+		return m, tea.Batch(focusCmd, tea.ClearScreen)
 	}
 
 	// Check for existing planning sessions with error recovery
