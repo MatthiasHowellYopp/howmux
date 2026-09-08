@@ -303,10 +303,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case planningStreamStartMsg, planningStreamMsg, planningResponseMsg:
-		// Streaming/response messages from a planning tab's sendMessage command
-		// are addressed to the active planning tab. The top-level Update must
-		// forward them; otherwise they fall through to the footer input and the
-		// stream is never drained (planner appears to hang after send).
+		// Streaming/response messages are addressed to the planning tab that
+		// started the stream, carried in the message's tabID. Dispatch to that
+		// specific tab rather than the active one — otherwise switching tabs
+		// mid-stream would append chunks to the wrong tab (or drop them on a
+		// non-planning tab) and the original stream would stop being drained.
+		var tabID string
+		switch mt := msg.(type) {
+		case planningStreamStartMsg:
+			tabID = mt.tabID
+		case planningStreamMsg:
+			tabID = mt.tabID
+		case planningResponseMsg:
+			tabID = mt.tabID
+		}
+		if pt := m.tabManager.GetPlanningTabByID(tabID); pt != nil {
+			// PlanningTab.Update mutates via pointer receiver and the tab manager
+			// holds the same pointer, so no write-back is needed.
+			_, cmd := pt.Update(msg)
+			if cmd != nil {
+				return m, cmd
+			}
+			return m, nil
+		}
+		// Fall back to the active tab if the origin tab is gone (e.g. closed
+		// mid-stream), so a late chunk can't wedge the update loop.
 		if cmd := m.tabManager.Update(msg); cmd != nil {
 			return m, cmd
 		}

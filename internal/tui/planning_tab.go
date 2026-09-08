@@ -135,16 +135,19 @@ func sanitizeErrorMessage(rawError string) string {
 
 // Planning tab messages
 type planningResponseMsg struct {
+	tabID      string
 	content    string
 	isError    bool
 	isComplete bool
 }
 
 type planningStreamMsg struct {
+	tabID    string
 	response *acp.StreamingResponse
 }
 
 type planningStreamStartMsg struct {
+	tabID        string
 	streamChan   <-chan *acp.StreamingResponse
 	streamCancel context.CancelFunc
 }
@@ -554,6 +557,7 @@ func (pt *PlanningTab) sendMessage(message string) tea.Cmd {
 				cancel()
 				logging.Error("failed to connect to planner agent via ACP", "tab_id", pt.id, "error", err)
 				return planningResponseMsg{
+					tabID:      pt.id,
 					content:    fmt.Sprintf("Failed to connect to planner agent: %v", err),
 					isError:    true,
 					isComplete: true,
@@ -579,6 +583,7 @@ func (pt *PlanningTab) sendMessage(message string) tea.Cmd {
 			cancel()
 			logging.Error("failed to send ACP message", "tab_id", pt.id, "error", err)
 			return planningResponseMsg{
+				tabID:      pt.id,
 				content:    fmt.Sprintf("Failed to send message: %v", err),
 				isError:    true,
 				isComplete: true,
@@ -589,6 +594,7 @@ func (pt *PlanningTab) sendMessage(message string) tea.Cmd {
 
 		// Return streaming start message instead of storing directly
 		return planningStreamStartMsg{
+			tabID:        pt.id,
 			streamChan:   streamChan,
 			streamCancel: cancel,
 		}
@@ -603,6 +609,7 @@ func (pt *PlanningTab) listenToStream() tea.Cmd {
 	return func() tea.Msg {
 		if ch == nil {
 			return planningResponseMsg{
+				tabID:      pt.id,
 				content:    "",
 				isError:    false,
 				isComplete: true,
@@ -612,12 +619,13 @@ func (pt *PlanningTab) listenToStream() tea.Cmd {
 		if !ok {
 			// Channel closed — stream ended without explicit done signal
 			return planningResponseMsg{
+				tabID:      pt.id,
 				content:    "",
 				isError:    false,
 				isComplete: true,
 			}
 		}
-		return planningStreamMsg{response: response}
+		return planningStreamMsg{tabID: pt.id, response: response}
 	}
 }
 
