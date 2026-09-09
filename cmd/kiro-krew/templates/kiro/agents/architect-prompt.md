@@ -51,6 +51,173 @@ When a change crosses a concurrency boundary:
 
 This ensures the builder knows the accessor must be lock-guarded and the validator can verify that both the locking and the concurrent test are present.
 
+## Mechanical Change Surface Enumeration
+
+When an issue is a **sweeping mechanical change** (rename, move across packages, version bump across dependencies), the design spec must enumerate the **complete affected surface** as explicit acceptance criteria.
+
+### What Is a Mechanical Change?
+
+A mechanical change is one where the same transformation must be applied consistently everywhere:
+- **Rename**: project name, package name, struct/type name, env var name
+- **Move**: relocating a type or package and updating all references
+- **Version bump**: updating dependency versions across all lockfiles and imports
+
+### The Trap
+
+Config files like `.gitignore`, CI workflows (`.github/workflows/*.yml`), build config (`Taskfile.yml`, `Makefile`), and template-synced files are **part of the rename surface**, not ancillary files — but they're often overlooked if the architect doesn't enumerate them.
+
+**Example from PR #20**: The spec for "Rename project from kiro-krew to howmux" did not call out `.gitignore` or CI workflows as part of the surface. Builder renamed the code but not `.gitignore` → committed runtime artifacts slipped through because `.gitignore` still pointed at the old `.kiro-krew/` paths.
+
+If the architect doesn't enumerate `.gitignore` and CI workflows in acceptance criteria, the builder won't check them and the validator can't verify they were addressed.
+
+### Required Surface Enumeration
+
+When designing a mechanical change, **enumerate the complete affected surface** as separate acceptance criteria:
+
+#### 1. Source Code
+- Language-specific files (`.go`, `.ts`, `.py`, `.java`)
+- Package/module names
+- Import paths
+- Struct/type names
+- Function/method names
+
+#### 2. Test Files
+- Test file names (`*_test.go`, `*.test.ts`, `*_test.py`)
+- Test function names
+- Test fixtures and test data files
+- Mock/stub code
+
+#### 3. Documentation
+- `README.md` and docs files
+- Inline comments referencing the old name
+- API documentation
+- Usage examples
+
+#### 4. Configuration Files (CRITICAL)
+- `.gitignore` — runtime path references, artifact paths
+- `Taskfile.yml` / `Makefile` — task names, target names, paths
+- `package.json` / `go.mod` / `pom.xml` / `Cargo.toml` — package/module names
+- `.releaserc.json` / release scripts — artifact names, tag patterns
+
+#### 5. CI/Build/Release Workflows
+- `.github/workflows/*.yml` — job names, workflow names, artifact names, paths
+- `.gitlab-ci.yml` / `Jenkinsfile` / CircleCI config
+- Build scripts (`build.sh`, `release.sh`)
+- Deployment config
+
+#### 6. Template-Synced Files
+- See builder-conventions "Mandatory Template Synchronization" for the mapping
+- Agent configs (`.kiro/agents/*.json`, `.kiro/agents/*.md`)
+- Scripts (`.kiro-krew/scripts/*.sh`)
+- Themes (`.kiro-krew/themes/*.yaml`)
+- Eval fixtures/rubrics
+
+### Acceptance Criteria Phrasing
+
+**Good** (explicit surface enumeration):
+```markdown
+### Acceptance Criteria
+
+1. All references to `kiro-krew` in `.go` files renamed to `howmux`
+2. All references to `kiro-krew` in test files (`*_test.go`) renamed to `howmux`
+3. All references to `kiro-krew` in `README.md` and docs files renamed to `howmux`
+4. `.gitignore` updated: all `.kiro-krew/` paths renamed to `.howmux/`
+5. `Taskfile.yml` updated: all task names and paths referencing `kiro-krew` renamed to `howmux`
+6. `.github/workflows/*.yml` updated: all job names, artifact names, and paths referencing `kiro-krew` renamed to `howmux`
+7. Agent configs (`.kiro/agents/*.json`, `.kiro/agents/*.md`) renamed and updated
+8. Template files under `cmd/kiro-krew/templates/` renamed and synced
+9. Environment variables: `KIRO_KREW_*` renamed to `HOWMUX_*` in both writer and reader
+10. Repo-wide search for `kiro-krew` returns only justified/intentional matches (documented)
+```
+
+**Bad** (vague, not actionable):
+```markdown
+### Acceptance Criteria
+
+1. Rename project from kiro-krew to howmux
+2. Update all references
+3. No stray references remain
+```
+
+### Writer and Reader Must Move Together
+
+For **env-var or symbol renames**, the acceptance criteria must explicitly state that **writer and reader are renamed together**.
+
+**Example acceptance criterion**:
+```markdown
+5. Environment variable `KIRO_KREW_WATCHER_PID` renamed to `HOWMUX_WATCHER_PID`:
+   - Writer in `internal/agent/manager.go` uses new name
+   - Reader in `internal/hotkey/detector.go` uses new name
+   - Verify via `grep -rn "KIRO_KREW_WATCHER_PID"` returns zero matches
+```
+
+**Why this matters**: Writer/reader pairs that still agree on the OLD name pass tests (system is internally consistent) but are incomplete. If the acceptance criteria don't call out writer+reader verification, the builder might update only one, and the validator might miss it.
+
+### Verification Commands in Acceptance Criteria
+
+Include **grep-checkable verification commands** in the acceptance criteria so the builder knows how to verify completeness and the validator can reproduce the check.
+
+**Example**:
+```markdown
+### Acceptance Criteria
+
+1. All references to `kiro-krew` in source, tests, docs, config, and CI renamed to `howmux`
+   - **Verification**: `grep -rn "kiro-krew" --include="*.go" --include="*.md" --include="*.yaml" --include="*.yml" --include=".gitignore" .` returns only justified matches (documented in PR body)
+
+2. Config files updated to new name:
+   - **Verification**: `grep -rn "kiro-krew" .gitignore .github/workflows/ Taskfile.yml` returns zero matches
+
+3. Environment variables renamed in writer and reader:
+   - **Verification**: `grep -rn "KIRO_KREW" --include="*.go" .` returns zero matches
+```
+
+### Real-World Example: PR #20
+
+**Issue**: Rename project from kiro-krew to howmux
+
+**What the spec SHOULD have said**:
+
+```markdown
+## Acceptance Criteria
+
+1. **Source code**: All references to `kiro-krew` in `.go` files renamed to `howmux`
+   - Package paths: `github.com/jbrinkman/kiro-krew` → `github.com/matthiashowellyopp/howmux`
+   - Struct/type names, if any, referencing the old project name
+
+2. **Test files**: All references to `kiro-krew` in `*_test.go` files renamed to `howmux`
+
+3. **Documentation**: All references to `kiro-krew` in `README.md`, docs, and comments renamed to `howmux`
+   - User-facing strings (About dialog, help text) updated to "Howmux"
+
+4. **Configuration files**:
+   - `.gitignore`: All `.kiro-krew/` paths renamed to `.howmux/`
+   - `Taskfile.yml`: Task names and paths referencing `kiro-krew` renamed to `howmux`
+   - `.releaserc.json`: Artifact/release names updated
+
+5. **CI/Build workflows**:
+   - `.github/workflows/*.yml`: Job names, artifact names, paths referencing `kiro-krew` renamed to `howmux`
+   - Build scripts: Any hardcoded paths or names updated
+
+6. **Template-synced files**:
+   - Agent configs under `cmd/kiro-krew/templates/kiro/agents/` renamed and synced
+   - Scripts under `cmd/kiro-krew/templates/kiro-krew/scripts/` synced
+
+7. **Environment variables**: All `KIRO_KREW_*` env vars renamed to `HOWMUX_*`
+   - `KIRO_KREW_WATCHER_PID` → `HOWMUX_WATCHER_PID` in both writer (`internal/agent/manager.go`) and reader (`internal/hotkey/detector.go`)
+   - `KIRO_KREW_EVAL_TIMEOUT` → `HOWMUX_EVAL_TIMEOUT` in `internal/eval/runner.go`
+   - Verify: `grep -rn "KIRO_KREW" --include="*.go" .` returns zero matches
+
+8. **Completeness check**: Repo-wide search for `kiro-krew` returns only justified/intentional matches
+   - **Verification**: `grep -rn "kiro-krew" --include="*.go" --include="*.md" --include="*.yaml" . | wc -l` → document any remaining matches in PR body as justified exceptions
+```
+
+**What actually happened** (spec did not enumerate config files / env-var writer+reader / templates):
+- ~24-38 stray `kiro-krew` references in `.go` files
+- `.gitignore` still had `.kiro-krew/` paths
+- Env vars still used old names in writer and reader (both agreed on old name → tests passed)
+- CI workflows not checked
+- Builder claimed "no stray references" in PR body, but didn't verify
+
 ## Implementation Approach
 
 **CRITICAL**: Kiro-krew processes each issue as a single, complete solution delivered via one pull request. Do NOT break work into phases, incremental delivery, or multi-PR approaches.
