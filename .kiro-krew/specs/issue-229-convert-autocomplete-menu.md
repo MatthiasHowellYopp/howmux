@@ -114,8 +114,8 @@ This implementation follows a **layered refactoring approach** where each compon
 ### Manual Testing
 ```bash
 # Build and run the application
-go build ./cmd/kiro-krew
-./kiro-krew
+go build ./cmd/howmux
+./howmux
 
 # Test scenarios:
 # 1. Type partial commands to trigger autocomplete

@@ -4,12 +4,12 @@
 
 ## Solution Approach
 
-This design extends kiro-krew with a web API server component to provide JWT-based authentication services. The architecture introduces a new `server` command alongside the existing CLI functionality, enabling users to run kiro-krew as both a CLI tool and an authentication service.
+This design extends howmux with a web API server component to provide JWT-based authentication services. The architecture introduces a new `server` command alongside the existing CLI functionality, enabling users to run howmux as both a CLI tool and an authentication service.
 
 ### High-Level Architecture
 
 ```
-kiro-krew CLI (existing)     kiro-krew server (new)
+howmux CLI (existing)     howmux server (new)
      │                              │
      ├── watch                      ├── HTTP API Server
      ├── status                     ├── JWT Auth Service  
@@ -29,17 +29,17 @@ The authentication system will be self-contained within the `internal/auth` pack
 - `internal/auth/database.go` - Database operations for users/tokens
 - `internal/middleware/auth.go` - JWT validation middleware
 - `internal/server/server.go` - HTTP server setup and routing
-- `cmd/kiro-krew/cmd/server.go` - Server subcommand
+- `cmd/howmux/cmd/server.go` - Server subcommand
 - `migrations/001_create_users.sql` - Database schema
 - `migrations/002_create_refresh_tokens.sql` - Refresh tokens schema
 
 ### Files to Modify
-- `cmd/kiro-krew/cmd/root.go` - Add server subcommand
+- `cmd/howmux/cmd/root.go` - Add server subcommand
 - `internal/config/config.go` - Add server and database configuration
 - `go.mod` - Add required dependencies (jwt, bcrypt, database driver)
 
 ### Configuration Files
-- `.kiro-krew/config.yaml` - Extend with server settings
+- `.howmux/config.yaml` - Extend with server settings
 
 ## Team Orchestration
 
@@ -48,7 +48,7 @@ The authentication system operates independently of the existing agent orchestra
 1. **Separation of Concerns**: Auth service runs as separate server mode
 2. **Database Independence**: Uses local SQLite by default, configurable for other DBs
 3. **No Impact on Existing Workflows**: CLI commands remain unchanged
-4. **Optional Feature**: Server mode is opt-in via `kiro-krew server` command
+4. **Optional Feature**: Server mode is opt-in via `howmux server` command
 
 ## Step-by-Step Task Breakdown
 
@@ -102,8 +102,8 @@ The authentication system operates independently of the existing agent orchestra
 
 ### Task 7: CLI Integration
 **Acceptance Criteria:**
-- `kiro-krew server` subcommand
-- Server configuration in `.kiro-krew/config.yaml`
+- `howmux server` subcommand
+- Server configuration in `.howmux/config.yaml`
 - Database path and JWT secret configuration
 - Help text and usage examples
 
@@ -118,7 +118,7 @@ The authentication system operates independently of the existing agent orchestra
 
 ```bash
 # Start the authentication server
-kiro-krew server
+howmux server
 
 # Test user registration
 curl -X POST http://localhost:8080/auth/register \
@@ -173,9 +173,9 @@ CREATE TABLE refresh_tokens (
 ## Configuration Extension
 
 ```yaml
-# .kiro-krew/config.yaml
+# .howmux/config.yaml
 repo: owner/repo-name
-label: kiro-krew
+label: howmux
 poll_interval: 5m
 max_retries: 3
 
@@ -184,7 +184,7 @@ server:
   enabled: false
   host: "localhost"
   port: 8080
-  database_path: ".kiro-krew/auth.db"
+  database_path: ".howmux/auth.db"
   jwt_secret: "your-jwt-secret-key"
   jwt_expiry: "15m"
   refresh_expiry: "7d"

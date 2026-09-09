@@ -1,7 +1,7 @@
 # Design Specification: Fix Footer Rendering Inconsistency
 
 **Issue:** #218 - Fix footer rendering inconsistency between main and planning tabs  
-**Repository:** jbrinkman/kiro-krew  
+**Repository:** jbrinkman/howmux  
 Closes #218
 
 ## Problem Analysis
@@ -119,8 +119,8 @@ func (m model) renderTabContentWithFooter(tabContent string, tabType TabType) st
 ### Visual Verification
 ```bash
 # Build and run the application
-go build ./cmd/kiro-krew
-./kiro-krew
+go build ./cmd/howmux
+./howmux
 
 # In the TUI:
 # 1. Switch to planning tab (Ctrl+Alt+P) 

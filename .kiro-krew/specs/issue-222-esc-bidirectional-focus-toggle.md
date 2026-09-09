@@ -109,10 +109,10 @@ Run these commands to verify the implementation works correctly:
 
 ```bash
 # Build the application
-go build ./cmd/kiro-krew
+go build ./cmd/howmux
 
 # Start the TUI for manual testing
-./kiro-krew
+./howmux
 
 # Test scenarios to verify:
 # 1. In main tab: Tab key should trigger autocomplete

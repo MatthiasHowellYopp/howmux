@@ -119,7 +119,7 @@ This is a focused bug fix with no cross-component dependencies. Implementation s
 
 ### Task 4: Manual Terminal Verification
 **Acceptance Criteria**:
-- Start kiro-krew in actual terminal
+- Start howmux in actual terminal
 - Type partial commands to trigger autocomplete menu
 - Navigate through all menu items
 - Verify no extraneous characters appear
@@ -510,7 +510,7 @@ import (
 ### Build and Test
 ```bash
 # Build the project
-go build ./cmd/kiro-krew
+go build ./cmd/howmux
 
 # Run all existing tests
 go test ./internal/tui/... -v
@@ -521,8 +521,8 @@ go test ./internal/tui/... -cover
 
 ### Manual Testing
 ```bash
-# Start kiro-krew
-./kiro-krew
+# Start howmux
+./howmux
 
 # In the REPL:
 # 1. Type partial commands to trigger autocomplete (e.g., "wa", "st", "pl")

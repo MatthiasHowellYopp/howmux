@@ -1,6 +1,6 @@
-# Help Command Support for kiro-krew CLI
+# Help Command Support for howmux CLI
 
-**Issue:** #33 - Add help command support to kiro-krew CLI  
+**Issue:** #33 - Add help command support to howmux CLI  
 **Closes:** #33
 
 ## Solution Approach
@@ -17,7 +17,7 @@ Implement a minimal help system that extends the existing switch-based command r
 ## Relevant Files
 
 ### Files to Modify
-- `cmd/kiro-krew/main.go` - Add help flag parsing and help display functions
+- `cmd/howmux/main.go` - Add help flag parsing and help display functions
 
 ### Files Referenced
 - `internal/eval/runner.go` - Understanding eval command structure
@@ -38,7 +38,7 @@ This is a single-file change requiring no coordination between components. The h
 ### Task 2: Implement Help Flag Detection
 **Acceptance Criteria:**
 - Parse `--help` and `-h` flags before command routing
-- Support both global help (`kiro-krew --help`) and command-specific help (`kiro-krew eval --help`)
+- Support both global help (`howmux --help`) and command-specific help (`howmux eval --help`)
 - Preserve existing behavior when no help flags are present
 
 ### Task 3: Add Help Display Functions
@@ -53,7 +53,7 @@ This is a single-file change requiring no coordination between components. The h
 - Modify existing switch statement to check for help flags first
 - Route to appropriate help function when help flags detected
 - Maintain all existing command functionality unchanged
-- Preserve default TUI launch behavior for `kiro-krew` with no arguments
+- Preserve default TUI launch behavior for `howmux` with no arguments
 
 ### Task 5: Add Help Content
 **Acceptance Criteria:**
@@ -67,27 +67,27 @@ This is a single-file change requiring no coordination between components. The h
 
 ```bash
 # Test general help
-kiro-krew --help
-kiro-krew -h
+howmux --help
+howmux -h
 
 # Test command-specific help  
-kiro-krew init --help
-kiro-krew init -h
-kiro-krew update --help
-kiro-krew update -h
-kiro-krew eval --help
-kiro-krew eval -h
+howmux init --help
+howmux init -h
+howmux update --help
+howmux update -h
+howmux eval --help
+howmux eval -h
 
 # Test existing functionality preservation
-kiro-krew                    # Should launch TUI
-kiro-krew init              # Should extract templates
-kiro-krew update            # Should update templates  
-kiro-krew eval              # Should run evaluation
-kiro-krew eval diff run1 run2  # Should show diff
+howmux                    # Should launch TUI
+howmux init              # Should extract templates
+howmux update            # Should update templates  
+howmux eval              # Should run evaluation
+howmux eval diff run1 run2  # Should show diff
 
 # Test error handling
-kiro-krew invalid --help    # Should show general help or error
-kiro-krew --invalid         # Should show existing behavior
+howmux invalid --help    # Should show general help or error
+howmux --invalid         # Should show existing behavior
 ```
 
 ## Implementation Notes

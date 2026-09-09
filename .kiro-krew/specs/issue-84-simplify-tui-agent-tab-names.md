@@ -126,7 +126,7 @@ go test ./internal/agent/...
 ```
 
 ### Manual Testing
-1. Start kiro-krew TUI with active agents
+1. Start howmux TUI with active agents
 2. Verify tab names show "Issue {number}" format
 3. Verify tab functionality remains unchanged (switching, closing, etc.)
 4. Test with multiple agents to ensure unique issue numbers display correctly

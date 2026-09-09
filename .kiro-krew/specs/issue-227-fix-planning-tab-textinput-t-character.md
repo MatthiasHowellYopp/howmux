@@ -92,7 +92,7 @@ task dev
 ### Manual Validation Steps
 ```bash
 # 1. Start the application
-./kiro-krew
+./howmux
 
 # 2. In the REPL, press Ctrl+Alt+P to enter planning mode
 # 3. Create a new planning tab

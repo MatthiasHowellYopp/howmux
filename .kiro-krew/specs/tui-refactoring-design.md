@@ -130,7 +130,7 @@ Implement a **Model-View-Controller (MVC) architecture** with clear separation o
 
 ```bash
 # Build and verify compilation
-go build ./cmd/kiro-krew
+go build ./cmd/howmux
 
 # Run comprehensive test suite
 go test ./internal/tui/... -v -race -coverprofile=coverage.out
@@ -139,11 +139,11 @@ go test ./internal/tui/... -v -race -coverprofile=coverage.out
 go tool cover -html=coverage.out
 
 # Integration test - start TUI and verify all commands work
-./kiro-krew
+./howmux
 # In TUI: test watch start/stop, status, plan, help, theme, logs, exit
 
 # Performance validation - should start within same time bounds
-time ./kiro-krew --version
+time ./howmux --version
 
 # Verify no memory leaks in long-running operations
 go test -memprofile=mem.prof ./internal/tui/...

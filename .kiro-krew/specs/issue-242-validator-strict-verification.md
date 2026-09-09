@@ -349,7 +349,7 @@ This is a single-PR implementation with sequential tasks:
 **Acceptance Criteria**:
 - `validator.json` references validator-conventions skill in `resources` array
 - Shell tool configuration allows gh commands (readonly)
-- Template sync executed: `cp .kiro/agents/validator* cmd/kiro-krew/templates/kiro/agents/`
+- Template sync executed: `cp .kiro/agents/validator* cmd/howmux/templates/kiro/agents/`
 - Template sync verification passes: `task sync:check`
 
 ### Task 4: Create Test Scenario Documentation
@@ -460,8 +460,8 @@ This is a single-PR implementation with sequential tasks:
 
 2. Sync modified agent files to templates:
    ```bash
-   cp .kiro/agents/validator-prompt.md cmd/kiro-krew/templates/kiro/agents/
-   cp .kiro/agents/validator.json cmd/kiro-krew/templates/kiro/agents/
+   cp .kiro/agents/validator-prompt.md cmd/howmux/templates/kiro/agents/
+   cp .kiro/agents/validator.json cmd/howmux/templates/kiro/agents/
    ```
 
 3. Verify sync succeeded:
@@ -480,7 +480,7 @@ This is a single-PR implementation with sequential tasks:
 
 **Implementation Steps**:
 
-1. Create test scenario file at `.kiro-krew/specs/validator-test-scenario-242.md`:
+1. Create test scenario file at `.howmux/specs/validator-test-scenario-242.md`:
 
 2. Document PR #238 test scenario:
    - Issue #235 acceptance criteria (focus on lipgloss.Place() requirement)

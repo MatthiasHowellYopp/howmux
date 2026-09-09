@@ -5,7 +5,7 @@
 
 ## Solution Approach
 
-Add comprehensive Linux support to kiro-krew by implementing Go cross-compilation for Linux targets (amd64 and arm64), updating the Taskfile build system, and modifying release workflows to include Linux binaries in GitHub releases. This ensures broad platform compatibility while maintaining existing macOS functionality.
+Add comprehensive Linux support to howmux by implementing Go cross-compilation for Linux targets (amd64 and arm64), updating the Taskfile build system, and modifying release workflows to include Linux binaries in GitHub releases. This ensures broad platform compatibility while maintaining existing macOS functionality.
 
 The approach leverages Go's built-in cross-compilation capabilities and follows established patterns in the current build system. All changes will be additive to preserve existing workflows.
 
@@ -18,10 +18,10 @@ The approach leverages Go's built-in cross-compilation capabilities and follows 
 - `README.md` - Add Linux installation instructions
 
 ### Files Created:
-- `.kiro-krew/specs/issue-151-add-linux-support.md`
+- `.howmux/specs/issue-151-add-linux-support.md`
 
 ### Files Referenced:
-- `cmd/kiro-krew/` - Main application entry point
+- `cmd/howmux/` - Main application entry point
 - `internal/version/version.json` - Version metadata (existing pattern)
 - `go.mod` - Go module configuration (confirms Go 1.25.0 compatibility)
 
@@ -47,7 +47,7 @@ No coordination with external teams required. The change is backward compatible 
 **Implementation Notes:**
 - Follow existing `build:macos` pattern for consistency
 - Use same BUILD_TIME variable expansion as macOS build
-- Binary names: `kiro-krew-linux-amd64` and `kiro-krew-linux-arm64`
+- Binary names: `howmux-linux-amd64` and `howmux-linux-arm64`
 
 ### Task 2: Update GitHub Release Workflow
 **Acceptance Criteria:**
@@ -64,7 +64,7 @@ No coordination with external teams required. The change is backward compatible 
 ### Task 3: Update Semantic Release Configuration
 **Acceptance Criteria:**
 - Modify `.releaserc.json` to include Linux binaries in GitHub release assets
-- Add entries for both `kiro-krew-linux-amd64` and `kiro-krew-linux-arm64`
+- Add entries for both `howmux-linux-amd64` and `howmux-linux-arm64`
 - Use consistent labeling with manual release workflow
 - Maintain existing macOS asset configuration
 
@@ -94,11 +94,11 @@ task build:linux:arm64
 task build:release
 
 # Verify output files exist
-ls -la dist/release/kiro-krew-linux-*
+ls -la dist/release/howmux-linux-*
 
 # Check binary metadata (requires file command)
-file dist/release/kiro-krew-linux-amd64
-file dist/release/kiro-krew-linux-arm64
+file dist/release/howmux-linux-amd64
+file dist/release/howmux-linux-arm64
 ```
 
 ### Build System Integration:
@@ -110,7 +110,7 @@ ls -la dist/release/  # Should show macOS + Linux binaries
 
 # Test development build still works
 task dev
-./kiro-krew --version
+./howmux --version
 ```
 
 ### Release Workflow Validation:
@@ -121,7 +121,7 @@ task build:release
 ls -la dist/release/
 
 # Verify version metadata in Linux binaries
-./dist/release/kiro-krew-linux-amd64 --version 2>/dev/null || echo "Expected: Linux binary not executable on macOS"
+./dist/release/howmux-linux-amd64 --version 2>/dev/null || echo "Expected: Linux binary not executable on macOS"
 ```
 
 ### Documentation Verification:
@@ -139,7 +139,7 @@ grep -A 5 "amd64\|arm64" README.md
 - CGO is disabled by default in cross-compilation (good for portability)
 
 ### Binary Naming Convention:
-- Format: `kiro-krew-{os}-{arch}`
+- Format: `howmux-{os}-{arch}`
 - Consistent with Go toolchain conventions
 - Clear identification for users downloading releases
 

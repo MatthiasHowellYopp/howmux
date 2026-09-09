@@ -6,7 +6,7 @@
 
 ## Problem Statement
 
-Currently, focus management in the kiro-krew TUI is inconsistent across tab types. When switching between tabs, cursor focus is not preserved correctly, forcing users to perform manual workarounds to restore proper input focus.
+Currently, focus management in the howmux TUI is inconsistent across tab types. When switching between tabs, cursor focus is not preserved correctly, forcing users to perform manual workarounds to restore proper input focus.
 
 **Root Cause Analysis**:
 - Only planning tabs implement focus state tracking via `focusInput` boolean and `RestoreFocus()` method
@@ -612,10 +612,10 @@ func TestFocusTargetIsValid(t *testing.T) {
 ### Build and Run
 ```bash
 # Build the project
-go build ./cmd/kiro-krew
+go build ./cmd/howmux
 
 # Run the TUI
-./kiro-krew
+./howmux
 ```
 
 ### Unit Tests
@@ -632,8 +632,8 @@ Follow the manual testing procedure in Task 7 to verify all acceptance criteria.
 
 ### Integration Verification
 ```bash
-# Start kiro-krew and verify focus behavior
-./kiro-krew
+# Start howmux and verify focus behavior
+./howmux
 
 # In the REPL:
 # 1. Type "plan test" and press Enter to create planning tab
@@ -669,7 +669,7 @@ Add debug logging for focus state transitions:
 - Mouse clicks: Log focus transfer events
 
 ### Future Enhancements (Out of Scope)
-- Focus state persistence across kiro-krew restarts
+- Focus state persistence across howmux restarts
 - Keyboard shortcuts for explicit focus transfer (beyond Esc key)
 - Focus indicators in tab titles (e.g., "[F]" suffix for footer focus)
 

@@ -64,7 +64,7 @@ cd ../..
 echo "📋 Test 7: Build Verification"
 echo "-----------------------------"
 echo "Building project to verify integration..."
-go build ./cmd/kiro-krew >/dev/null 2>&1
+go build ./cmd/howmux >/dev/null 2>&1
 echo "✅ Project builds successfully with hotkey integration"
 echo
 

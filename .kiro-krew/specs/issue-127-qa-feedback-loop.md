@@ -24,8 +24,8 @@ This approach maintains language-agnostic flexibility while ensuring consistent 
 - `.kiro/agents/krew-lead-prompt.md` - Add QA feedback loop orchestration
 
 ### Sentinel File Format Changes
-- `.kiro-krew/artifacts/builder-*.md` - Enhanced format including QA check results
-- `.kiro-krew/artifacts/validator-*.md` - Enhanced format including detailed feedback for failures
+- `.howmux/artifacts/builder-*.md` - Enhanced format including QA check results
+- `.howmux/artifacts/validator-*.md` - Enhanced format including detailed feedback for failures
 
 ### Quality Discovery Reference Files
 - `.github/workflows/ci.yml` - CI workflow patterns to discover (no changes)
@@ -195,8 +195,8 @@ kiro-cli chat --agent builder --no-interactive "Fix formatting issues"
 kiro-cli chat --agent validator --no-interactive "Verify QA compliance"
 
 # Check sentinel files include QA results
-cat .kiro-krew/artifacts/builder-*.md | grep -A5 "QA Results"
-cat .kiro-krew/artifacts/validator-*.md | grep -A5 "QA Verification"
+cat .howmux/artifacts/builder-*.md | grep -A5 "QA Results"
+cat .howmux/artifacts/validator-*.md | grep -A5 "QA Verification"
 ```
 
 ### End-to-End QA Workflow Test
@@ -221,7 +221,7 @@ for dir in go-project node-project python-project; do
   cd $dir
   echo "Testing QA discovery in $dir..."
   kiro-cli chat --agent builder --no-interactive "Discover QA tools"
-  echo "Discovered tools: $(grep 'QA Commands' .kiro-krew/artifacts/builder-*.md)"
+  echo "Discovered tools: $(grep 'QA Commands' .howmux/artifacts/builder-*.md)"
 done
 
 # Verify no hardcoded tool names in agent prompts
@@ -237,8 +237,8 @@ echo "syntax error that cannot be fixed automatically" > broken.txt
 kiro-cli chat --agent krew-lead --no-interactive "Process broken issue"
 
 # Check incident report creation for QA failures
-test -f .kiro-krew/specs/incidents/qa-loop-incident.md && echo "PASS: Incident report created"
+test -f .howmux/specs/incidents/qa-loop-incident.md && echo "PASS: Incident report created"
 
 # Verify issue labeled as failed after retry exhaustion
-gh issue view <issue-number> --json labels | grep "kiro-krew-failed"
+gh issue view <issue-number> --json labels | grep "howmux-failed"
 ```

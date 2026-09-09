@@ -21,12 +21,12 @@ Key architectural changes:
 - `.kiro/agents/planner-prompt.md` - Gate 1 expansion with root cause analysis steps
 
 ### New Infrastructure Files
-- `.kiro-krew/scripts/planning-worktree-create.sh` - Planning-specific worktree creation
-- `.kiro-krew/scripts/planning-worktree-cleanup.sh` - Mandatory cleanup script
+- `.howmux/scripts/planning-worktree-create.sh` - Planning-specific worktree creation
+- `.howmux/scripts/planning-worktree-cleanup.sh` - Mandatory cleanup script
 - `.kiro/skills/planner-conventions/SKILL.md` - Analysis methodology documentation
 
 ### Validation Files
-- `.kiro-krew/scripts/validate-planner-tools.sh` - Verify tool restrictions are maintained
+- `.howmux/scripts/validate-planner-tools.sh` - Verify tool restrictions are maintained
 
 ## Team Orchestration
 
@@ -103,7 +103,7 @@ kiro-cli chat --agent planner "Analyze this mock bug report and create an issue"
 # Should see planning worktree creation, analysis, and cleanup
 
 # Validate tool restrictions  
-.kiro-krew/scripts/validate-planner-tools.sh
+.howmux/scripts/validate-planner-tools.sh
 ```
 
 ### Test Root Cause Detection
@@ -129,8 +129,8 @@ kiro-cli chat --agent planner "Create simple feature request"
 
 ### Integration Validation
 ```bash
-# Test full kiro-krew pipeline with enhanced planner
-kiro-krew
+# Test full howmux pipeline with enhanced planner
+howmux
 # Create test issue requiring deep analysis through planner
 # Verify issue quality improvement in subsequent architect/builder work
 ```

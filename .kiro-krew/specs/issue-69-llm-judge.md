@@ -5,7 +5,7 @@
 
 ## Problem Analysis
 
-The kiro-krew eval framework currently has a stub `scoreLLMJudge` function that returns skipped results for all non-deterministic criteria. This prevents evaluation of subjective criteria like "code quality", "spec adherence", and "requirement clarity" that require LLM judgment rather than deterministic checks.
+The howmux eval framework currently has a stub `scoreLLMJudge` function that returns skipped results for all non-deterministic criteria. This prevents evaluation of subjective criteria like "code quality", "spec adherence", and "requirement clarity" that require LLM judgment rather than deterministic checks.
 
 **Current State:**
 - `scoreLLMJudge()` in `internal/eval/runner.go` line 118 always returns `(0, "LLM judge not configured — criterion skipped", true)`
@@ -35,8 +35,8 @@ The kiro-krew eval framework currently has a stub `scoreLLMJudge` function that 
 - `internal/eval/types.go` - Add LLM response structures if needed
 
 ### Files to Reference  
-- `.kiro-krew/evals/rubrics/*.yaml` - Existing rubric structure with LLM-judged criteria
-- `.kiro-krew/evals/cases/*/` - Test cases that provide context for LLM judging
+- `.howmux/evals/rubrics/*.yaml` - Existing rubric structure with LLM-judged criteria
+- `.howmux/evals/cases/*/` - Test cases that provide context for LLM judging
 
 ### Files Unchanged
 - All deterministic evaluation logic remains intact
@@ -128,33 +128,33 @@ The kiro-krew eval framework currently has a stub `scoreLLMJudge` function that 
 ### Basic Functionality Test
 ```bash
 # Run eval on single agent to test LLM judge integration
-cd .kiro-krew && go run ../cmd/kiro-krew/main.go eval architect
+cd .howmux && go run ../cmd/howmux/main.go eval architect
 ```
 
 ### Full Integration Test  
 ```bash
 # Run complete evaluation to ensure no regression
-cd .kiro-krew && go run ../cmd/kiro-krew/main.go eval
+cd .howmux && go run ../cmd/howmux/main.go eval
 ```
 
 ### Error Handling Test
 ```bash
 # Test with kiro CLI unavailable (rename binary temporarily)
-mv $(which kiro) $(which kiro).bak && cd .kiro-krew && go run ../cmd/kiro-krew/main.go eval planner
+mv $(which kiro) $(which kiro).bak && cd .howmux && go run ../cmd/howmux/main.go eval planner
 mv $(which kiro).bak $(which kiro)
 ```
 
 ### Response Format Verification
 ```bash
 # Check that results maintain expected JSON structure
-cd .kiro-krew && go run ../cmd/kiro-krew/main.go eval architect
+cd .howmux && go run ../cmd/howmux/main.go eval architect
 jq '.Cases[0].Scores[] | select(.Deterministic == false)' evals/results/*/architect.json
 ```
 
 ### Scoring Scale Validation
 ```bash
 # Verify 1-5 scale scoring works correctly with normalization
-cd .kiro-krew && go run ../cmd/kiro-krew/main.go eval planner
+cd .howmux && go run ../cmd/howmux/main.go eval planner
 # Check that LLM scores are in valid range and normalized properly
 ```
 

@@ -19,7 +19,7 @@ Extend the existing configuration system to support optional sandbox resource li
 ### Files to Modify
 - `internal/config/config.go` - Add SandboxConfig struct and validation
 - `internal/eval/runner.go` - Update createContainerConfig() to use config values
-- `.kiro-krew/config.yaml` - Add commented sandbox section example
+- `.howmux/config.yaml` - Add commented sandbox section example
 
 ### Files to Create
 - `internal/config/sandbox_test.go` - Unit tests for sandbox configuration

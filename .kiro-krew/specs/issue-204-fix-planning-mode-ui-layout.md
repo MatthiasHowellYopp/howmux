@@ -1,7 +1,7 @@
 # Design Specification: Fix Planning Mode UI Layout - Tab Headers Misaligned When Planning Tab Active
 
 **Issue**: #204  
-**Repository**: jbrinkman/kiro-krew  
+**Repository**: jbrinkman/howmux  
 **Closes**: #204
 
 ## Solution Approach
@@ -111,8 +111,8 @@ This is a focused UI layout fix with clear component boundaries:
 
 ### UI Layout Verification:
 ```bash
-# Start kiro-krew and test the UI layout
-./kiro-krew
+# Start howmux and test the UI layout
+./howmux
 
 # In the REPL, test planning tab creation:
 plan Test planning tab layout
@@ -170,7 +170,7 @@ This fix ensures the UI strictly follows Issue #195's layout:
 │  Content area... (NO STATUS ELEMENTS HERE)                                 │
 │                                                                             │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│ kiro-krew> Type your command here...                                        │  ← Row 1 (Input Row)  
+│ howmux> Type your command here...                                        │  ← Row 1 (Input Row)  
 │ theme: dark │ ctx: 45k/200k │ model: claude-sonnet-4 │ 📁 /projects/myapp  │  ← Row 2 (Status Row)
 └─────────────────────────────────────────────────────────────────────────────┘
 ```

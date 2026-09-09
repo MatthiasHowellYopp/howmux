@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jbrinkman/kiro-krew/internal/agent"
-	"github.com/jbrinkman/kiro-krew/internal/session"
+	"github.com/matthiashowellyopp/howmux/internal/agent"
+	"github.com/matthiashowellyopp/howmux/internal/session"
 )
 
 // TestTabDataAccumulatesContinuouslyDuringPlannerSessions verifies that agent output

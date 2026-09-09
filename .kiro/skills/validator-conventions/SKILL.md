@@ -707,11 +707,11 @@ When a change **adds or modifies cross-goroutine access to shared state**, use t
 
 **❌ WRONG APPROACH**:
 
-**Issue**: PR #20 ("Rename project from kiro-krew to howmux")
+**Issue**: PR #20 ("Rename project from howmux to howmux")
 
 **PR Body Claims**:
 > "Environment variables updated: `KIRO_KREW_WATCHER_PID` → `HOWMUX_WATCHER_PID`"
-> "No stray kiro-krew references remain"
+> "No stray howmux references remain"
 
 **Implementation Reality**:
 ```go
@@ -767,20 +767,20 @@ When a PR body makes **completeness assertions** — phrases like "renamed X", "
 
 **Reasoning**: PR body claimed "`KIRO_KREW_WATCHER_PID` updated to `HOWMUX_WATCHER_PID`", but grep reveals both writer and reader still use the old name. Writer/reader pairs that still agree on the OLD name are the exact trap — tests pass because the system is internally consistent, but the rename is incomplete.
 
-### Criterion: No stray kiro-krew references remain
+### Criterion: No stray howmux references remain
 - **Status**: ❌ FAIL
 - **Evidence**: 
   ```bash
-  grep -rn "kiro-krew" --include="*.go" . | wc -l
+  grep -rn "howmux" --include="*.go" . | wc -l
   # Result: 24-38 matches found
   ```
 - **Finding**: 
   - Multiple stray references in `.go` files
   - About overlay title still says "Kiro Krew" (user-facing)
-  - Config files like `.gitignore` still reference `.kiro-krew/` paths from old project
+  - Config files like `.gitignore` still reference `.howmux/` paths from old project
 - **Verification Method**: Repo-wide grep for old token
 
-**Reasoning**: PR body claimed "no stray kiro-krew references remain", but repo-wide search contradicts this claim. This is a **completeness verification failure** — the validator must reconcile PR claims against actual repository state.
+**Reasoning**: PR body claimed "no stray howmux references remain", but repo-wide search contradicts this claim. This is a **completeness verification failure** — the validator must reconcile PR claims against actual repository state.
 ```
 
 ---
@@ -1124,17 +1124,17 @@ Perform strict criterion-by-criterion verification following validator-conventio
 gh issue view [number] --json body --repo [owner/repo]
 
 # Example
-gh issue view 235 --json body --repo jbrinkman/kiro-krew
+gh issue view 235 --json body --repo jbrinkman/howmux
 ```
 
 ### Create Sentinel File
 
 Write validation report to:
 ```
-.kiro-krew/artifacts/validator-[issue-number].md
+.howmux/artifacts/validator-[issue-number].md
 ```
 
-**Example**: `.kiro-krew/artifacts/validator-235.md`
+**Example**: `.howmux/artifacts/validator-235.md`
 
 ### Report to Krew-Lead
 

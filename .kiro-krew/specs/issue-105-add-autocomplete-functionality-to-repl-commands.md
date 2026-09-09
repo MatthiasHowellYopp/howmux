@@ -163,7 +163,7 @@ go test ./internal/tui -v -run TestAutocomplete
 ### Integration Tests
 ```bash
 # Test basic autocomplete functionality
-echo "wa" | kiro-krew # Should show "watch" suggestion
+echo "wa" | howmux # Should show "watch" suggestion
 
 # Test command completion
 # Type "w" + Tab, should complete to "watch"
@@ -172,14 +172,14 @@ echo "wa" | kiro-krew # Should show "watch" suggestion
 # Type "watch " + any key, should show "start" and "stop"
 
 # Test invalid command handling
-echo "invalid" | kiro-krew # Should show error indicator
+echo "invalid" | howmux # Should show error indicator
 
 # Test existing functionality preservation
-kiro-krew status # Should work exactly as before
+howmux status # Should work exactly as before
 ```
 
 ### Manual Testing Scenarios
-1. Start kiro-krew REPL
+1. Start howmux REPL
 2. Type single character - verify dropdown appears
 3. Use arrow keys to navigate suggestions
 4. Press Tab to complete without executing

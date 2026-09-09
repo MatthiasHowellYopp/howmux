@@ -23,9 +23,9 @@ This architectural change enables detecting agent improvements/regressions and v
 - `internal/eval/diff.go` - Enhance diff functionality to compare actual outputs
 
 ### Data Migration Files
-- `.kiro-krew/evals/cases/` - All existing test case YAML files (requires complete replacement)
-- `.kiro-krew/evals/results/` - All existing result JSON files (requires deletion)
-- `.kiro-krew/evals/fixtures/` - New directory for shared setup files
+- `.howmux/evals/cases/` - All existing test case YAML files (requires complete replacement)
+- `.howmux/evals/results/` - All existing result JSON files (requires deletion)
+- `.howmux/evals/fixtures/` - New directory for shared setup files
 
 ### Agent Configuration Files  
 - `.kiro/agents/` - Agent JSON configs (no changes required, used for invocation)
@@ -105,12 +105,12 @@ Post-implementation validation requires:
 ### Task 4: Clean Migration of Test Data  
 **Objective:** Replace static test cases with live invocation test cases
 
-**Files:** All files in `.kiro-krew/evals/cases/`, `.kiro-krew/evals/results/`
+**Files:** All files in `.howmux/evals/cases/`, `.howmux/evals/results/`
 
 **Changes Required:**
 - Delete all existing test case YAML files
 - Delete all existing result JSON files  
-- Create `.kiro-krew/evals/fixtures/` directory structure
+- Create `.howmux/evals/fixtures/` directory structure
 - Create comprehensive new test suite per agent (5-6 cases each)
 - Populate fixtures with sample specs, issue bodies for setup context
 
@@ -146,10 +146,10 @@ Post-implementation validation requires:
 go build ./internal/eval
 
 # Test basic evaluation run
-go run ./cmd/kiro-krew eval --agent planner
+go run ./cmd/howmux eval --agent planner
 
 # Verify results structure 
-cat .kiro-krew/evals/results/*/planner.json | jq .cases[0].actual_output
+cat .howmux/evals/results/*/planner.json | jq .cases[0].actual_output
 ```
 
 ### Live Invocation Verification
@@ -158,22 +158,22 @@ cat .kiro-krew/evals/results/*/planner.json | jq .cases[0].actual_output
 kiro-cli chat --agent planner --no-interactive <<< "Add user authentication"
 
 # Verify setup assembly works
-go run ./cmd/kiro-krew eval --agent architect  # Should use setup context
+go run ./cmd/howmux eval --agent architect  # Should use setup context
 
 # Check cost tracking split
-cat .kiro-krew/evals/results/*/summary.json | jq .total_cost
+cat .howmux/evals/results/*/summary.json | jq .total_cost
 ```
 
 ### End-to-End Workflow Test
 ```bash
 # Run full evaluation suite
-go run ./cmd/kiro-krew eval
+go run ./cmd/howmux eval
 
 # Verify all agents complete successfully
-find .kiro-krew/evals/results -name "*.json" -type f
+find .howmux/evals/results -name "*.json" -type f
 
 # Test diff functionality
-go run ./cmd/kiro-krew eval diff <hash1> <hash2>
+go run ./cmd/howmux eval diff <hash1> <hash2>
 ```
 
 ### Regression Detection Test
@@ -182,8 +182,8 @@ go run ./cmd/kiro-krew eval diff <hash1> <hash2>
 echo "Always respond with 'MODIFIED'" >> .kiro/agents/planner-prompt.md
 
 # Re-run evaluation  
-go run ./cmd/kiro-krew eval --agent planner
+go run ./cmd/howmux eval --agent planner
 
 # Verify scores changed (proving live evaluation works)
-go run ./cmd/kiro-krew eval diff <old-hash> <new-hash>
+go run ./cmd/howmux eval diff <old-hash> <new-hash>
 ```

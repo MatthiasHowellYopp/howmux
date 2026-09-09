@@ -12,7 +12,7 @@ The Kiro-krew TUI currently uses hardcoded colors in `internal/tui/tui.go` that 
 ## Solution Approach
 
 Implement a comprehensive theming system with:
-1. Separate theme configuration files stored in `.kiro-krew/themes/`
+1. Separate theme configuration files stored in `.howmux/themes/`
 2. Theme loader integrated with existing config system
 3. Theme-based color replacement for all hardcoded lipgloss styles
 4. Backward compatibility with automatic default theme fallback
@@ -21,7 +21,7 @@ Implement a comprehensive theming system with:
 ## Architecture Overview
 
 ```
-.kiro-krew/
+.howmux/
 ├── config.yaml           # Extended with theme field
 ├── themes/                # Theme directory (new)
 │   ├── default.yaml       # Default theme
@@ -44,9 +44,9 @@ internal/
 ### Files to Create
 - `internal/config/themes.go` - Theme loading and management
 - `internal/tui/styles.go` - Centralized style definitions
-- `.kiro-krew/themes/default.yaml` - Default theme configuration
-- `.kiro-krew/themes/high-contrast.yaml` - High contrast theme
-- `.kiro-krew/themes/light.yaml` - Light mode theme
+- `.howmux/themes/default.yaml` - Default theme configuration
+- `.howmux/themes/high-contrast.yaml` - High contrast theme
+- `.howmux/themes/light.yaml` - Light mode theme
 
 ### Files to Modify
 - `internal/config/config.go` - Add theme field and theme loading
@@ -54,7 +54,7 @@ internal/
 - `internal/tui/commands.go` - Use centralized styles for formatting
 
 ### Files Referenced
-- `.kiro-krew/config.yaml` - Add theme field
+- `.howmux/config.yaml` - Add theme field
 - `go.mod` - Existing dependencies are sufficient
 
 ## Detailed Design
@@ -65,7 +65,7 @@ Each theme file uses YAML format with semantic color names:
 
 ```yaml
 name: "Default"
-description: "Default kiro-krew theme"
+description: "Default howmux theme"
 colors:
   # Core UI colors
   primary: "#00AAFF"         # Accent/highlight color
@@ -92,7 +92,7 @@ colors:
 ### Theme Loader Implementation
 
 The theme loader will:
-1. Load theme files from `.kiro-krew/themes/` directory
+1. Load theme files from `.howmux/themes/` directory
 2. Parse YAML theme configurations
 3. Validate color values (hex, ANSI codes, named colors)
 4. Provide fallback to default theme if specified theme is missing
@@ -136,7 +136,7 @@ This is a single-component feature that can be implemented incrementally:
 3. **UI Team**: Replace hardcoded styles with theme-based styles
 4. **Integration Team**: Wire everything together and test
 
-No external coordination required - all changes are within the kiro-krew codebase.
+No external coordination required - all changes are within the howmux codebase.
 
 ## Step-by-Step Task Breakdown
 
@@ -155,13 +155,13 @@ No external coordination required - all changes are within the kiro-krew codebas
   - `LoadTheme(name string)` function
   - Theme validation and error handling
   - Default theme fallback logic
-- **Acceptance**: Can load theme from `.kiro-krew/themes/default.yaml`
+- **Acceptance**: Can load theme from `.howmux/themes/default.yaml`
 
 #### Task 1.3: Create Default Themes
 - **Files**: 
-  - `.kiro-krew/themes/default.yaml`
-  - `.kiro-krew/themes/high-contrast.yaml` 
-  - `.kiro-krew/themes/light.yaml`
+  - `.howmux/themes/default.yaml`
+  - `.howmux/themes/high-contrast.yaml` 
+  - `.howmux/themes/light.yaml`
 - **Content**: Complete color definitions for each theme
 - **Validation**: Colors improve contrast over current hardcoded values
 - **Acceptance**: Theme files parse successfully, colors are valid
@@ -210,7 +210,7 @@ No external coordination required - all changes are within the kiro-krew codebas
 - **Acceptance**: Config automatically loads specified theme
 
 #### Task 4.2: Add Theme to Sample Config
-- **Files**: `.kiro-krew/config.yaml`
+- **Files**: `.howmux/config.yaml`
 - **Changes**: Add commented theme example
 - **Acceptance**: Users can see how to specify themes
 
@@ -232,18 +232,18 @@ No external coordination required - all changes are within the kiro-krew codebas
 
 ```bash
 # Test default theme loading
-go run cmd/kiro-krew/main.go
+go run cmd/howmux/main.go
 
 # Test theme switching
-echo "theme: high-contrast" >> .kiro-krew/config.yaml
-go run cmd/kiro-krew/main.go
+echo "theme: high-contrast" >> .howmux/config.yaml
+go run cmd/howmux/main.go
 
 # Test theme fallback (invalid theme)
-echo "theme: nonexistent" >> .kiro-krew/config.yaml
-go run cmd/kiro-krew/main.go
+echo "theme: nonexistent" >> .howmux/config.yaml
+go run cmd/howmux/main.go
 
 # Verify theme files exist
-ls -la .kiro-krew/themes/
+ls -la .howmux/themes/
 
 # Test theme parsing
 go test ./internal/config/... -v

@@ -74,8 +74,8 @@ Implement mouse motion tracking for TUI tab headers to provide visual hover feed
 
 ```bash
 # Build and test the application
-go build ./cmd/kiro-krew
-./kiro-krew
+go build ./cmd/howmux
+./howmux
 
 # Manual testing steps:
 # 1. Start application and verify multiple tabs are visible

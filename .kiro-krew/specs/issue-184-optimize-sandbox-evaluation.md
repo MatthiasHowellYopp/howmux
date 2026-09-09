@@ -170,7 +170,7 @@ Fix workspace filesystem permissions to enable file operations:
 ```bash
 # Run evaluation and verify image is built once
 task dev
-./kiro-krew eval architect --sandbox --debug
+./howmux eval architect --sandbox --debug
 
 # Check that same image is reused across test cases
 docker images | grep kiro-eval
@@ -179,23 +179,23 @@ docker images | grep kiro-eval
 ### 2. Clean Output Verification
 ```bash
 # Run evaluation with sandbox and check build output
-./kiro-krew eval builder --sandbox 2>&1 | grep -v "\\x1b\\|{\"stream\""
+./howmux eval builder --sandbox 2>&1 | grep -v "\\x1b\\|{\"stream\""
 ```
 
 ### 3. Workspace Writable Test
 ```bash
 # Run evaluation that requires GitHub mocking
-./kiro-krew eval krew-lead --sandbox --debug
+./howmux eval krew-lead --sandbox --debug
 
 # Check for absence of "read-only file system" errors
-./kiro-krew eval architect --sandbox 2>&1 | grep -c "read-only file system"
+./howmux eval architect --sandbox 2>&1 | grep -c "read-only file system"
 # Should return 0
 ```
 
 ### 4. Performance Improvement Test
 ```bash
 # Time evaluation run with multiple test cases
-time ./kiro-krew eval architect --sandbox
+time ./howmux eval architect --sandbox
 
 # Should show significant reduction in total time due to image reuse
 ```
@@ -203,9 +203,9 @@ time ./kiro-krew eval architect --sandbox
 ### 5. Backward Compatibility Test  
 ```bash
 # Existing evaluation commands should work unchanged
-./kiro-krew eval builder
-./kiro-krew eval --list architect
-./kiro-krew eval architect specific-test-case
+./howmux eval builder
+./howmux eval --list architect
+./howmux eval architect specific-test-case
 ```
 
 ## Error Handling

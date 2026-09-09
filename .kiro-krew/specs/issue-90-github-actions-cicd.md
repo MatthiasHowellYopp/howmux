@@ -263,7 +263,7 @@ jobs:
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
         asset_path: ./dist/
-        asset_name: kiro-krew-binaries
+        asset_name: howmux-binaries
         asset_content_type: application/zip
 ```
 
@@ -309,7 +309,7 @@ Add to `Taskfile.yml`:
   build:linux:
     desc: Build for Linux amd64
     cmds:
-      - GOOS=linux GOARCH=amd64 go build -ldflags "-s -w -X github.com/jbrinkman/kiro-krew/internal/version.BuildDate={{.BUILD_TIME}}" -o {{.BUILD_DIR}}/release/kiro-krew-linux-amd64 ./cmd/kiro-krew
+      - GOOS=linux GOARCH=amd64 go build -ldflags "-s -w -X github.com/jbrinkman/howmux/internal/version.BuildDate={{.BUILD_TIME}}" -o {{.BUILD_DIR}}/release/howmux-linux-amd64 ./cmd/howmux
     vars:
       BUILD_TIME:
         sh: date -u +%Y-%m-%dT%H:%M:%SZ
@@ -317,7 +317,7 @@ Add to `Taskfile.yml`:
   build:macos:
     desc: Build for macOS arm64
     cmds:
-      - GOOS=darwin GOARCH=arm64 go build -ldflags "-s -w -X github.com/jbrinkman/kiro-krew/internal/version.BuildDate={{.BUILD_TIME}}" -o {{.BUILD_DIR}}/release/kiro-krew-macos-arm64 ./cmd/kiro-krew
+      - GOOS=darwin GOARCH=arm64 go build -ldflags "-s -w -X github.com/jbrinkman/howmux/internal/version.BuildDate={{.BUILD_TIME}}" -o {{.BUILD_DIR}}/release/howmux-macos-arm64 ./cmd/howmux
     vars:
       BUILD_TIME:
         sh: date -u +%Y-%m-%dT%H:%M:%SZ
@@ -325,7 +325,7 @@ Add to `Taskfile.yml`:
   build:windows:
     desc: Build for Windows amd64
     cmds:
-      - GOOS=windows GOARCH=amd64 go build -ldflags "-s -w -X github.com/jbrinkman/kiro-krew/internal/version.BuildDate={{.BUILD_TIME}}" -o {{.BUILD_DIR}}/release/kiro-krew-windows-amd64.exe ./cmd/kiro-krew
+      - GOOS=windows GOARCH=amd64 go build -ldflags "-s -w -X github.com/jbrinkman/howmux/internal/version.BuildDate={{.BUILD_TIME}}" -o {{.BUILD_DIR}}/release/howmux-windows-amd64.exe ./cmd/howmux
     vars:
       BUILD_TIME:
         sh: date -u +%Y-%m-%dT%H:%M:%SZ
@@ -368,7 +368,7 @@ git diff internal/version/version.json  # Should show changes
 # Test release workflow
 task version:set VERSION=0.6.0
 task build:release
-ls -la dist/release/kiro-krew-*  # Should show all platform binaries
+ls -la dist/release/howmux-*  # Should show all platform binaries
 ```
 
 ### Verify Security Configuration

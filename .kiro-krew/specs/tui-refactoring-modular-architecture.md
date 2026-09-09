@@ -250,7 +250,7 @@ go test ./internal/tui/... -v
 go test ./internal/tui/integration_test.go -v
 
 # Test TUI with real watcher
-./kiro-krew
+./howmux
 ```
 
 ### Performance Testing

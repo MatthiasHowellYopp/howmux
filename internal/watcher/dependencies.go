@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/jbrinkman/kiro-krew/internal/github"
+	"github.com/matthiashowellyopp/howmux/internal/github"
 )
 
 // Compiled regexes for dependency parsing

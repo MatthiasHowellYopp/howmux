@@ -6,7 +6,7 @@ Closes #46
 
 ## Solution Approach
 
-Add a new boolean configuration field `enable_copilot_review` to the existing configuration system that automatically requests GitHub Copilot reviews on PRs created by kiro-krew agents. The feature will integrate into the existing PR creation workflow in step 8 of the krew-lead agent process.
+Add a new boolean configuration field `enable_copilot_review` to the existing configuration system that automatically requests GitHub Copilot reviews on PRs created by howmux agents. The feature will integrate into the existing PR creation workflow in step 8 of the krew-lead agent process.
 
 ### Architectural Decisions
 
@@ -19,9 +19,9 @@ Add a new boolean configuration field `enable_copilot_review` to the existing co
 
 ### Files to Modify
 - `internal/config/config.go` - Add `EnableCopilotReview` field to Config struct
-- `cmd/kiro-krew/templates/kiro-krew/config.yaml` - Add configuration field with default value
+- `cmd/howmux/templates/howmux/config.yaml` - Add configuration field with default value
 - `.kiro/agents/krew-lead-prompt.md` - Update workflow to include conditional Copilot review step
-- `cmd/kiro-krew/templates/kiro/agents/krew-lead-prompt.md` - Update template version of workflow
+- `cmd/howmux/templates/kiro/agents/krew-lead-prompt.md` - Update template version of workflow
 
 ### Files Referenced (No Changes)
 - `internal/github/client.go` - Existing GitHub CLI integration patterns for reference
@@ -55,7 +55,7 @@ The changes are independent and can be implemented sequentially without coordina
 - Maintain existing template structure and formatting
 
 **Implementation:**
-- Modify `cmd/kiro-krew/templates/kiro-krew/config.yaml`
+- Modify `cmd/howmux/templates/howmux/config.yaml`
 
 ### Task 3: Update Krew-Lead Agent Workflow
 **Acceptance Criteria:**
@@ -66,7 +66,7 @@ The changes are independent and can be implemented sequentially without coordina
 
 **Implementation:**
 - Modify `.kiro/agents/krew-lead-prompt.md` (active version)
-- Modify `cmd/kiro-krew/templates/kiro/agents/krew-lead-prompt.md` (template version)
+- Modify `cmd/howmux/templates/kiro/agents/krew-lead-prompt.md` (template version)
 - Insert new step between "Create PR" and "Label Done" steps
 
 ### Task 4: Configuration Loading Enhancement
@@ -83,15 +83,15 @@ The changes are independent and can be implemented sequentially without coordina
 ### Configuration Validation
 ```bash
 # Test config loading with new field
-go run cmd/kiro-krew/main.go init --help  # Should not error
-cat .kiro-krew/config.yaml | grep enable_copilot_review  # Should show: enable_copilot_review: true
+go run cmd/howmux/main.go init --help  # Should not error
+cat .howmux/config.yaml | grep enable_copilot_review  # Should show: enable_copilot_review: true
 ```
 
 ### Workflow Integration Validation
 ```bash
 # Verify agent prompt includes new step
 grep -A5 -B5 "copilot" .kiro/agents/krew-lead-prompt.md
-grep -A5 -B5 "copilot" cmd/kiro-krew/templates/kiro/agents/krew-lead-prompt.md
+grep -A5 -B5 "copilot" cmd/howmux/templates/kiro/agents/krew-lead-prompt.md
 ```
 
 ### End-to-End Validation

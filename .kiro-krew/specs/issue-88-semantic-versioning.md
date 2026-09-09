@@ -33,7 +33,7 @@ about command display
 
 ### Files Referenced (No Changes)
 - `internal/tui/tui.go` - References `version.Version` for "dev" detection
-- `cmd/kiro-krew/main.go` - Entry point (no version-related code)
+- `cmd/howmux/main.go` - Entry point (no version-related code)
 
 ## Team Orchestration
 
@@ -120,7 +120,7 @@ func init() {
 
 ### Build Process Integration
 - **No changes required** - `go:embed` works with standard `go build`
-- Build date still set via ldflags: `-ldflags "-X github.com/jbrinkman/kiro-krew/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)"`
+- Build date still set via ldflags: `-ldflags "-X github.com/jbrinkman/howmux/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)"`
 - Version now comes from embedded JSON, not ldflags
 
 ## Validation Commands
@@ -128,20 +128,20 @@ func init() {
 ### Verify Version Display
 ```bash
 # Build and test the about command
-go build ./cmd/kiro-krew
-./kiro-krew about
+go build ./cmd/howmux
+./howmux about
 # Should show "Version: 0.5.0" instead of "Version: dev"
 ```
 
 ### Verify Embedded Content
 ```bash
 # Verify version.json is embedded (not read from disk)
-strings ./kiro-krew | grep "0.5.0"
+strings ./howmux | grep "0.5.0"
 # Should find version string in binary
 
 # Test without version.json file present
 mv version.json version.json.bak
-./kiro-krew about
+./howmux about
 # Should still show 0.5.0 (from embedded data)
 mv version.json.bak version.json
 ```
@@ -150,8 +150,8 @@ mv version.json.bak version.json
 ```bash
 # Test that changing version.json affects next build
 echo '{"version": "0.6.0", "prerelease": ""}' > version.json
-go build ./cmd/kiro-krew  
-./kiro-krew about
+go build ./cmd/howmux  
+./howmux about
 # Should show "Version: 0.6.0"
 
 # Restore original version
@@ -162,8 +162,8 @@ echo '{"version": "0.5.0", "prerelease": ""}' > version.json
 ```bash
 # Test prerelease version handling
 echo '{"version": "0.5.0", "prerelease": "alpha"}' > version.json
-go build ./cmd/kiro-krew
-./kiro-krew about  
+go build ./cmd/howmux
+./howmux about  
 # Should show "Version: 0.5.0-alpha"
 ```
 

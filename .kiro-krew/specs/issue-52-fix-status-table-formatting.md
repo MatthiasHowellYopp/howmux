@@ -56,7 +56,7 @@ Problems:
 ### Supporting Files (No Changes)
 - **`internal/tui/tui.go`**: Overlay rendering system (working correctly)
 - **`internal/tui/styles.go`**: Theme styling system (working correctly) 
-- **`.kiro-krew/themes/*.yaml`**: Theme definitions (compatible)
+- **`.howmux/themes/*.yaml`**: Theme definitions (compatible)
 
 ## Implementation Plan
 
@@ -204,16 +204,16 @@ func truncate(s string, max int) string {
 ### Build and Test
 ```bash
 # Build the application
-go build -o kiro-krew ./cmd/kiro-krew
+go build -o howmux ./cmd/howmux
 
 # Run basic functionality test
-./kiro-krew --help
+./howmux --help
 ```
 
 ### Manual Testing
 ```bash
-# Start kiro-krew in different terminal sizes
-./kiro-krew
+# Start howmux in different terminal sizes
+./howmux
 
 # In the TUI, test status overlay:
 status

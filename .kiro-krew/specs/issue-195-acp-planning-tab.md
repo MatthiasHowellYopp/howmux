@@ -133,33 +133,33 @@ Dependencies between components:
 
 ```bash
 # Build and verify compilation
-go build ./cmd/kiro-krew
+go build ./cmd/howmux
 
 # Test basic functionality
-./kiro-krew help
+./howmux help
 
 # Test ACP dependency integration
 go mod tidy
 go mod verify
 
 # Test planning command structure
-echo "plan" | ./kiro-krew
-echo "plan classic" | ./kiro-krew
+echo "plan" | ./howmux
+echo "plan classic" | ./howmux
 
 # Test tab limits
-for i in {1..12}; do echo "plan Test session $i" & done | ./kiro-krew
+for i in {1..12}; do echo "plan Test session $i" & done | ./howmux
 
 # Test footer display
-TERM=xterm-256color ./kiro-krew
+TERM=xterm-256color ./howmux
 
 # Verify session persistence
-./kiro-krew
+./howmux
 # (create planning tab, exit, restart)
-./kiro-krew
+./howmux
 # (verify planning session can be resumed)
 
 # Test backward compatibility
-echo "plan classic Test classic planning" | ./kiro-krew
+echo "plan classic Test classic planning" | ./howmux
 
 # Test error handling
 # (disconnect from network, test ACP failures)
@@ -193,7 +193,7 @@ echo "plan classic Test classic planning" | ./kiro-krew
 │                                                                             │
 │  [planner] > █                                                              │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│ kiro-krew> Type your command here...                                        │
+│ howmux> Type your command here...                                        │
 │ theme: dark │ ctx: 45k/200k │ model: claude-sonnet-4 │ 📁 /projects/myapp  │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```

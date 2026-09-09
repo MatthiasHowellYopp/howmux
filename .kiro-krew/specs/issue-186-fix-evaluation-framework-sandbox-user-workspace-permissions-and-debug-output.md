@@ -136,7 +136,7 @@ Since both issues are in the evaluation framework sandbox module, they can be ad
 ### Debug Output Validation
 ```bash
 # Test debug output formatting
-kiro-krew eval architect --sandbox --debug
+howmux eval architect --sandbox --debug
 
 # Expected output should show:
 # 🔧 Debug: Build output:
@@ -151,7 +151,7 @@ kiro-krew eval architect --sandbox --debug
 go test -v ./internal/eval/sandbox -run TestWorkspacePermissions
 
 # Run full evaluation to verify all test cases work
-kiro-krew eval architect --sandbox
+howmux eval architect --sandbox
 
 # Expected: All 7 test cases should complete successfully
 ```

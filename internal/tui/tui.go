@@ -21,14 +21,14 @@ import (
 
 	"golang.org/x/mod/semver"
 
-	"github.com/jbrinkman/kiro-krew/internal/agent"
-	"github.com/jbrinkman/kiro-krew/internal/config"
-	"github.com/jbrinkman/kiro-krew/internal/github"
-	"github.com/jbrinkman/kiro-krew/internal/hotkey"
-	"github.com/jbrinkman/kiro-krew/internal/logging"
-	"github.com/jbrinkman/kiro-krew/internal/session"
-	"github.com/jbrinkman/kiro-krew/internal/version"
-	"github.com/jbrinkman/kiro-krew/internal/watcher"
+	"github.com/matthiashowellyopp/howmux/internal/agent"
+	"github.com/matthiashowellyopp/howmux/internal/config"
+	"github.com/matthiashowellyopp/howmux/internal/github"
+	"github.com/matthiashowellyopp/howmux/internal/hotkey"
+	"github.com/matthiashowellyopp/howmux/internal/logging"
+	"github.com/matthiashowellyopp/howmux/internal/session"
+	"github.com/matthiashowellyopp/howmux/internal/version"
+	"github.com/matthiashowellyopp/howmux/internal/watcher"
 )
 
 type logMsg string
@@ -208,8 +208,8 @@ func (m model) isClickInFooterInput(mouseX, mouseY int) bool {
 	}
 
 	// Click must be after the prompt text
-	// The prompt is "kiro-krew> " from the textinput
-	prompt := "kiro-krew> "
+	// The prompt is "howmux> " from the textinput
+	prompt := "howmux> "
 	promptWidth := lipgloss.Width(prompt)
 
 	return mouseX >= promptWidth
@@ -1591,8 +1591,8 @@ func mapStringToLogLevel(levelStr string) clog.Level {
 }
 
 func Run(w *watcher.Watcher, m *agent.Manager, cfg *config.Config) error {
-	logPath := ".kiro-krew/kiro-krew.log"
-	if err := os.MkdirAll(".kiro-krew", 0755); err != nil {
+	logPath := ".howmux/howmux.log"
+	if err := os.MkdirAll(".howmux", 0755); err != nil {
 		return fmt.Errorf("failed to create log directory: %w", err)
 	}
 

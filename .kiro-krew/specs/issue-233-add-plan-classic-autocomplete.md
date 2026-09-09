@@ -1,7 +1,7 @@
 # Design Specification: Add Autocomplete Support for "plan classic" Command
 
 **Issue**: #233 - Add autocomplete support for "plan classic" command  
-**Repository**: jbrinkman/kiro-krew  
+**Repository**: jbrinkman/howmux  
 **Closes**: #233
 
 ## Problem Statement
@@ -130,7 +130,7 @@ After implementation, verify the following behaviors work correctly:
 # Build and run tests
 go test ./internal/tui/... -v
 
-# Manual testing of autocomplete (if running kiro-krew interactively)
+# Manual testing of autocomplete (if running howmux interactively)
 # 1. Type "plan" and verify both "plan" and "plan classic" appear in suggestions
 # 2. Type "plan c" and verify "plan classic" is suggested
 # 3. Tab-complete "plan cl" should complete to "plan classic"

@@ -38,7 +38,7 @@ Enhance the evaluation framework's container sandbox mode with comprehensive log
   - Add logging configuration options to `ContainerConfig`
   - Extend `ErrorContext` with container-specific error fields
 
-- `cmd/kiro-krew/cmd/eval.go`
+- `cmd/howmux/cmd/eval.go`
   - Add `--verbose` flag for enhanced container debugging information
   - Extend help documentation for sandbox logging options
 

@@ -7,7 +7,7 @@
 
 ## Problem Statement
 
-The kiro-krew watcher currently spawns agents for any issue with the configured label, regardless of whether prerequisite work is complete. This leads to agent failures when implementing features that depend on incomplete foundations, causing cascading failures and inefficient resource usage.
+The howmux watcher currently spawns agents for any issue with the configured label, regardless of whether prerequisite work is complete. This leads to agent failures when implementing features that depend on incomplete foundations, causing cascading failures and inefficient resource usage.
 
 ## Solution Approach
 
@@ -31,7 +31,7 @@ Implement dependency parsing and validation with exponential backoff strategy to
 
 1. **Watcher** (`internal/watcher/watcher.go`)
    - Current flow: `checkIssues()` → `ListIssues()` → spawn agents directly
-   - Existing retry logic: Global retry counts in `.kiro-krew/retries/`
+   - Existing retry logic: Global retry counts in `.howmux/retries/`
    - Missing: Dependency validation step before spawning
 
 2. **GitHub Client** (`internal/github/client.go`)
@@ -50,8 +50,8 @@ Implement dependency parsing and validation with exponential backoff strategy to
 - **`internal/watcher/dependencies.go`**: New file for dependency parsing and validation logic
 
 ### Files to Reference
-- **Existing specs**: Review patterns in `.kiro-krew/specs/` for integration approaches
-- **Config file**: `.kiro-krew/config.yaml` for understanding current watcher configuration
+- **Existing specs**: Review patterns in `.howmux/specs/` for integration approaches
+- **Config file**: `.howmux/config.yaml` for understanding current watcher configuration
 
 ## Team Orchestration
 
@@ -205,7 +205,7 @@ gh issue create --title "Dependency Test Parent" --body "Parent issue for testin
 gh issue create --title "Dependency Test Child" --body "Depends on Issue #<parent_number>"
 
 # Start watcher and verify dependency validation
-./kiro-krew
+./howmux
 # In REPL: watch start
 # Verify child issue is not processed until parent is closed
 ```
@@ -235,7 +235,7 @@ echo "Blocked by: #90" | # should extract [90]
 ### Backward Compatibility
 - Issues without dependencies should process immediately (no behavior change)
 - Existing retry logic should remain unchanged
-- Current labeling system (`kiro-krew-done`, `kiro-krew-failed`) unchanged
+- Current labeling system (`howmux-done`, `howmux-failed`) unchanged
 - No configuration changes required
 
 ### Performance Impact

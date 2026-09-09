@@ -23,7 +23,7 @@ internal/
    - `input textinput.Model` — command prompt (bubbles/textinput)
    - `confirmingExit bool` — exit confirmation state
    - `watcher`, `manager` — existing dependencies
-   - Log setup: redirects Go's `log` package output to `.kiro-krew/kiro-krew.log` and tails the file via a bubbletea `Cmd`; activity pane displays the last N lines that fit the terminal height
+   - Log setup: redirects Go's `log` package output to `.howmux/howmux.log` and tails the file via a bubbletea `Cmd`; activity pane displays the last N lines that fit the terminal height
 
 2. **Command Handler** (`commands.go`):
    - Same commands: `watch start/stop`, `status`, `stop <issue>`, `exit`, `help`
@@ -43,13 +43,13 @@ internal/
 │ [agent] started agent-3-1234...     │
 │                                     │
 ├─────────────────────────────────────┤
-│ kiro-krew> _                        │
+│ howmux> _                        │
 └─────────────────────────────────────┘
 ```
 
 ### Integration Points
 
-- `cmd/kiro-krew/main.go`: Replace `repl.New(w, m).Run()` with `tui.Run(w, m)`
+- `cmd/howmux/main.go`: Replace `repl.New(w, m).Run()` with `tui.Run(w, m)`
 - `internal/agent/manager.go`: No changes (log.Printf goes to file)
 - `internal/watcher/watcher.go`: No changes (log.Printf goes to file)
 - `internal/repl/`: Removed (replaced by `internal/tui/`)

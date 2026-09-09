@@ -114,7 +114,7 @@ The sandbox evaluation system has three critical regressions:
 
 ### Task 5: Integration Testing
 **Acceptance Criteria**:
-- `kiro-krew eval architect --sandbox` runs successfully end-to-end
+- `howmux eval architect --sandbox` runs successfully end-to-end
 - No "read-only file system" errors in container logs
 - No false success messages for failed installations  
 - Container logs show actual kiro-cli version on successful installation
@@ -133,10 +133,10 @@ go test ./internal/eval/sandbox -v -tags=integration
 ### Manual Validation  
 ```bash
 # Test sandbox evaluation end-to-end
-kiro-krew eval architect --sandbox
+howmux eval architect --sandbox
 
 # Verify no error messages in success output
-kiro-krew eval architect --sandbox 2>&1 | grep -E "(installation verified|❌|Error:)"
+howmux eval architect --sandbox 2>&1 | grep -E "(installation verified|❌|Error:)"
 
 # Check container workspace permissions
 docker run --rm alpine:3.19 sh -c "mkdir -p /workspace/test && echo 'success'"

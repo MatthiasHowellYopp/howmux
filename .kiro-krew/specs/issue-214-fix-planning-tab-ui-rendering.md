@@ -42,7 +42,7 @@ Based on codebase analysis, the issues stem from:
 
 ### Validation Files
 - **`internal/tui/tui.go`** - Verify footer appears in Planning tabs
-- Theme files in `.kiro-krew/themes/` - Ensure styling works across themes
+- Theme files in `.howmux/themes/` - Ensure styling works across themes
 
 ## Team Orchestration
 
@@ -109,8 +109,8 @@ Tasks 1 and 2 can run in parallel. Task 3 depends on both. Task 4 validates the 
 
 ```bash
 # Build and test the application
-go build ./cmd/kiro-krew
-./kiro-krew
+go build ./cmd/howmux
+./howmux
 
 # Test Planning tab functionality
 # In REPL: press Ctrl+Alt+P to switch to planning mode
@@ -221,7 +221,7 @@ Assistant response...
 [planner] > _
 
 ────────────────────────────────────────────  
-kiro-krew > help
+howmux > help
 theme: default | status: ready (3 msgs) | model: claude-sonnet-4
 ```
 

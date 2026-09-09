@@ -101,8 +101,8 @@ Tasks 1 and 2 can run in parallel since they modify different sections. Task 3 d
 
 ```bash
 # Build and run to verify basic functionality
-go build ./cmd/kiro-krew
-./kiro-krew
+go build ./cmd/howmux
+./howmux
 
 # Run existing tests to ensure no regressions
 go test ./internal/tui/... -v

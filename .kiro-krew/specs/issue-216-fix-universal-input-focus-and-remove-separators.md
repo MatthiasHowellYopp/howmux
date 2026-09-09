@@ -143,10 +143,10 @@ Tasks 1 and 2 can be implemented in parallel as they address independent issues.
 ### Manual Testing Script
 ```bash
 # Build the application
-go build ./cmd/kiro-krew
+go build ./cmd/howmux
 
 # Start the application
-./kiro-krew
+./howmux
 
 # In the REPL, test universal input:
 # 1. Press Ctrl+Alt+P to switch to planning mode

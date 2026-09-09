@@ -23,14 +23,14 @@ Use Cobra's standard command pattern where:
 ## Relevant Files
 
 ### Files to Modify
-- `cmd/kiro-krew/main.go` - Replace switch logic with Cobra root command
+- `cmd/howmux/main.go` - Replace switch logic with Cobra root command
 - `go.mod` - Add Cobra dependency
 
 ### Files to Create
-- `cmd/kiro-krew/cmd/root.go` - Root command definition
-- `cmd/kiro-krew/cmd/init.go` - Init command implementation
-- `cmd/kiro-krew/cmd/update.go` - Update command implementation
-- `cmd/kiro-krew/cmd/eval.go` - Eval command with diff subcommand
+- `cmd/howmux/cmd/root.go` - Root command definition
+- `cmd/howmux/cmd/init.go` - Init command implementation
+- `cmd/howmux/cmd/update.go` - Update command implementation
+- `cmd/howmux/cmd/eval.go` - Eval command with diff subcommand
 
 ### Files Referenced (No Changes)
 - `internal/eval/runner.go` - `eval.Run(agent string) error`
@@ -39,7 +39,7 @@ Use Cobra's standard command pattern where:
 - `internal/config/config.go` - `config.Load() (*Config, error)`
 - `internal/agent/manager.go` - `agent.NewManager(cfg) *Manager`
 - `internal/watcher/watcher.go` - `watcher.New(cfg, manager) *Watcher`
-- `cmd/kiro-krew/templates/` - Embedded template filesystem
+- `cmd/howmux/templates/` - Embedded template filesystem
 
 ## Team Orchestration
 
@@ -47,7 +47,7 @@ This is a pure refactoring task with no external dependencies:
 
 1. **Builder Agent**: Implement the Cobra migration following this spec
 2. **Validator Agent**: Verify all commands work identically to before
-3. **No coordination needed**: Self-contained change in `cmd/kiro-krew/`
+3. **No coordination needed**: Self-contained change in `cmd/howmux/`
 
 ## Step-by-Step Task Breakdown
 
@@ -57,7 +57,7 @@ This is a pure refactoring task with no external dependencies:
 - [ ] Run `go mod tidy` successfully
 
 ### Task 2: Create Root Command Structure
-**File**: `cmd/kiro-krew/cmd/root.go`  
+**File**: `cmd/howmux/cmd/root.go`  
 **Acceptance Criteria**:
 - [ ] Define root command that starts TUI when no subcommands provided
 - [ ] Set up command description and usage
@@ -66,7 +66,7 @@ This is a pure refactoring task with no external dependencies:
 - [ ] Handle graceful shutdown (defer manager.StopAll(), w.Stop())
 
 ### Task 3: Implement Init Command
-**File**: `cmd/kiro-krew/cmd/init.go`  
+**File**: `cmd/howmux/cmd/init.go`  
 **Acceptance Criteria**:
 - [ ] Create init command with description "Extract project templates"
 - [ ] Reuse existing `extractTemplates()` function logic
@@ -74,7 +74,7 @@ This is a pure refactoring task with no external dependencies:
 - [ ] Handle errors appropriately
 
 ### Task 4: Implement Update Command  
-**File**: `cmd/kiro-krew/cmd/update.go`  
+**File**: `cmd/howmux/cmd/update.go`  
 **Acceptance Criteria**:
 - [ ] Create update command with description "Update project templates (force overwrite)"
 - [ ] Reuse existing `extractTemplates()` function logic
@@ -82,7 +82,7 @@ This is a pure refactoring task with no external dependencies:
 - [ ] Handle errors appropriately
 
 ### Task 5: Implement Eval Command with Diff Subcommand
-**File**: `cmd/kiro-krew/cmd/eval.go`  
+**File**: `cmd/howmux/cmd/eval.go`  
 **Acceptance Criteria**:
 - [ ] Create eval command with description "Run evaluations or show diff between runs"
 - [ ] Handle optional agent parameter: `eval.Run(agent)`
@@ -91,7 +91,7 @@ This is a pure refactoring task with no external dependencies:
 - [ ] Show proper usage messages for invalid arguments
 
 ### Task 6: Update Main Function
-**File**: `cmd/kiro-krew/main.go`  
+**File**: `cmd/howmux/main.go`  
 **Acceptance Criteria**:
 - [ ] Replace entire switch-based logic with `cmd.Execute()`
 - [ ] Remove manual help handling code
@@ -110,51 +110,51 @@ This is a pure refactoring task with no external dependencies:
 ### Functional Verification
 ```bash
 # Build successfully
-go build ./cmd/kiro-krew
+go build ./cmd/howmux
 
 # Test default behavior (should start TUI)
-./kiro-krew
+./howmux
 
 # Test help system
-./kiro-krew --help
-./kiro-krew -h
-./kiro-krew init --help
-./kiro-krew update --help  
-./kiro-krew eval --help
-./kiro-krew eval diff --help
+./howmux --help
+./howmux -h
+./howmux init --help
+./howmux update --help  
+./howmux eval --help
+./howmux eval diff --help
 
 # Test commands work identically
-./kiro-krew init
-./kiro-krew update
-./kiro-krew eval
-./kiro-krew eval someagent
-./kiro-krew eval diff run1 run2
+./howmux init
+./howmux update
+./howmux eval
+./howmux eval someagent
+./howmux eval diff run1 run2
 
 # Test case insensitivity (Cobra default)
-./kiro-krew INIT
-./kiro-krew Init
-./kiro-krew UPDATE
-./kiro-krew EVAL
+./howmux INIT
+./howmux Init
+./howmux UPDATE
+./howmux EVAL
 ```
 
 ### Regression Testing
 ```bash
 # Verify no behavior changes
-# Before migration, run: ./kiro-krew init
-# After migration, run: ./kiro-krew init
+# Before migration, run: ./howmux init
+# After migration, run: ./howmux init
 # Compare: Should create identical files
 
 # Test error handling
-./kiro-krew eval diff                     # Should show usage error
-./kiro-krew eval diff run1                # Should show usage error  
-./kiro-krew nonexistent                   # Should show command not found
+./howmux eval diff                     # Should show usage error
+./howmux eval diff run1                # Should show usage error  
+./howmux nonexistent                   # Should show command not found
 ```
 
 ### Build Verification
 ```bash
 # Ensure clean build
 go mod tidy
-go build ./cmd/kiro-krew
+go build ./cmd/howmux
 go test ./...
 ```
 

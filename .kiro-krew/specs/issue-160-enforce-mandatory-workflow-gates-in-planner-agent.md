@@ -1,17 +1,17 @@
 # Design Specification: Enforce Mandatory Workflow Gates in Planner Agent
 
 **Issue:** #160  
-**Repository:** jbrinkman/kiro-krew  
+**Repository:** jbrinkman/howmux  
 Closes #160
 
 ## Solution Approach
 
-The planner agent currently has insufficient workflow enforcement, allowing it to skip critical user review gates and create potentially low-quality issues. This creates cascading problems where automated systems (kiro-krew) implement poor specifications.
+The planner agent currently has insufficient workflow enforcement, allowing it to skip critical user review gates and create potentially low-quality issues. This creates cascading problems where automated systems (howmux) implement poor specifications.
 
 The solution implements two mandatory, non-bypassable gates:
 
 1. **Draft Review Gate** - Planner MUST show complete draft issue and wait for explicit user approval
-2. **Label Confirmation Gate** - After draft approval, planner MUST separately ask about kiro-krew labeling
+2. **Label Confirmation Gate** - After draft approval, planner MUST separately ask about howmux labeling
 
 These gates are enforced through prompt modifications that make the workflow steps absolute requirements with explicit validation checks.
 
@@ -66,13 +66,13 @@ kiro-cli chat "@plan-with-krew Add user authentication system"
 kiro-cli validate .kiro/agents/planner.json
 
 # Test interactive planning session
-kiro-krew
+howmux
 > plan Add user authentication
 ```
 
 The validation should confirm:
 1. Agent shows draft issue and waits for confirmation
-2. After approval, agent asks separately about kiro-krew labeling  
+2. After approval, agent asks separately about howmux labeling  
 3. No issue is created without explicit user approval of draft
 4. Gates cannot be bypassed with any request phrasing
 

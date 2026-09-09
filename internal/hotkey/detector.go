@@ -15,9 +15,9 @@ type HotkeyErrorMsg struct {
 	Err error
 }
 
-// IsKiroKrewContext validates that the current process is running in a kiro-krew terminal
-func IsKiroKrewContext() bool {
-	return os.Getenv("KIRO_KREW_WATCHER_PID") != ""
+// IsHowmuxContext validates that the current process is running in a howmux terminal
+func IsHowmuxContext() bool {
+	return os.Getenv("HOWMUX_WATCHER_PID") != ""
 }
 
 // IsCtrlOptionP checks if the key sequence matches Ctrl+Option+P
@@ -28,10 +28,10 @@ func IsCtrlOptionP(msg tea.KeyPressMsg) bool {
 // HandleKeyMsg processes key messages and returns hotkey events when appropriate
 func HandleKeyMsg(msg tea.KeyPressMsg) tea.Cmd {
 	if IsCtrlOptionP(msg) {
-		if !IsKiroKrewContext() {
+		if !IsHowmuxContext() {
 			return func() tea.Msg {
 				return HotkeyErrorMsg{
-					Err: fmt.Errorf("hotkey toggle not available outside kiro-krew context"),
+					Err: fmt.Errorf("hotkey toggle not available outside howmux context"),
 				}
 			}
 		}

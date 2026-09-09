@@ -1,7 +1,7 @@
 version: '3'
 
 vars:
-  BINARY_NAME: kiro-krew
+  BINARY_NAME: howmux
   BUILD_DIR: ./dist
   VERSION_FILE: internal/version/version.json
 
@@ -17,7 +17,7 @@ tasks:
     desc: Build the application with version metadata
     cmds:
       - mkdir -p {{.BUILD_DIR}}
-      - go build -ldflags "-X github.com/jbrinkman/kiro-krew/internal/version.BuildDate={{.BUILD_TIME}} -X github.com/jbrinkman/kiro-krew/internal/version.CommitHash={{.COMMIT_HASH}}" -o {{.BUILD_DIR}}/{{.BINARY_NAME}} ./cmd/kiro-krew
+      - go build -ldflags "-X github.com/matthiashowellyopp/howmux/internal/version.BuildDate={{.BUILD_TIME}} -X github.com/matthiashowellyopp/howmux/internal/version.CommitHash={{.COMMIT_HASH}}" -o {{.BUILD_DIR}}/{{.BINARY_NAME}} ./cmd/howmux
     vars:
       BUILD_TIME:
         sh: date -u +%Y-%m-%dT%H:%M:%SZ
@@ -59,9 +59,9 @@ tasks:
         # named local-only entries such as the creds-agent MCP server) so that
         # intentionally local-only config does not register as template drift.
         go run scripts/compare-templates.go --agents-only >/dev/null || error=1
-        diff -rq .kiro-krew/scripts/ cmd/kiro-krew/templates/kiro-krew/scripts/ || error=1
-        diff -rq .kiro-krew/themes/ cmd/kiro-krew/templates/kiro-krew/themes/ || error=1
-        diff -rq --exclude=results --exclude=.DS_Store --exclude=tmp .kiro-krew/evals/ cmd/kiro-krew/templates/kiro-krew/evals/ || error=1
+        diff -rq .howmux/scripts/ cmd/howmux/templates/howmux/scripts/ || error=1
+        diff -rq .howmux/themes/ cmd/howmux/templates/howmux/themes/ || error=1
+        diff -rq --exclude=results --exclude=.DS_Store --exclude=tmp .howmux/evals/ cmd/howmux/templates/howmux/evals/ || error=1
 
         if [ $error -eq 0 ]; then
           echo "✅ All template-synchronized files match"
@@ -122,7 +122,7 @@ tasks:
   build:macos:
     desc: Build for macOS arm64
     cmds:
-      - GOOS=darwin GOARCH=arm64 go build -ldflags "-s -w -X github.com/jbrinkman/kiro-krew/internal/version.BuildDate={{.BUILD_TIME}}" -o {{.BUILD_DIR}}/release/kiro-krew ./cmd/kiro-krew
+      - GOOS=darwin GOARCH=arm64 go build -ldflags "-s -w -X github.com/matthiashowellyopp/howmux/internal/version.BuildDate={{.BUILD_TIME}}" -o {{.BUILD_DIR}}/release/howmux ./cmd/howmux
     vars:
       BUILD_TIME:
         sh: date -u +%Y-%m-%dT%H:%M:%SZ
@@ -130,7 +130,7 @@ tasks:
   build:linux:amd64:
     desc: Build for Linux amd64
     cmds:
-      - CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w -X github.com/jbrinkman/kiro-krew/internal/version.BuildDate={{.BUILD_TIME}}" -o {{.BUILD_DIR}}/release/kiro-krew-linux-amd64 ./cmd/kiro-krew
+      - CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w -X github.com/matthiashowellyopp/howmux/internal/version.BuildDate={{.BUILD_TIME}}" -o {{.BUILD_DIR}}/release/howmux-linux-amd64 ./cmd/howmux
     vars:
       BUILD_TIME:
         sh: date -u +%Y-%m-%dT%H:%M:%SZ
@@ -138,7 +138,7 @@ tasks:
   build:linux:arm64:
     desc: Build for Linux arm64
     cmds:
-      - CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "-s -w -X github.com/jbrinkman/kiro-krew/internal/version.BuildDate={{.BUILD_TIME}}" -o {{.BUILD_DIR}}/release/kiro-krew-linux-arm64 ./cmd/kiro-krew
+      - CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "-s -w -X github.com/matthiashowellyopp/howmux/internal/version.BuildDate={{.BUILD_TIME}}" -o {{.BUILD_DIR}}/release/howmux-linux-arm64 ./cmd/howmux
     vars:
       BUILD_TIME:
         sh: date -u +%Y-%m-%dT%H:%M:%SZ

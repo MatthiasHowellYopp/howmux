@@ -3,7 +3,7 @@
 ## Issue Summary
 **Issue #57**: Console view does not support scrolling to view previous content
 
-The main console view in kiro-krew lacks scrolling capability for long sessions with watch commands. Users cannot access content that has scrolled off-screen.
+The main console view in howmux lacks scrolling capability for long sessions with watch commands. Users cannot access content that has scrolled off-screen.
 
 ## Current Architecture Analysis
 

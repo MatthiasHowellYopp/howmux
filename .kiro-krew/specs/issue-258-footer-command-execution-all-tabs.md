@@ -153,7 +153,7 @@ func TestEnterKeyCommandExecutionInAllTabs(t *testing.T) {
 ## Validation Commands
 
 ### Manual Testing
-1. **Start the TUI**: `go run ./cmd/kiro-krew`
+1. **Start the TUI**: `go run ./cmd/howmux`
 2. **Create an agent tab**: Execute `watch start` then `status` to spawn an agent
 3. **Test agent tab**: Switch to agent tab, type `help` in footer, press Enter
    - **Expected**: Help command executes and displays in main tab activity

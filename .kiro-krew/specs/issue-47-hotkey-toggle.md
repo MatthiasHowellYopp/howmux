@@ -4,7 +4,7 @@
 
 ## Solution Approach
 
-Implement a hotkey (`ctrl+option+p`) toggle system that allows seamless switching between planning mode (kiro-cli chat with planner agent) and console mode (main kiro-krew TUI) while preserving session state for both modes.
+Implement a hotkey (`ctrl+option+p`) toggle system that allows seamless switching between planning mode (kiro-cli chat with planner agent) and console mode (main howmux TUI) while preserving session state for both modes.
 
 ### Architecture Strategy
 
@@ -14,7 +14,7 @@ Implement a hotkey (`ctrl+option+p`) toggle system that allows seamless switchin
 
 3. **Process Management**: Implement background process handling to suspend/resume planning sessions while maintaining console responsiveness.
 
-4. **State Persistence**: Store session data in `.kiro-krew/sessions/` directory with JSON serialization for conversation history and mode state.
+4. **State Persistence**: Store session data in `.howmux/sessions/` directory with JSON serialization for conversation history and mode state.
 
 ## Relevant Files
 
@@ -28,10 +28,10 @@ Implement a hotkey (`ctrl+option+p`) toggle system that allows seamless switchin
 - `internal/tui/tui.go` - Add hotkey handling and session integration
 - `internal/tui/commands.go` - Update plan command to use session manager
 - `internal/config/config.go` - Add session configuration options
-- `.kiro-krew/config.yaml` - Session settings (history limits, auto-save)
+- `.howmux/config.yaml` - Session settings (history limits, auto-save)
 
 ### Files Referenced/Relevant
-- `cmd/kiro-krew/cmd/root.go` - Main TUI entry point
+- `cmd/howmux/cmd/root.go` - Main TUI entry point
 - `.kiro/agents/planner.json` - Planner agent configuration
 - `internal/agent/manager.go` - For process management patterns
 
@@ -44,7 +44,7 @@ Implement a hotkey (`ctrl+option+p`) toggle system that allows seamless switchin
 
 ### Hotkey Detection Component  
 - Intercepts `ctrl+option+p` key combinations in TUI
-- Validates hotkey context (only in kiro-krew sessions)
+- Validates hotkey context (only in howmux sessions)
 - Triggers mode switching operations
 
 ### TUI Integration Component
@@ -68,16 +68,16 @@ Implement a hotkey (`ctrl+option+p`) toggle system that allows seamless switchin
 
 2. **Implement Session Manager** [3 hours]
    - Create SessionManager with CRUD operations
-   - Add session persistence to `.kiro-krew/sessions/`
+   - Add session persistence to `.howmux/sessions/`
    - Implement session lifecycle management
    - **Acceptance:** Sessions can be created, saved, loaded, and cleaned up
 
 ### Phase 2: Hotkey Detection System
 3. **Create Hotkey Detection** [2 hours]
    - Implement hotkey pattern matching for `ctrl+option+p`
-   - Add validation to ensure hotkey only works in kiro-krew terminals
+   - Add validation to ensure hotkey only works in howmux terminals
    - Create hotkey event types for Bubble Tea
-   - **Acceptance:** Hotkey detection triggers events only in kiro-krew context
+   - **Acceptance:** Hotkey detection triggers events only in howmux context
 
 4. **Integrate Hotkey with TUI** [2 hours]
    - Extend tui.model to handle hotkey events
@@ -141,8 +141,8 @@ Implement a hotkey (`ctrl+option+p`) toggle system that allows seamless switchin
 
 ### Basic Functionality Tests
 ```bash
-# Start kiro-krew console
-kiro-krew
+# Start howmux console
+howmux
 
 # In console, start planning session
 plan "test feature"
@@ -153,31 +153,31 @@ plan "test feature"
 
 # Verify session persistence
 exit
-kiro-krew
+howmux
 plan  # Should resume previous session
 ```
 
 ### Session State Verification
 ```bash
 # Check session files are created
-ls -la .kiro-krew/sessions/
+ls -la .howmux/sessions/
 
 # Verify session content structure
-cat .kiro-krew/sessions/planning-*.json | jq '.'
+cat .howmux/sessions/planning-*.json | jq '.'
 
 # Test session cleanup
-kiro-krew
+howmux
 # Exit cleanly and verify sessions are cleaned up
-ls -la .kiro-krew/sessions/
+ls -la .howmux/sessions/
 ```
 
 ### Error Condition Testing
 ```bash
-# Test hotkey outside kiro-krew context
+# Test hotkey outside howmux context
 # Should not respond to Ctrl+Option+P
 
 # Test toggle with no planning session
-kiro-krew
+howmux
 # Press Ctrl+Option+P from console
 # Should display "No active planning session"
 
@@ -188,8 +188,8 @@ kiro-krew
 ### Configuration Testing
 ```bash
 # Test with different session limits
-echo "session_history_limit: 50" >> .kiro-krew/config.yaml
-kiro-krew
+echo "session_history_limit: 50" >> .howmux/config.yaml
+howmux
 
 # Verify configuration is respected
 # Create long conversation and check truncation

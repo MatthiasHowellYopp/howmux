@@ -25,7 +25,7 @@ This leverages existing mock GitHub infrastructure while adding the missing kiro
 ### Files to Reference
 - `internal/eval/sandbox/mock_github.go` - Existing GitHub mocking infrastructure
 - `internal/eval/sandbox/testdata/github-cli-mock/` - Mock GitHub CLI skill
-- `cmd/kiro-krew/cmd/eval.go` - Eval command configuration
+- `cmd/howmux/cmd/eval.go` - Eval command configuration
 
 ## Team Orchestration
 
@@ -93,7 +93,7 @@ This leverages existing mock GitHub infrastructure while adding the missing kiro
 ### Task 4: Configure Environment Variable Propagation
 
 **Acceptance Criteria:**
-- [ ] Essential kiro-krew environment variables are passed to container
+- [ ] Essential howmux environment variables are passed to container
 - [ ] Container inherits necessary host environment settings
 - [ ] Agent execution has proper environment context
 
@@ -124,7 +124,7 @@ This leverages existing mock GitHub infrastructure while adding the missing kiro
 ### Container Setup Verification
 ```bash
 # Test container creation and setup
-kiro-krew eval validator --sandbox --case simple-validation
+howmux eval validator --sandbox --case simple-validation
 
 # Verify kiro-cli installation
 docker exec <container> kiro-cli --version
@@ -140,23 +140,23 @@ docker exec <container> env | grep -E "(KIRO|ISSUE|REPO)"
 ### Integration Testing
 ```bash
 # Full sandbox evaluation test
-kiro-krew eval builder --sandbox --case basic-implementation
+howmux eval builder --sandbox --case basic-implementation
 
 # Verify no real GitHub API calls (check mock logs)
 docker exec <container> cat /tmp/gh-mock.log
 
 # Test multiple agents in sandbox
-kiro-krew eval architect --sandbox
-kiro-krew eval validator --sandbox
+howmux eval architect --sandbox
+howmux eval validator --sandbox
 ```
 
 ### Error Condition Testing
 ```bash
 # Test with resource constraints
-kiro-krew eval builder --sandbox --resource-limit memory=256MB
+howmux eval builder --sandbox --resource-limit memory=256MB
 
 # Test timeout handling
-kiro-krew eval builder --sandbox --resource-limit timeout=30s
+howmux eval builder --sandbox --resource-limit timeout=30s
 
 # Test network isolation
 docker exec <container> curl -m 5 github.com || echo "Network properly isolated"
@@ -208,7 +208,7 @@ envVars := map[string]string{
     "KIRO_CLI_DISABLE_TELEMETRY": "1",
     "PATH": "/workspace/.kiro/skills/github-cli:/usr/local/bin:/usr/bin:/bin",
 }
-// Add kiro-krew specific variables if available
+// Add howmux specific variables if available
 if issueNum := os.Getenv("ISSUE_NUMBER"); issueNum != "" {
     envVars["ISSUE_NUMBER"] = issueNum
 }

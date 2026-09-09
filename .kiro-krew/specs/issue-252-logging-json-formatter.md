@@ -293,13 +293,13 @@ Add to imports at top of `internal/tui/tui.go`:
 
 1. **Build and run the application**:
 ```bash
-go build -o kiro-krew ./cmd/kiro-krew
-./kiro-krew
+go build -o howmux ./cmd/howmux
+./howmux
 ```
 
 2. **In the REPL, trigger logging activity**:
 ```
-kiro-krew> watch start
+howmux> watch start
 ```
    (This will trigger various log entries)
 
@@ -313,7 +313,7 @@ kiro-krew> watch start
 
 5. **Check log file format**:
 ```bash
-cat .kiro-krew/kiro-krew.log
+cat .howmux/howmux.log
 ```
    - Verify JSON format (one JSON object per line)
    - Example expected output:
@@ -403,7 +403,7 @@ func TestJSONFormatterIntegration(t *testing.T) {
 
 **Recommendation**: Use Option A (keep JSON). If human-readable logs are needed, users can pipe through `jq`:
 ```bash
-tail -f .kiro-krew/kiro-krew.log | jq -r '[.time, .level, .message] | @tsv'
+tail -f .howmux/howmux.log | jq -r '[.time, .level, .message] | @tsv'
 ```
 
 ### Future Enhancement (Optional)

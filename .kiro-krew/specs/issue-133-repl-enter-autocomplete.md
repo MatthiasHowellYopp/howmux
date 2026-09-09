@@ -92,8 +92,8 @@ go test -v ./internal/tui -run TestAutocomplete
 go test -v ./internal/tui -run TestAutocompleteIntegration
 
 # Build and manual testing
-go build ./cmd/kiro-krew
-./kiro-krew
+go build ./cmd/howmux
+./howmux
 # In REPL: type "w", use arrows to select, press Enter - should complete to selected suggestion
 # In REPL: type "invalid", press Enter - should execute partial command as before
 ```

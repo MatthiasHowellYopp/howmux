@@ -97,8 +97,8 @@ This is a focused UI/UX fix within a single component. No cross-team coordinatio
 
 ```bash
 # Build and test the application
-go build ./cmd/kiro-krew
-./kiro-krew
+go build ./cmd/howmux
+./howmux
 
 # In the TUI, test autocomplete behavior:
 # 1. Type 'w' - ghost text should appear at cursor, not after

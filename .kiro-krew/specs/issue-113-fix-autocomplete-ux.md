@@ -7,7 +7,7 @@
 
 ## Problem Summary
 
-The autocomplete functionality in the kiro-krew REPL has four critical UX issues:
+The autocomplete functionality in the howmux REPL has four critical UX issues:
 
 1. **Ghost text spacing**: Extra space appears in ghost text rendering (`w atch` instead of `watch`)
 2. **Cursor positioning**: After Tab completion, cursor doesn't move to end of completed text
@@ -154,8 +154,8 @@ go test -v ./internal/tui/ -run ".*Autocomplete.*"
 
 ### Manual Testing Scenarios
 ```bash
-# Start kiro-krew in test mode
-go run ./cmd/kiro-krew
+# Start howmux in test mode
+go run ./cmd/howmux
 
 # Test ghost text - type 'w' and verify ghost text shows "atch start"
 # Test Tab completion - press Tab and verify cursor moves to end

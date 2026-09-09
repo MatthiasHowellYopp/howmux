@@ -88,14 +88,14 @@ This is a **data integrity** fix that requires careful coordination:
 
 ```bash
 # Test basic functionality
-kiro-krew
+howmux
 # In TUI: watch start, then Ctrl+Alt+P to switch to planning mode
 # Verify agents continue logging in background
 # Switch back with Ctrl+Alt+P and check tab data is preserved
 
 # Test session data persistence
-ls .kiro-krew/sessions/  # Check session files are maintained
-ls .kiro-krew/logs/      # Check agent logs continue during planner mode
+ls .howmux/sessions/  # Check session files are maintained
+ls .howmux/logs/      # Check agent logs continue during planner mode
 
 # Test tab data integrity  
 # Start multiple agents, switch to planner mode, wait, switch back
@@ -115,7 +115,7 @@ ls .kiro-krew/logs/      # Check agent logs continue during planner mode
 ### Key Insights
 1. The `OutputCapture.suspended` field is **not used** by the agent manager
 2. Data accumulation should **never stop** - only display should be suspended
-3. Session files in `.kiro-krew/sessions/` should persist independently of mode switches
+3. Session files in `.howmux/sessions/` should persist independently of mode switches
 4. Tab state should be preserved by the tab manager regardless of current mode
 
 ### Risk Areas

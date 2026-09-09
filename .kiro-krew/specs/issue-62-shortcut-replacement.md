@@ -148,8 +148,8 @@ case "end":
 ### Manual Testing Sequence
 ```bash
 # 1. Build and run the application
-go build -o kiro-krew ./cmd/kiro-krew
-./kiro-krew chat
+go build -o howmux ./cmd/howmux
+./howmux chat
 
 # 2. Test tab functionality
 # - Press F2 → should toggle tabs

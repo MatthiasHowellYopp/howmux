@@ -6,7 +6,7 @@
 
 ## Solution Approach
 
-Add cross-platform clipboard integration to kiro-krew's TUI using the existing `github.com/atotto/clipboard` library (already present as an indirect dependency). Implement copy from viewport message history and paste into textinput fields across both planning tabs and agent output views.
+Add cross-platform clipboard integration to howmux's TUI using the existing `github.com/atotto/clipboard` library (already present as an indirect dependency). Implement copy from viewport message history and paste into textinput fields across both planning tabs and agent output views.
 
 ### High-Level Strategy
 
@@ -245,7 +245,7 @@ task build
 ### Manual Validation
 
 **Planning Tab - Copy:**
-1. Launch kiro-krew REPL
+1. Launch howmux REPL
 2. Start a planning session
 3. Send a message and receive response
 4. View the viewport with response text
@@ -256,7 +256,7 @@ task build
 **Planning Tab - Paste:**
 1. In planning tab with message input focused (Tab to switch focus)
 2. Copy text from external editor
-3. Press Ctrl+V (or Cmd+V on macOS) in kiro-krew
+3. Press Ctrl+V (or Cmd+V on macOS) in howmux
 4. Verify text appears in message input
 5. Verify cursor position is correct
 6. Send message to confirm input works
@@ -283,7 +283,7 @@ task build
 
 **Headless Environment Test (if possible):**
 1. SSH into a headless Linux server
-2. Run kiro-krew
+2. Run howmux
 3. Attempt Ctrl+C and Ctrl+V operations
 4. Verify no error messages appear
 5. Verify application continues to function normally

@@ -18,14 +18,14 @@ The current architecture already supports this change cleanly:
    - `Info()` method for structured version data
    - Proper semver validation in tests
 
-2. **Cobra CLI Structure**: Root command in `cmd/kiro-krew/cmd/root.go` uses Cobra which has built-in flag support
+2. **Cobra CLI Structure**: Root command in `cmd/howmux/cmd/root.go` uses Cobra which has built-in flag support
 
 3. **Current REPL Usage**: TUI already uses `version.Info()` in the about command, so the version display logic is proven
 
 ## Relevant Files
 
 ### Files to Modify
-- `cmd/kiro-krew/cmd/root.go` - Add version flag and handler
+- `cmd/howmux/cmd/root.go` - Add version flag and handler
 - `internal/version/version.go` - Add simple version string method
 
 ### Files Referenced (No Changes)
@@ -50,7 +50,7 @@ This is a single-file change with minimal coordination required:
 - No breaking changes to existing API
 
 ### Task 2: Add Cobra Version Flag
-**File**: `cmd/kiro-krew/cmd/root.go`
+**File**: `cmd/howmux/cmd/root.go`
 **Action**: Add `--version`/`-v` flag to root command
 **Acceptance Criteria**:
 - Flag is added as a persistent flag to root command
@@ -62,8 +62,8 @@ This is a single-file change with minimal coordination required:
 ### Task 3: Test Integration
 **Action**: Verify the implementation works correctly
 **Acceptance Criteria**:
-- `kiro-krew --version` displays version and exits
-- `kiro-krew -v` displays version and exits  
+- `howmux --version` displays version and exits
+- `howmux -v` displays version and exits  
 - Version output goes to stdout, not stderr
 - Exit code is 0
 - Flag works with other arguments (version takes precedence)
@@ -74,7 +74,7 @@ This is a single-file change with minimal coordination required:
 
 ### Version Output Format
 - Output should be just the version number: `0.5.0`
-- No additional text like "kiro-krew version 0.5.0"
+- No additional text like "howmux version 0.5.0"
 - Newline after version number for proper terminal display
 
 ### Cobra Integration
@@ -85,7 +85,7 @@ This is a single-file change with minimal coordination required:
 ### Build Integration
 The existing version system already supports build-time injection:
 ```bash
-go build -ldflags "-X github.com/jbrinkman/kiro-krew/internal/version.Version=1.2.3"
+go build -ldflags "-X github.com/jbrinkman/howmux/internal/version.Version=1.2.3"
 ```
 
 ## Validation Commands
@@ -93,34 +93,34 @@ go build -ldflags "-X github.com/jbrinkman/kiro-krew/internal/version.Version=1.
 ### Basic Functionality Tests
 ```bash
 # Test long form
-kiro-krew --version
+howmux --version
 # Expected: prints "0.5.0" and exits with code 0
 
 # Test short form  
-kiro-krew -v
+howmux -v
 # Expected: prints "0.5.0" and exits with code 0
 
 # Test precedence
-kiro-krew --version init
+howmux --version init
 # Expected: prints "0.5.0" and exits (ignores init command)
 ```
 
 ### Regression Tests  
 ```bash
 # Verify normal operation still works
-kiro-krew init
-kiro-krew help
-kiro-krew
+howmux init
+howmux help
+howmux
 
 # Verify about command still works in REPL
-echo "about" | kiro-krew
+echo "about" | howmux
 ```
 
 ### Build-time Version Tests
 ```bash
 # Test custom version injection
-go build -ldflags "-X github.com/jbrinkman/kiro-krew/internal/version.Version=1.2.3-custom" -o kiro-krew-test ./cmd/kiro-krew
-./kiro-krew-test --version
+go build -ldflags "-X github.com/jbrinkman/howmux/internal/version.Version=1.2.3-custom" -o howmux-test ./cmd/howmux
+./howmux-test --version
 # Expected: prints "1.2.3-custom"
 ```
 

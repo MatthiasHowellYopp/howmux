@@ -241,7 +241,7 @@ While `layerOverlay()` may achieve overlay rendering, it is not the specified ap
 
 3. **Check validation output**:
    ```bash
-   cat .kiro-krew/artifacts/validator-235.md
+   cat .howmux/artifacts/validator-235.md
    ```
 
 4. **Expected result**:
@@ -412,7 +412,7 @@ func renderWelcome() string {
 
 3. **Check validation output**:
    ```bash
-   cat .kiro-krew/artifacts/validator-999.md
+   cat .howmux/artifacts/validator-999.md
    ```
 
 4. **Expected result**:
@@ -448,7 +448,7 @@ import "github.com/spf13/cobra"
 
 func main() {
     rootCmd := &cobra.Command{  // ❌ Not using flag.Parse()
-        Use: "kiro-krew",
+        Use: "howmux",
     }
     rootCmd.Execute()
 }
@@ -610,7 +610,7 @@ rm test_impl.go
 
 5. **Verify failure detection**:
    ```bash
-   cat .kiro-krew/artifacts/validator-*.md
+   cat .howmux/artifacts/validator-*.md
    # Should show FAIL for criterion 2
    # Should note log.Println used instead of fmt.Println
    ```
@@ -633,7 +633,7 @@ rm test_impl.go
 
 8. **Verify pass**:
    ```bash
-   cat .kiro-krew/artifacts/validator-*.md
+   cat .howmux/artifacts/validator-*.md
    # Should show PASS with all criteria met
    ```
 

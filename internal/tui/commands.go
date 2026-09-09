@@ -11,11 +11,11 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/jbrinkman/kiro-krew/internal/agent"
-	"github.com/jbrinkman/kiro-krew/internal/config"
-	"github.com/jbrinkman/kiro-krew/internal/github"
-	"github.com/jbrinkman/kiro-krew/internal/incidents"
-	"github.com/jbrinkman/kiro-krew/internal/session"
+	"github.com/matthiashowellyopp/howmux/internal/agent"
+	"github.com/matthiashowellyopp/howmux/internal/config"
+	"github.com/matthiashowellyopp/howmux/internal/github"
+	"github.com/matthiashowellyopp/howmux/internal/incidents"
+	"github.com/matthiashowellyopp/howmux/internal/session"
 )
 
 type runningWatcher interface {
@@ -484,7 +484,7 @@ func (m model) handleTheme(args []string) (model, tea.Cmd) {
 
 func checkForUpdateCmd() tea.Cmd {
 	return func() tea.Msg {
-		release, err := github.GetLatestRelease("jbrinkman/kiro-krew")
+		release, err := github.GetLatestRelease("matthiashowellyopp/howmux")
 		return updateCheckMsg{release: release, err: err}
 	}
 }
@@ -714,7 +714,7 @@ func (m model) handleLogs() (model, tea.Cmd) {
 
 		content = append(content, "")
 		content = append(content, m.styles.Prompt.Render("Log files location:"))
-		content = append(content, fmt.Sprintf("~/.kiro-krew/logs/%s/incidents/", logger.RepoName()))
+		content = append(content, fmt.Sprintf("~/.howmux/logs/%s/incidents/", logger.RepoName()))
 	}
 
 	m = m.activateOverlay(overlayLogs, "Incident Logs", content)

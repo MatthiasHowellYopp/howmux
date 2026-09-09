@@ -1,7 +1,7 @@
 # Design Specification: Fix Extra Blank Line in Planning Tab Footer
 
 **Issue:** #224 - Planning tab footer shows extra blank line below status row  
-**Repository:** jbrinkman/kiro-krew  
+**Repository:** jbrinkman/howmux  
 Closes #224
 
 ## Problem Analysis
@@ -153,8 +153,8 @@ if strings.TrimSpace(footer.StatusRow) != "" {
 ### Visual Testing
 ```bash
 # Build and run application
-go build ./cmd/kiro-krew
-./kiro-krew
+go build ./cmd/howmux
+./howmux
 
 # In the TUI:
 # 1. Use Ctrl+Alt+P to switch to planning tab

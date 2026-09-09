@@ -131,7 +131,7 @@ The key insight is that suspension should only affect **display output** (termin
 
 ```bash
 # Test scenario: Agent output continuity during planner sessions
-go run ./cmd/kiro-krew
+go run ./cmd/howmux
 # In TUI:
 # 1. watch start (start watcher)
 # 2. Create labeled GitHub issue to spawn agent

@@ -1,10 +1,10 @@
-# Design Specification: Debug Mode and Container Management for kiro-krew eval
+# Design Specification: Debug Mode and Container Management for howmux eval
 
 **Issue Reference**: Closes #180
 
 ## Solution Approach
 
-This enhancement adds comprehensive debugging capabilities to the `kiro-krew eval` command by implementing:
+This enhancement adds comprehensive debugging capabilities to the `howmux eval` command by implementing:
 
 1. **Debug Mode (`--debug` flag)** - Enables verbose logging and container persistence for failed runs
 2. **Container Registry** - Persistent tracking of all containers created during evaluation 
@@ -17,7 +17,7 @@ The solution extends the existing container sandbox infrastructure with minimal 
 
 ### Core Components
 
-- **Enhanced CLI Interface** (`cmd/kiro-krew/cmd/eval.go`)
+- **Enhanced CLI Interface** (`cmd/howmux/cmd/eval.go`)
 - **Debug-Aware Container Manager** (`internal/eval/sandbox/container.go`)
 - **Container Registry** (new: `internal/eval/sandbox/registry.go`)
 - **Debug Artifact Management** (new: `internal/eval/debug/`)
@@ -35,7 +35,7 @@ eval --debug → Enhanced Container Creation → Registry Tracking → Verbose L
 ## Relevant Files
 
 ### Files to Modify
-- `cmd/kiro-krew/cmd/eval.go` - Add debug and cleanup flags
+- `cmd/howmux/cmd/eval.go` - Add debug and cleanup flags
 - `internal/eval/types.go` - Extend RunOptions with debug fields
 - `internal/eval/runner.go` - Pass debug options to container creation
 - `internal/eval/sandbox/container.go` - Add debug logging and container persistence
@@ -47,8 +47,8 @@ eval --debug → Enhanced Container Creation → Registry Tracking → Verbose L
 - `internal/eval/debug/dockerfile.go` - Dockerfile preservation logic
 
 ### Configuration Files
-- `.kiro-krew/evals/tmp/containers.json` - Runtime container registry
-- `.kiro-krew/evals/tmp/dockerfiles/` - Timestamped Dockerfile storage
+- `.howmux/evals/tmp/containers.json` - Runtime container registry
+- `.howmux/evals/tmp/dockerfiles/` - Timestamped Dockerfile storage
 
 ## Team Orchestration
 
@@ -68,13 +68,13 @@ This is a self-contained enhancement that:
 - Help text clearly describes new functionality
 
 **Implementation:**
-- Modify `cmd/kiro-krew/cmd/eval.go` to add new flags
+- Modify `cmd/howmux/cmd/eval.go` to add new flags
 - Update `RunOptions` in `internal/eval/types.go` with `Debug` and `Cleanup` fields
 - Pass flags through to evaluation runner
 
 ### Task 2: Container Registry Implementation
 **Acceptance Criteria:**
-- Registry stored at `.kiro-krew/evals/tmp/containers.json`
+- Registry stored at `.howmux/evals/tmp/containers.json`
 - Tracks container ID, name, timestamp, eval run, status
 - Thread-safe operations for concurrent access
 - Handles missing/corrupted registry files gracefully
@@ -103,7 +103,7 @@ This is a self-contained enhancement that:
 
 ### Task 4: Dockerfile Preservation
 **Acceptance Criteria:**
-- Dockerfiles saved to `.kiro-krew/evals/tmp/dockerfiles/`
+- Dockerfiles saved to `.howmux/evals/tmp/dockerfiles/`
 - Filename format: `dockerfile-{timestamp}-{container-short-id}`
 - Only saved when debug mode enabled
 - Directory created automatically
@@ -146,7 +146,7 @@ This is a self-contained enhancement that:
 
 ### Task 7: Git Integration
 **Acceptance Criteria:**
-- `.kiro-krew/evals/tmp/` added to `.gitignore`
+- `.howmux/evals/tmp/` added to `.gitignore`
 - Covers `containers.json`, `dockerfiles/`, and future artifacts
 - Existing gitignore patterns preserved
 
@@ -159,13 +159,13 @@ This is a self-contained enhancement that:
 ### Debug Mode Verification
 ```bash
 # Test debug mode with verbose output
-kiro-krew eval --debug test-agent simple-case
+howmux eval --debug test-agent simple-case
 
 # Verify container registry creation
-ls -la .kiro-krew/evals/tmp/containers.json
+ls -la .howmux/evals/tmp/containers.json
 
 # Check Dockerfile preservation
-ls -la .kiro-krew/evals/tmp/dockerfiles/
+ls -la .howmux/evals/tmp/dockerfiles/
 
 # Test container persistence on failure
 docker ps -a | grep kiro-eval
@@ -174,19 +174,19 @@ docker ps -a | grep kiro-eval
 ### Container Management Verification
 ```bash
 # Test cleanup functionality
-kiro-krew eval --cleanup
+howmux eval --cleanup
 
 # Verify registry clearing
-cat .kiro-krew/evals/tmp/containers.json
+cat .howmux/evals/tmp/containers.json
 
 # Test cleanup with Dockerfile preservation
-kiro-krew eval --cleanup  # Should prompt about Dockerfiles
+howmux eval --cleanup  # Should prompt about Dockerfiles
 ```
 
 ### Error Reporting Verification
 ```bash
 # Generate container error and verify enhanced reporting
-kiro-krew eval --debug broken-test-case
+howmux eval --debug broken-test-case
 
 # Verify error contains container ID, image, platform info
 # Check that debug commands are displayed for failed containers
@@ -195,14 +195,14 @@ kiro-krew eval --debug broken-test-case
 ### Integration Testing
 ```bash
 # Test normal mode performance (should be unaffected)
-time kiro-krew eval test-agent benchmark-case
+time howmux eval test-agent benchmark-case
 
 # Test flag combinations
-kiro-krew eval --debug --list    # Should work
-kiro-krew eval --cleanup --list  # Should error appropriately
+howmux eval --debug --list    # Should work
+howmux eval --cleanup --list  # Should error appropriately
 
 # Test concurrent executions with registry
-kiro-krew eval --debug agent1 & kiro-krew eval --debug agent2 &
+howmux eval --debug agent1 & howmux eval --debug agent2 &
 ```
 
 ## Implementation Notes
@@ -226,7 +226,7 @@ kiro-krew eval --debug agent1 & kiro-krew eval --debug agent2 &
 - Cleanup operations verify container ownership through registry
 
 ### Future Extensions
-- Debug mode could be extended to other kiro-krew commands
+- Debug mode could be extended to other howmux commands
 - Container registry could track additional metadata
 - Dockerfile preservation could include build context
 - Cleanup could support selective removal by age/pattern

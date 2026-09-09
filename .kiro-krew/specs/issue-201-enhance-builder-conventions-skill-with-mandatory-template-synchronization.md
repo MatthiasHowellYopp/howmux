@@ -4,16 +4,16 @@
 
 ## Problem Analysis
 
-The kiro-krew project has a unique self-hosting scenario where it uses kiro-krew to build itself. This creates a critical synchronization requirement between live project files and embedded templates that are deployed to users via `kiro-krew init` and `kiro-krew update` commands.
+The howmux project has a unique self-hosting scenario where it uses howmux to build itself. This creates a critical synchronization requirement between live project files and embedded templates that are deployed to users via `howmux init` and `howmux update` commands.
 
 ### Root Cause
 - Agent changes in PRs #198 and #200 modified `.kiro/agents/` files
-- Corresponding template files in `cmd/kiro-krew/templates/kiro/agents/` were not updated
-- Users running `kiro-krew init` or `kiro-krew update` receive outdated templates
+- Corresponding template files in `cmd/howmux/templates/kiro/agents/` were not updated
+- Users running `howmux init` or `howmux update` receive outdated templates
 - Current builder-conventions skill documents sync requirements but lacks enforcement
 
 ### Impact
-- New kiro-krew installations get outdated agent configurations
+- New howmux installations get outdated agent configurations
 - Template-synchronized files become inconsistent across the project
 - Manual sync verification is error-prone and easily forgotten
 
@@ -35,23 +35,23 @@ Enhance the builder-conventions skill with mandatory template synchronization th
 
 #### Agent Files
 - **Live**: `.kiro/agents/*.json`, `.kiro/agents/*-prompt.md`
-- **Template**: `cmd/kiro-krew/templates/kiro/agents/*.json`, `cmd/kiro-krew/templates/kiro/agents/*-prompt.md`
+- **Template**: `cmd/howmux/templates/kiro/agents/*.json`, `cmd/howmux/templates/kiro/agents/*-prompt.md`
 - **Exclusions**: None (all agent files sync)
 
 #### Scripts
-- **Live**: `.kiro-krew/scripts/*.sh`
-- **Template**: `cmd/kiro-krew/templates/kiro-krew/scripts/*.sh`
+- **Live**: `.howmux/scripts/*.sh`
+- **Template**: `cmd/howmux/templates/howmux/scripts/*.sh`
 - **Exclusions**: None (all scripts sync)
 
 #### Themes
-- **Live**: `.kiro-krew/themes/*.yaml`
-- **Template**: `cmd/kiro-krew/templates/kiro-krew/themes/*.yaml`
+- **Live**: `.howmux/themes/*.yaml`
+- **Template**: `cmd/howmux/templates/howmux/themes/*.yaml`
 - **Exclusions**: None (all themes sync)
 
 #### Evaluation Files
-- **Live**: `.kiro-krew/evals/fixtures/*`, `.kiro-krew/evals/rubrics/*`, `.kiro-krew/evals/cases/**/*`
-- **Template**: `cmd/kiro-krew/templates/kiro-krew/evals/fixtures/*`, etc.
-- **Exclusions**: `.kiro-krew/evals/results/` (not synced - runtime generated)
+- **Live**: `.howmux/evals/fixtures/*`, `.howmux/evals/rubrics/*`, `.howmux/evals/cases/**/*`
+- **Template**: `cmd/howmux/templates/howmux/evals/fixtures/*`, etc.
+- **Exclusions**: `.howmux/evals/results/` (not synced - runtime generated)
 
 #### Skills (Project-Specific Exclusions)
 - **Live**: `.kiro/skills/` (excluding *-conventions patterns)
@@ -105,17 +105,17 @@ This is a single-agent task focused on enhancing one skill file. No parallel coo
 
 ```bash
 # Test sync commands work
-cp .kiro/agents/builder.json cmd/kiro-krew/templates/kiro/agents/builder.json
+cp .kiro/agents/builder.json cmd/howmux/templates/kiro/agents/builder.json
 echo $? # Should be 0
 
 # Test verification detects differences
 echo "test" >> .kiro/agents/builder.json
-diff .kiro/agents/builder.json cmd/kiro-krew/templates/kiro/agents/builder.json
+diff .kiro/agents/builder.json cmd/howmux/templates/kiro/agents/builder.json
 echo $? # Should be 1 (differences detected)
 
 # Test exclusion patterns
 ls .kiro/skills/*-conventions*/SKILL.md | wc -l # Should show excluded skills
-find cmd/kiro-krew/templates/ -name "*-conventions*" | wc -l # Should be 0
+find cmd/howmux/templates/ -name "*-conventions*" | wc -l # Should be 0
 
 # Verify builder-conventions skill exists and is enhanced
 grep -q "Mandatory Template Synchronization" .kiro/skills/builder-conventions/SKILL.md
@@ -136,19 +136,19 @@ The *-conventions skills are project-specific and should never be distributed in
 ### Sync Command Structure
 ```bash
 # Agent files (all files sync)
-cp .kiro/agents/*.json cmd/kiro-krew/templates/kiro/agents/
-cp .kiro/agents/*.md cmd/kiro-krew/templates/kiro/agents/
+cp .kiro/agents/*.json cmd/howmux/templates/kiro/agents/
+cp .kiro/agents/*.md cmd/howmux/templates/kiro/agents/
 
 # Scripts (all files sync) 
-cp .kiro-krew/scripts/*.sh cmd/kiro-krew/templates/kiro-krew/scripts/
+cp .howmux/scripts/*.sh cmd/howmux/templates/howmux/scripts/
 
 # Themes (all files sync)
-cp .kiro-krew/themes/*.yaml cmd/kiro-krew/templates/kiro-krew/themes/
+cp .howmux/themes/*.yaml cmd/howmux/templates/howmux/themes/
 
 # Evals (excluding results directory)
-cp .kiro-krew/evals/fixtures/* cmd/kiro-krew/templates/kiro-krew/evals/fixtures/
-cp .kiro-krew/evals/rubrics/* cmd/kiro-krew/templates/kiro-krew/evals/rubrics/
-cp -r .kiro-krew/evals/cases/* cmd/kiro-krew/templates/kiro-krew/evals/cases/
+cp .howmux/evals/fixtures/* cmd/howmux/templates/howmux/evals/fixtures/
+cp .howmux/evals/rubrics/* cmd/howmux/templates/howmux/evals/rubrics/
+cp -r .howmux/evals/cases/* cmd/howmux/templates/howmux/evals/cases/
 ```
 
 ### Verification Script Logic
@@ -159,7 +159,7 @@ sync_error=0
 
 # Check agent files
 for file in .kiro/agents/*.json; do
-  template_file="cmd/kiro-krew/templates/kiro/agents/$(basename "$file")"
+  template_file="cmd/howmux/templates/kiro/agents/$(basename "$file")"
   if ! diff -q "$file" "$template_file" >/dev/null 2>&1; then
     echo "ERROR: $file differs from $template_file"
     sync_error=1

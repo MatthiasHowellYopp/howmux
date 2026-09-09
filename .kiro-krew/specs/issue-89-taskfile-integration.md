@@ -105,7 +105,7 @@ Taskfile.yml (build orchestration)
 version: '3'
 
 vars:
-  BINARY_NAME: kiro-krew
+  BINARY_NAME: howmux
   BUILD_DIR: ./dist
   VERSION_FILE: internal/version/version.json
 
@@ -115,7 +115,7 @@ tasks:
     deps: [update-build-metadata]
     cmds:
       - mkdir -p {{.BUILD_DIR}}
-      - go build -ldflags "-X github.com/jbrinkman/kiro-krew/internal/version.BuildDate={{.BUILD_TIME}}" -o {{.BUILD_DIR}}/{{.BINARY_NAME}} ./cmd/kiro-krew
+      - go build -ldflags "-X github.com/jbrinkman/howmux/internal/version.BuildDate={{.BUILD_TIME}}" -o {{.BUILD_DIR}}/{{.BINARY_NAME}} ./cmd/howmux
     vars:
       BUILD_TIME:
         sh: date -u +%Y-%m-%dT%H:%M:%SZ
@@ -152,7 +152,7 @@ tasks:
     desc: Development build (faster, no optimization)
     deps: [update-build-metadata]
     cmds:
-      - go build -o {{.BINARY_NAME}} ./cmd/kiro-krew
+      - go build -o {{.BINARY_NAME}} ./cmd/howmux
 
   lint:
     desc: Run linters and static analysis
@@ -222,7 +222,7 @@ choco install go-task
 
 ## Troubleshooting
 
-- If Task is not available, fall back to: `go build ./cmd/kiro-krew`
+- If Task is not available, fall back to: `go build ./cmd/howmux`
 - Version metadata updates require git; will fallback gracefully
 - All tasks respect existing go.mod configuration
 ```
@@ -265,7 +265,7 @@ cat internal/version/version.json
 # Should show updated commit_hash and build_timestamp
 
 # Verify binary includes metadata
-./dist/kiro-krew about
+./dist/howmux about
 # Should show git commit and build time
 ```
 
@@ -352,7 +352,7 @@ docker:
   desc: Build Docker image
   deps: [build]
   cmds:
-    - docker build -t kiro-krew:{{.VERSION}} .
+    - docker build -t howmux:{{.VERSION}} .
 ```
 
 This design establishes a robust, extensible build system that provides the foundation for future automation while maintaining simplicity and developer experience.

@@ -429,11 +429,11 @@ Tasks are organized to enable parallel work where possible. All tasks must be co
 
 1. **Build the Application**:
    ```bash
-   go build ./cmd/kiro-krew
+   go build ./cmd/howmux
    ```
 
 2. **Test Scenario 1: Streaming Error Handling**:
-   - Start kiro-krew application
+   - Start howmux application
    - Open planning tab (Ctrl+Alt+P or Ctrl+Option+P)
    - Trigger a streaming error (e.g., send malformed prompt or disconnect network)
    - **Expected Results**:
@@ -444,7 +444,7 @@ Tasks are organized to enable parallel work where possible. All tasks must be co
      - User can immediately type and send another message
 
 3. **Test Scenario 2: Connection Error Handling**:
-   - Start kiro-krew with ACP unavailable
+   - Start howmux with ACP unavailable
    - Open planning tab and try to send a message
    - **Expected Results**:
      - Connection error is displayed clearly
@@ -471,13 +471,13 @@ Tasks are organized to enable parallel work where possible. All tasks must be co
 6. **Log Verification**:
    ```bash
    # Check state transitions after errors
-   grep "state transition after error" .kiro-krew/logs/debug-*.log | tail -5
+   grep "state transition after error" .howmux/logs/debug-*.log | tail -5
    
    # Verify errors are still logged for debugging
-   grep "stream error received" .kiro-krew/logs/debug-*.log | tail -5
+   grep "stream error received" .howmux/logs/debug-*.log | tail -5
    
    # Confirm no PlanningStateFailed transitions
-   grep "PlanningStateFailed" .kiro-krew/logs/debug-*.log | tail -5
+   grep "PlanningStateFailed" .howmux/logs/debug-*.log | tail -5
    ```
 
 **Acceptance Criteria**:
@@ -501,7 +501,7 @@ Tasks are organized to enable parallel work where possible. All tasks must be co
 
 ```bash
 # Build the project
-go build ./cmd/kiro-krew
+go build ./cmd/howmux
 
 # Run unit tests (if available)
 go test ./internal/tui/... -v -run TestPlanningTab
@@ -513,8 +513,8 @@ go test ./... -v
 ### Manual Testing Workflow
 
 ```bash
-# Start kiro-krew
-./kiro-krew
+# Start howmux
+./howmux
 
 # Test sequence in the application:
 # 1. Press Ctrl+Alt+P (or Ctrl+Option+P on macOS) to open planning tab
@@ -555,13 +555,13 @@ go test ./... -v
 
 ```bash
 # Check for sanitized error handling
-grep "state transition after error" .kiro-krew/logs/debug-*.log | tail -10
+grep "state transition after error" .howmux/logs/debug-*.log | tail -10
 
 # Verify errors still logged for debugging (full details preserved)
-grep "stream error received" .kiro-krew/logs/debug-*.log | tail -5
+grep "stream error received" .howmux/logs/debug-*.log | tail -5
 
 # Confirm no stuck failed states
-grep "PlanningStateFailed" .kiro-krew/logs/debug-*.log | grep -v "from" | tail -5
+grep "PlanningStateFailed" .howmux/logs/debug-*.log | grep -v "from" | tail -5
 ```
 
 ## Implementation Notes
@@ -782,6 +782,6 @@ This specification provides a complete implementation roadmap for fixing error h
 3. **Viewport Management**: Automatic scrolling to ensure error visibility
 4. **Consistent Styling**: Clear visual distinction for error messages
 
-All tasks are designed to be completed within a single PR, following kiro-krew's one-issue-one-PR workflow. The implementation is low-risk, well-isolated, and maintains backward compatibility while significantly improving user experience.
+All tasks are designed to be completed within a single PR, following howmux's one-issue-one-PR workflow. The implementation is low-risk, well-isolated, and maintains backward compatibility while significantly improving user experience.
 
 The fix transforms error handling from a confusing, terminal state to a smooth, recoverable experience that prioritizes user agency and immediate feedback.

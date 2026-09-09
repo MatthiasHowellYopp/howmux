@@ -88,7 +88,7 @@ Any accessor method that crosses these boundaries **must** acquire the appropria
 **Critical**: Only `architect-prompt.md` is template-synced. The `*-conventions` skills are intentionally **not** synced (see "Exclusion Patterns" in builder-conventions). After modifying architect-prompt.md, run:
 
 ```bash
-cp .kiro/agents/architect-prompt.md cmd/kiro-krew/templates/kiro/agents/architect-prompt.md
+cp .kiro/agents/architect-prompt.md cmd/howmux/templates/kiro/agents/architect-prompt.md
 task sync:check
 ```
 
@@ -168,8 +168,8 @@ package watcher
 import (
     "testing"
     "time"
-    "github.com/jbrinkman/kiro-krew/internal/agent"
-    "github.com/jbrinkman/kiro-krew/internal/config"
+    "github.com/jbrinkman/howmux/internal/agent"
+    "github.com/jbrinkman/howmux/internal/config"
 )
 
 func TestRunningConcurrentAccess(t *testing.T) {
@@ -212,11 +212,11 @@ func TestRunningConcurrentAccess(t *testing.T) {
 ```
 WARNING: DATA RACE
 Read at 0x... by goroutine X:
-  github.com/jbrinkman/kiro-krew/internal/watcher.(*Watcher).Running()
+  github.com/jbrinkman/howmux/internal/watcher.(*Watcher).Running()
       internal/watcher/watcher.go:270
 
 Previous write at 0x... by goroutine Y:
-  github.com/jbrinkman/kiro-krew/internal/watcher.(*Watcher).Start()
+  github.com/jbrinkman/howmux/internal/watcher.(*Watcher).Start()
       internal/watcher/watcher.go:42
 ```
 
@@ -232,7 +232,7 @@ Previous write at 0x... by goroutine Y:
 - `.kiro/agents/architect-prompt.md` gains an explicit analysis step (in the Workflow and/or Design Specification Requirements) requiring the architect to identify when a change introduces a **new reader or writer of state that is accessed from more than one goroutine** — e.g., types with a `sync.Mutex`/`sync.RWMutex` (such as `Watcher`), the TUI render loop, or the session manager.
 - When such a boundary crossing exists, the spec must call it out and add "all access to the shared field is done under its lock" (or equivalent) as an explicit **acceptance criterion** in the task breakdown.
 - The prompt names the concrete example: reading `Watcher` state from the footer/render path must go through a lock-guarded accessor.
-- `.kiro/agents/architect-prompt.md` is copied to `cmd/kiro-krew/templates/kiro/agents/architect-prompt.md` and `task sync:check` passes.
+- `.kiro/agents/architect-prompt.md` is copied to `cmd/howmux/templates/kiro/agents/architect-prompt.md` and `task sync:check` passes.
 
 **Implementation Approach**:
 
@@ -272,7 +272,7 @@ This ensures the builder knows the accessor must be lock-guarded and the validat
 
 **Template Sync Command** (run after editing):
 ```bash
-cp .kiro/agents/architect-prompt.md cmd/kiro-krew/templates/kiro/agents/architect-prompt.md
+cp .kiro/agents/architect-prompt.md cmd/howmux/templates/kiro/agents/architect-prompt.md
 task sync:check
 ```
 
@@ -582,7 +582,7 @@ This issue teaches the AI pipeline to catch a class of bugs it previously shippe
 
 After editing `architect-prompt.md`, **immediately run**:
 ```bash
-cp .kiro/agents/architect-prompt.md cmd/kiro-krew/templates/kiro/agents/architect-prompt.md
+cp .kiro/agents/architect-prompt.md cmd/howmux/templates/kiro/agents/architect-prompt.md
 task sync:check
 ```
 

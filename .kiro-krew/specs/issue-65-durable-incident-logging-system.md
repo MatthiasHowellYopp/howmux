@@ -12,13 +12,13 @@ Currently, incident logs are written to `specs/incidents/` within temporary work
 ## Solution Approach
 
 ### High-Level Strategy
-1. **Leverage Existing Infrastructure**: The incident logging system already exists in `internal/incidents/` and correctly stores logs in `~/.kiro-krew/incidents/<repo-name>/`
+1. **Leverage Existing Infrastructure**: The incident logging system already exists in `internal/incidents/` and correctly stores logs in `~/.howmux/incidents/<repo-name>/`
 2. **Redirect Worktree Logging**: Intercept incident writes that currently go to worktree locations and redirect to durable storage
 3. **Add REPL Integration**: Implement `logs` command in TUI for browsing and viewing incidents
 4. **Maintain Format Compatibility**: Preserve existing incident report format without modification
 
 ### Storage Architecture
-- **Primary Storage**: `~/.kiro-krew/incidents/<repo-name>/`
+- **Primary Storage**: `~/.howmux/incidents/<repo-name>/`
 - **File Format**: `incident-<issue>-<attempt>-<timestamp>.md`
 - **Project Isolation**: Repository-based subdirectories for multi-project support
 - **Persistence**: Survives worktree deletion, system reboots, and repository changes
@@ -28,13 +28,13 @@ Currently, incident logs are written to `specs/incidents/` within temporary work
 ### Files to Modify
 - `internal/tui/commands.go` - Add `logs` command handler
 - `internal/tui/tui.go` - Integrate logs viewing functionality  
-- `cmd/kiro-krew/cmd/logs.go` - Create new logs command (if not using TUI)
+- `cmd/howmux/cmd/logs.go` - Create new logs command (if not using TUI)
 - `internal/session/manager.go` - Redirect incident logging from worktree to durable storage
 
 ### Files Already Implemented (Leverage)
 - `internal/incidents/logger.go` - Core logging functionality 
 - `internal/incidents/storage.go` - Storage operations
-- `cmd/kiro-krew/cmd/log_incident.go` - CLI logging interface
+- `cmd/howmux/cmd/log_incident.go` - CLI logging interface
 
 ### Files to Create
 - `internal/tui/logs_view.go` - TUI component for browsing incident logs
@@ -44,8 +44,8 @@ Currently, incident logs are written to `specs/incidents/` within temporary work
 
 ### Incident Storage Format
 ```
-~/.kiro-krew/incidents/
-├── kiro-krew/                    # Repository name
+~/.howmux/incidents/
+├── howmux/                    # Repository name
 │   ├── incident-65-1-20260607-211905.md
 │   ├── incident-65-2-20260607-212130.md
 │   └── incident-63-1-20260607-183045.md
@@ -102,7 +102,7 @@ const (
 ### Integration Points
 - **Session Manager**: Must detect worktree incident writes and redirect
 - **TUI Commands**: Add to existing command router in `handleCommand()`
-- **File System**: Ensure `.kiro-krew/incidents` directory permissions
+- **File System**: Ensure `.howmux/incidents` directory permissions
 - **Git Integration**: Repository name detection (already implemented)
 
 ## Step-by-Step Task Breakdown
@@ -152,7 +152,7 @@ const (
 1. **Add Filtering Options**
    - Filter by issue number: `logs 65`
    - Filter by date range: `logs --since=2d`
-   - Filter by repository: `logs --repo=kiro-krew`
+   - Filter by repository: `logs --repo=howmux`
 
 2. **Improve Display Format**
    - Syntax highlighting for incident content
@@ -170,14 +170,14 @@ const (
 ### Functional Verification
 ```bash
 # Test incident logging redirection
-./kiro-krew log-incident 65 1 "Test incident content"
+./howmux log-incident 65 1 "Test incident content"
 
 # Verify storage location
-ls ~/.kiro-krew/incidents/kiro-krew/
-cat ~/.kiro-krew/incidents/kiro-krew/incident-65-1-*.md
+ls ~/.howmux/incidents/howmux/
+cat ~/.howmux/incidents/howmux/incident-65-1-*.md
 
 # Test REPL logs command  
-./kiro-krew
+./howmux
 > logs
 > logs 65
 > logs --help
@@ -188,22 +188,22 @@ cat ~/.kiro-krew/incidents/kiro-krew/incident-65-1-*.md
 # Create worktree and verify no incidents appear in PR
 git worktree add --track -b test-logging origin/main test-logging
 cd test-logging
-./kiro-krew log-incident 99 1 "Integration test incident"
+./howmux log-incident 99 1 "Integration test incident"
 
 # Verify incident not in worktree but in durable storage
-find . -name "*incident*" -type f | grep -v ".kiro-krew/incidents"
-ls ~/.kiro-krew/incidents/kiro-krew/incident-99-*
+find . -name "*incident*" -type f | grep -v ".howmux/incidents"
+ls ~/.howmux/incidents/howmux/incident-99-*
 ```
 
 ### Performance Verification  
 ```bash
 # Test with multiple incidents
 for i in {1..10}; do
-    ./kiro-krew log-incident 100 $i "Performance test incident $i"
+    ./howmux log-incident 100 $i "Performance test incident $i"
 done
 
 # Verify logs command responsiveness
-time echo "logs" | ./kiro-krew --non-interactive
+time echo "logs" | ./howmux --non-interactive
 ```
 
 ### Cross-Repository Testing
@@ -211,12 +211,12 @@ time echo "logs" | ./kiro-krew --non-interactive
 # Test multi-project isolation
 cd /tmp && git clone https://github.com/example/other-project
 cd other-project
-kiro-krew log-incident 1 1 "Different project incident"
+howmux log-incident 1 1 "Different project incident"
 
 # Verify separation
-ls ~/.kiro-krew/incidents/
-ls ~/.kiro-krew/incidents/other-project/
-ls ~/.kiro-krew/incidents/kiro-krew/
+ls ~/.howmux/incidents/
+ls ~/.howmux/incidents/other-project/
+ls ~/.howmux/incidents/howmux/
 ```
 
 ## Implementation Notes
@@ -227,7 +227,7 @@ ls ~/.kiro-krew/incidents/kiro-krew/
 - Repository name validation to prevent directory traversal
 
 ### Error Handling
-- Graceful degradation if `~/.kiro-krew` directory inaccessible
+- Graceful degradation if `~/.howmux` directory inaccessible
 - Fallback to temporary storage with user warning
 - Clear error messages for permission issues
 

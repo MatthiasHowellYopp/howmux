@@ -21,7 +21,7 @@ The implementation follows the existing CLI patterns in the codebase:
 ## Relevant Files
 
 ### Files to Modify
-- `cmd/kiro-krew/cmd/root.go` - Add --about flag and handler logic
+- `cmd/howmux/cmd/root.go` - Add --about flag and handler logic
 
 ### Files Referenced (No Changes)
 - `internal/version/version.go` - Contains `version.Info()` function
@@ -77,22 +77,22 @@ This is a single-file change that requires no coordination between teams. The im
 
 ```bash
 # Test the new flag works
-./kiro-krew --about
-./kiro-krew -a
+./howmux --about
+./howmux -a
 
 # Verify it doesn't interfere with existing functionality  
-./kiro-krew --version
-./kiro-krew -v
+./howmux --version
+./howmux -v
 
 # Test flag precedence
-./kiro-krew --about --version  # Should show about info
+./howmux --about --version  # Should show about info
 
 # Test with subcommands (should show about info and exit)
-./kiro-krew init --about
+./howmux init --about
 
 # Verify normal operation still works
-./kiro-krew init
-./kiro-krew
+./howmux init
+./howmux
 ```
 
 ## Technical Notes

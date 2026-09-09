@@ -19,7 +19,7 @@ import (
 	"github.com/docker/docker/pkg/stdcopy"
 	specs "github.com/opencontainers/image-spec/specs-go/v1"
 
-	"github.com/jbrinkman/kiro-krew/internal/eval/debug"
+	"github.com/matthiashowellyopp/howmux/internal/eval/debug"
 )
 
 // ImageNamePrefix is the prefix used for custom eval images.

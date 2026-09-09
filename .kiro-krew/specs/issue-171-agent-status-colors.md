@@ -17,9 +17,9 @@ The approach leverages:
 ## Relevant Files
 
 ### Files to be modified:
-- `.kiro-krew/themes/default.yaml` - Add agent status colors
-- `.kiro-krew/themes/light.yaml` - Add agent status colors  
-- `.kiro-krew/themes/high-contrast.yaml` - Add agent status colors
+- `.howmux/themes/default.yaml` - Add agent status colors
+- `.howmux/themes/light.yaml` - Add agent status colors  
+- `.howmux/themes/high-contrast.yaml` - Add agent status colors
 - `internal/config/themes.go` - Add validation for new color fields
 - `internal/tui/styles.go` - Add new style definitions for agent status
 - `internal/tui/tab_manager.go` - Enhance tab rendering with status-based colors
@@ -127,17 +127,17 @@ AgentFail:    lipgloss.NewStyle().Foreground(lipgloss.Color(theme.Colors.AgentFa
 ### Theme Validation
 ```bash
 # Verify theme files are valid YAML
-yq eval '.colors.agent_success' .kiro-krew/themes/default.yaml
-yq eval '.colors.agent_fail' .kiro-krew/themes/default.yaml
+yq eval '.colors.agent_success' .howmux/themes/default.yaml
+yq eval '.colors.agent_fail' .howmux/themes/default.yaml
 
 # Test theme loading
-go run ./cmd/kiro-krew init  # Should not error on theme validation
+go run ./cmd/howmux init  # Should not error on theme validation
 ```
 
 ### UI Testing
 ```bash
-# Start kiro-krew and verify tab colors
-go run ./cmd/kiro-krew
+# Start howmux and verify tab colors
+go run ./cmd/howmux
 
 # In TUI:
 # 1. Start watcher with labeled GitHub issues

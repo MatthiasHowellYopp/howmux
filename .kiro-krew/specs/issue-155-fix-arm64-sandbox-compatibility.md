@@ -92,7 +92,7 @@ This is a focused infrastructure fix requiring:
 ### Pre-Implementation Verification
 ```bash
 # Verify current failure on ARM64 system
-kiro-krew eval <agent> --sandbox
+howmux eval <agent> --sandbox
 
 # Check Docker platform support
 docker buildx ls
@@ -103,10 +103,10 @@ docker run --platform=linux/amd64 alpine:3.19 uname -m
 ### Post-Implementation Validation
 ```bash
 # Test ARM64 sandbox execution
-kiro-krew eval <agent> --sandbox
+howmux eval <agent> --sandbox
 
 # Test x86_64 sandbox execution (on x86_64 system)
-kiro-krew eval <agent> --sandbox
+howmux eval <agent> --sandbox
 
 # Verify container architecture
 docker run --platform=linux/arm64 alpine:3.19 uname -m  # Should show aarch64
@@ -116,7 +116,7 @@ docker run --platform=linux/amd64 alpine:3.19 uname -m  # Should show x86_64
 kiro-cli --version  # Should work in both container types
 
 # Run full evaluation test suite
-cd .kiro-krew/evals && go test ./...
+cd .howmux/evals && go test ./...
 ```
 
 ## Implementation Details
@@ -206,7 +206,7 @@ resp, err := c.client.ContainerCreate(ctx, containerConfig, hostConfig, nil, &pl
 
 ## Success Metrics
 
-1. **Functional**: ARM64 systems can successfully run `kiro-krew eval <agent> --sandbox`
+1. **Functional**: ARM64 systems can successfully run `howmux eval <agent> --sandbox`
 2. **Compatibility**: x86_64 systems continue to work without changes
 3. **Performance**: Installation time remains comparable (< 30s increase)
 4. **Reliability**: All existing evaluation test cases pass on both architectures

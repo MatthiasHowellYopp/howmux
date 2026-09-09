@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jbrinkman/kiro-krew/internal/agent"
-	"github.com/jbrinkman/kiro-krew/internal/config"
-	"github.com/jbrinkman/kiro-krew/internal/session"
-	"github.com/jbrinkman/kiro-krew/internal/watcher"
+	"github.com/matthiashowellyopp/howmux/internal/agent"
+	"github.com/matthiashowellyopp/howmux/internal/config"
+	"github.com/matthiashowellyopp/howmux/internal/session"
+	"github.com/matthiashowellyopp/howmux/internal/watcher"
 )
 
 func setupTestModel(t *testing.T) model {

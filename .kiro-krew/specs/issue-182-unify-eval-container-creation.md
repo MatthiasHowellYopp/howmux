@@ -157,10 +157,10 @@ go test ./internal/eval/sandbox -v -run TestArchitecture
 kiro-cli eval --debug --sandbox architect simple-task
 
 # Verify Dockerfile is generated and saved
-ls -la .kiro-krew/evals/tmp/dockerfiles/
+ls -la .howmux/evals/tmp/dockerfiles/
 
 # Verify containers.json is updated
-cat .kiro-krew/evals/tmp/containers.json
+cat .howmux/evals/tmp/containers.json
 
 # Test container cleanup
 kiro-cli eval --cleanup

@@ -5,7 +5,7 @@
 
 ## Problem Statement
 
-The current kiro-krew TUI has a fully functional tab system with keyboard navigation, but users cannot visually see which tabs are available or which tab is currently active. Users must cycle through tabs using `[` and `]` keys without knowing what tabs exist or their current position.
+The current howmux TUI has a fully functional tab system with keyboard navigation, but users cannot visually see which tabs are available or which tab is currently active. Users must cycle through tabs using `[` and `]` keys without knowing what tabs exist or their current position.
 
 ## Solution Approach
 
@@ -135,11 +135,11 @@ func (th *TabHeaders) Update(tabs []Tab, activeTab int, width int)
 
 ```bash
 # Build and test
-go build ./cmd/kiro-krew
+go build ./cmd/howmux
 go test ./internal/tui/...
 
 # Manual testing scenarios:
-./kiro-krew  # Start with main tab
+./howmux  # Start with main tab
 # - Verify tab header shows "Main TUI" tab
 # - Start agent to create second tab
 # - Click between tabs to verify switching

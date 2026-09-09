@@ -151,11 +151,11 @@ func NewAgentTab(agentID string, manager *agent.Manager, styles *Styles) *AgentT
 ## Validation Commands
 
 ```bash
-# Terminal 1: Start kiro-krew in TUI mode
-kiro-krew tui
+# Terminal 1: Start howmux in TUI mode
+howmux tui
 
 # Terminal 2: Trigger multiple agent spawns
-kiro-krew watch start
+howmux watch start
 # Wait for multiple issues to be processed simultaneously
 
 # Manual validation steps in TUI:

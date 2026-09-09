@@ -18,7 +18,7 @@ When the watcher processes an issue, it creates a git worktree and branch, and t
 
 Make the base branch explicit and configurable at three levels:
 
-1. **Config-level default** — Add `base_branch` field to `.kiro-krew/config.yaml`, defaulting to `"main"`
+1. **Config-level default** — Add `base_branch` field to `.howmux/config.yaml`, defaulting to `"main"`
 2. **Per-issue override** — Parse `Base-Branch: <branch-name>` from issue body
 3. **Script enhancement** — Make `worktree-create.sh` accept an optional base ref argument
 4. **Manager integration** — Pass resolved base branch to worktree creation at both call sites
@@ -44,7 +44,7 @@ This enables integration workflows to specify `Base-Branch: jira-work` in issue 
    - Update retry path (~line 457): Pass resolved base branch as second argument when recreating worktrees
    - Both call sites need access to issue body to resolve per-issue overrides
 
-3. **.kiro-krew/scripts/worktree-create.sh**
+3. **.howmux/scripts/worktree-create.sh**
    - Accept optional second argument `$2` for base ref
    - When base ref is provided: use `git worktree add "$WORKTREE_PATH" -b "$BRANCH_NAME" "$BASE_REF"`
    - When base ref is omitted: preserve current behavior `git worktree add "$WORKTREE_PATH" -b "$BRANCH_NAME"`
@@ -55,7 +55,7 @@ This enables integration workflows to specify `Base-Branch: jira-work` in issue 
    - Change from: `gh pr create --repo <repo> --head spec/<worktree-name> --title "<issue-title>" --body "<body>"`
    - Change to: `gh pr create --repo <repo> --head spec/<worktree-name> --base <base_branch> --title "<issue-title>" --body "<body>"`
 
-5. **cmd/kiro-krew/templates/kiro/agents/krew-lead-prompt.md** (template version)
+5. **cmd/howmux/templates/kiro/agents/krew-lead-prompt.md** (template version)
    - Apply identical change as #4 above to maintain template sync
 
 ### Files to Create
@@ -144,7 +144,7 @@ This is a single-developer task implementing a cohesive feature across multiple 
 **Objective**: Make `worktree-create.sh` accept optional base ref argument.
 
 **Implementation Steps**:
-1. Open `.kiro-krew/scripts/worktree-create.sh`
+1. Open `.howmux/scripts/worktree-create.sh`
 2. After `SPEC_NAME=$1`, add: `BASE_REF=${2:-}`
 3. Replace the `git worktree add` command with conditional:
    ```bash
@@ -179,12 +179,12 @@ This is a single-developer task implementing a cohesive feature across multiple 
    - From: `gh pr create --repo <repo> --head spec/<worktree-name> --title "<issue-title>" --body "<body>"`
    - To: `gh pr create --repo <repo> --head spec/<worktree-name> --base <base_branch> --title "<issue-title>" --body "<body>"`
 4. Add note that `<base_branch>` should match the branch the worktree was created from
-5. Open `cmd/kiro-krew/templates/kiro/agents/krew-lead-prompt.md`
+5. Open `cmd/howmux/templates/kiro/agents/krew-lead-prompt.md`
 6. Apply identical change to maintain template sync
 
 **Acceptance Criteria**:
 - Live prompt (`.kiro/agents/krew-lead-prompt.md`) includes `--base <base_branch>` in PR creation command
-- Template prompt (`cmd/kiro-krew/templates/kiro/agents/krew-lead-prompt.md`) includes identical change
+- Template prompt (`cmd/howmux/templates/kiro/agents/krew-lead-prompt.md`) includes identical change
 - Both files are in sync
 - Instruction clear that `<base_branch>` references the resolved base branch
 
@@ -233,7 +233,7 @@ Run these commands to verify the implementation:
 
 ### 1. Build and Verify Compilation
 ```bash
-go build ./cmd/kiro-krew
+go build ./cmd/howmux
 ```
 
 ### 2. Run All Tests
@@ -245,9 +245,9 @@ go test ./internal/agent -v
 ### 3. Test Config Default (no base_branch field)
 ```bash
 # Create minimal config without base_branch
-cat > .kiro-krew/config.yaml << 'EOF'
+cat > .howmux/config.yaml << 'EOF'
 githubrepo: test/repo
-label: kiro-krew
+label: howmux
 EOF
 
 # Verify default is applied (requires running watcher or unit test)
@@ -257,9 +257,9 @@ go test -run TestLoad_BaseBranchDefault ./internal/config -v
 ### 4. Test Config Explicit Value
 ```bash
 # Create config with explicit base_branch
-cat > .kiro-krew/config.yaml << 'EOF'
+cat > .howmux/config.yaml << 'EOF'
 githubrepo: test/repo
-label: kiro-krew
+label: howmux
 base_branch: develop
 EOF
 
@@ -285,10 +285,10 @@ go test -run TestExtractBaseBranchOverride ./internal/agent -v
 ### 6. Test Worktree Script (standalone)
 ```bash
 # Test with one argument (current behavior)
-.kiro-krew/scripts/worktree-create.sh test-worktree-1
+.howmux/scripts/worktree-create.sh test-worktree-1
 
 # Test with two arguments (new behavior)
-.kiro-krew/scripts/worktree-create.sh test-worktree-2 develop
+.howmux/scripts/worktree-create.sh test-worktree-2 develop
 
 # Verify branches created from correct base
 git log --oneline -1 spec/test-worktree-1
@@ -303,7 +303,7 @@ git branch -D spec/test-worktree-1 spec/test-worktree-2
 ### 7. Integration Test (manual)
 ```bash
 # 1. Set config with base_branch
-echo "base_branch: develop" >> .kiro-krew/config.yaml
+echo "base_branch: develop" >> .howmux/config.yaml
 
 # 2. Create test issue with override
 # (manually on GitHub with "Base-Branch: jira-work" in body)
@@ -325,7 +325,7 @@ go vet ./...
 ```bash
 # Verify both krew-lead-prompt.md files have identical PR creation command
 diff <(grep "gh pr create" .kiro/agents/krew-lead-prompt.md) \
-     <(grep "gh pr create" cmd/kiro-krew/templates/kiro/agents/krew-lead-prompt.md)
+     <(grep "gh pr create" cmd/howmux/templates/kiro/agents/krew-lead-prompt.md)
 # Should produce no output (files match)
 ```
 

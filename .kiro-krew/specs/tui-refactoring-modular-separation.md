@@ -117,7 +117,7 @@ Each phase maintains backward compatibility while progressively improving the ar
 
 ```bash
 # Build and ensure no compilation errors
-go build ./cmd/kiro-krew
+go build ./cmd/howmux
 
 # Run all tests
 go test ./internal/tui/...
@@ -131,7 +131,7 @@ go test -run TestUIRendering ./internal/tui/...
 ./test_integration.sh
 
 # Verify existing behavior preserved
-go run ./cmd/kiro-krew
+go run ./cmd/howmux
 # Test all existing commands work: watch start/stop, status, plan, etc.
 ```
 

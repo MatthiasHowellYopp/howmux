@@ -71,8 +71,8 @@ No coordination required - feature is complete and working as specified.
 The following commands can verify the implementation:
 
 ```bash
-# Start kiro-krew and test status command
-./kiro-krew
+# Start howmux and test status command
+./howmux
 # In REPL: type "status" and press enter
 
 # Verify help shows status command

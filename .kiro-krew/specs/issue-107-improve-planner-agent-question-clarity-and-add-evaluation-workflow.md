@@ -16,17 +16,17 @@ The solution involves updating the planner agent prompt to enforce clear questio
 
 ### Files to Modify
 - `.kiro/agents/planner-prompt.md` - Update prompt with clear questioning guidelines
-- `.kiro-krew/evals/rubrics/planner.yaml` - Add new evaluation criteria for question clarity
-- `.kiro-krew/evals/cases/planner/` - Add new test cases for problematic question patterns
+- `.howmux/evals/rubrics/planner.yaml` - Add new evaluation criteria for question clarity
+- `.howmux/evals/cases/planner/` - Add new test cases for problematic question patterns
 
 ### Files to Create
-- `.kiro-krew/evals/cases/planner/case-ambiguous-questions.yaml` - Test case for ambiguous question detection
-- `.kiro-krew/evals/cases/planner/case-multiple-questions.yaml` - Test case for multiple question violations
-- `.kiro-krew/evals/cases/planner/case-option-selection.yaml` - Test case for proper option presentation
+- `.howmux/evals/cases/planner/case-ambiguous-questions.yaml` - Test case for ambiguous question detection
+- `.howmux/evals/cases/planner/case-multiple-questions.yaml` - Test case for multiple question violations
+- `.howmux/evals/cases/planner/case-option-selection.yaml` - Test case for proper option presentation
 
 ### Files Referenced for Context
 - `internal/session/planner.go` - Planner session management (no changes needed)
-- `cmd/kiro-krew/cmd/eval.go` - Evaluation command implementation (no changes needed)
+- `cmd/howmux/cmd/eval.go` - Evaluation command implementation (no changes needed)
 - `internal/eval/runner.go` - Evaluation execution logic (no changes needed)
 
 ## Team Orchestration
@@ -78,8 +78,8 @@ No coordination with external teams is required as this is an internal agent imp
 
 ### Task 4: Implement Evaluation Workflow Documentation
 **Acceptance Criteria:**
-- [ ] Document requirement to run `kiro-krew eval` before prompt changes (baseline)
-- [ ] Document requirement to run `kiro-krew eval` after prompt changes (verification)
+- [ ] Document requirement to run `howmux eval` before prompt changes (baseline)
+- [ ] Document requirement to run `howmux eval` after prompt changes (verification)
 - [ ] Add guidance on creating test cases for specific behavioral changes
 - [ ] Include evaluation workflow in development process documentation
 
@@ -99,17 +99,17 @@ No coordination with external teams is required as this is an internal agent imp
 
 ```bash
 # Baseline evaluation before changes
-kiro-krew eval planner
+howmux eval planner
 
 # Test specific problematic patterns
-kiro-krew eval planner case-ambiguous-questions
-kiro-krew eval planner case-multiple-questions
+howmux eval planner case-ambiguous-questions
+howmux eval planner case-multiple-questions
 
 # Full evaluation after changes
-kiro-krew eval planner
+howmux eval planner
 
 # Compare baseline vs. improved results
-kiro-krew eval diff <baseline-hash> <improved-hash>
+howmux eval diff <baseline-hash> <improved-hash>
 
 # Test planner agent with sample input to verify behavior
 echo "Add user authentication" | kiro-cli chat --agent planner --no-interactive

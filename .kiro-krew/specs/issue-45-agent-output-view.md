@@ -139,8 +139,8 @@ Add a toggleable agent output view within the existing TUI that captures and dis
 ## Validation Commands
 
 ```bash
-# Start kiro-krew TUI
-kiro-krew watch
+# Start howmux TUI
+howmux watch
 
 # In TUI console:
 watch start                    # Start watching for issues
@@ -157,7 +157,7 @@ status                        # Verify agents are running
 # Press 'o' to verify output view still works
 
 # Test multiple agents
-# Create issues with kiro-krew label to spawn multiple agents
+# Create issues with howmux label to spawn multiple agents
 # Verify output from all agents appears in output view
 
 # Test console logging compatibility  

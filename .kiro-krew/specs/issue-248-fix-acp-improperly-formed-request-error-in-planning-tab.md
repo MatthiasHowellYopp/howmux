@@ -319,7 +319,7 @@ Tasks are numbered to reflect logical implementation order within a single PR. A
    ```
 
 2. **Manual Integration Test**:
-   - Start kiro-krew application
+   - Start howmux application
    - Navigate to planning tab using hotkey (Ctrl+Alt+P)
    - Type a test message: "Hello, can you help me create a GitHub issue?"
    - Press Enter to send message
@@ -332,13 +332,13 @@ Tasks are numbered to reflect logical implementation order within a single PR. A
 3. **Log Analysis**:
    ```bash
    # Check for successful connection with agent context
-   grep "ACP connection established" .kiro-krew/logs/debug-*.log
+   grep "ACP connection established" .howmux/logs/debug-*.log
    
    # Verify agent flag is passed
-   grep "starting ACP connection.*planner" .kiro-krew/logs/debug-*.log
+   grep "starting ACP connection.*planner" .howmux/logs/debug-*.log
    
    # Confirm no "Improperly formed request" errors
-   grep "Improperly formed request" .kiro-krew/logs/debug-*.log
+   grep "Improperly formed request" .howmux/logs/debug-*.log
    # Should return no results
    ```
 
@@ -368,7 +368,7 @@ Tasks are numbered to reflect logical implementation order within a single PR. A
 
 ```bash
 # Build the project
-go build ./cmd/kiro-krew
+go build ./cmd/howmux
 
 # Run unit tests
 go test ./internal/acp/... -v
@@ -381,8 +381,8 @@ go test ./... -v
 ### Manual Testing
 
 ```bash
-# Start kiro-krew in debug mode
-./kiro-krew
+# Start howmux in debug mode
+./howmux
 
 # In the REPL:
 # 1. Press Ctrl+Alt+P to open planning tab
@@ -395,16 +395,16 @@ go test ./... -v
 
 ```bash
 # Check connection logs
-grep "ACP connection established" .kiro-krew/logs/debug-*.log | tail -5
+grep "ACP connection established" .howmux/logs/debug-*.log | tail -5
 
 # Verify agent configuration
-grep "starting ACP connection" .kiro-krew/logs/debug-*.log | grep "planner"
+grep "starting ACP connection" .howmux/logs/debug-*.log | grep "planner"
 
 # Check for any errors
-grep -i "error\|failed" .kiro-krew/logs/debug-*.log | grep -i acp
+grep -i "error\|failed" .howmux/logs/debug-*.log | grep -i acp
 
 # Verify no "Improperly formed request" errors
-grep "Improperly formed request" .kiro-krew/logs/debug-*.log
+grep "Improperly formed request" .howmux/logs/debug-*.log
 # Should return: (no results)
 ```
 
@@ -521,4 +521,4 @@ No external documentation requires updates. The fix is internal to the ACP clien
 
 ## Conclusion
 
-This specification provides a complete implementation roadmap for fixing the ACP protocol bug. The solution addresses both the immediate symptom (wrong agent name) and the root architectural issue (missing connection-level agent context). All tasks are designed to be completed within a single PR, following kiro-krew's one-issue-one-PR workflow.
+This specification provides a complete implementation roadmap for fixing the ACP protocol bug. The solution addresses both the immediate symptom (wrong agent name) and the root architectural issue (missing connection-level agent context). All tasks are designed to be completed within a single PR, following howmux's one-issue-one-PR workflow.

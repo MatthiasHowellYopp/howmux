@@ -45,7 +45,7 @@ This affects not just the planning tab but debugging across the entire applicati
 │ Ring Buffer  │  │ File Handler  │              │ Log Viewer Tab   │
 │ - FIFO queue │  │ - Rotation    │              │ - Streaming view │
 │ - Max lines  │  │ - Timestamps  │←─────reads───│ - Scrolling      │
-│ - O(1) ops   │  │ - .kiro-krew/ │              │ - Selection/copy │
+│ - O(1) ops   │  │ - .howmux/ │              │ - Selection/copy │
 └──────┬───────┘  │   logs/       │              └──────────────────┘
        │          └───────────────┘
        │ buffer read
@@ -82,7 +82,7 @@ This affects not just the planning tab but debugging across the entire applicati
 5. **Command Parameter Overrides**: Session-only configuration overrides
    - `log [level] [size]` parameters override config temporarily
    - Closing and reopening reverts to config file defaults
-   - Persistent changes require editing `.kiro-krew/config.yaml`
+   - Persistent changes require editing `.howmux/config.yaml`
 
 ## Relevant Files
 
@@ -129,14 +129,14 @@ This affects not just the planning tab but debugging across the entire applicati
    - Update `Load()` to parse logging section
    - Validation for logging config fields
 
-2. **`.kiro-krew/config.yaml`**
+2. **`.howmux/config.yaml`**
    - Add logging configuration section with defaults:
      ```yaml
      logging:
        default_level: "info"
        max_buffer_lines: 10000
        max_file_size_mb: 100
-       log_dir: ".kiro-krew/logs"
+       log_dir: ".howmux/logs"
      ```
 
 3. **`internal/tui/command_registry.go`**
@@ -188,7 +188,7 @@ This affects not just the planning tab but debugging across the entire applicati
     - Log ACP connection state changes
     - Log context usage updates
 
-11. **`cmd/kiro-krew/main.go`**
+11. **`cmd/howmux/main.go`**
     - Initialize logging subsystem early in startup
     - Configure default logger before TUI starts
 
@@ -280,7 +280,7 @@ Task 6 (TUI Integration) ──→ Task 7 (Instrumentation)
 
 **Acceptance Criteria**:
 - Custom handler implementing charmbracelet/log Handler interface
-- Write logs to configurable directory (`.kiro-krew/logs/`)
+- Write logs to configurable directory (`.howmux/logs/`)
 - File naming: `debug-YYYY-MM-DD-HHMM.log` (minute resolution)
 - Size-based rotation when max size exceeded
 - Create new file with current timestamp on rotation
@@ -327,7 +327,7 @@ Task 6 (TUI Integration) ──→ Task 7 (Instrumentation)
 ---
 
 ### Task 5: Configuration and Command Support
-**Files**: `internal/config/config.go`, `.kiro-krew/config.yaml`, `internal/tui/command_registry.go`, `internal/tui/commands.go`
+**Files**: `internal/config/config.go`, `.howmux/config.yaml`, `internal/tui/command_registry.go`, `internal/tui/commands.go`
 
 **Acceptance Criteria**:
 - Add `LoggingConfig` struct to `config.Config`
@@ -354,7 +354,7 @@ Task 6 (TUI Integration) ──→ Task 7 (Instrumentation)
 ---
 
 ### Task 6: TUI Lifecycle Integration
-**Files**: `internal/tui/tui.go`, `internal/tui/tab_manager.go`, `cmd/kiro-krew/main.go`
+**Files**: `internal/tui/tui.go`, `internal/tui/tab_manager.go`, `cmd/howmux/main.go`
 
 **Acceptance Criteria**:
 - Initialize logging subsystem in `main.go` (inactive state)
@@ -433,7 +433,7 @@ Task 6 (TUI Integration) ──→ Task 7 (Instrumentation)
 ### Build and Test
 ```bash
 # Build the application
-go build ./cmd/kiro-krew
+go build ./cmd/howmux
 
 # Run unit tests for logging package
 go test -v ./internal/logging/...
@@ -449,30 +449,30 @@ go test -v ./internal/tui/integration_test.go
 
 #### Scenario 1: Basic Log Viewing
 ```bash
-# Start kiro-krew
-./kiro-krew
+# Start howmux
+./howmux
 
 # Open log viewer with default settings
-kiro-krew> log
+howmux> log
 
 # Verify:
 # - Log tab opens
 # - Tab title shows "Logs"
 # - Viewer displays live log stream
 # - Timestamp, level, and message visible
-# - File created: .kiro-krew/logs/debug-YYYY-MM-DD-HHMM.log
+# - File created: .howmux/logs/debug-YYYY-MM-DD-HHMM.log
 ```
 
 #### Scenario 2: Level Override
 ```bash
 # Open log viewer with debug level
-kiro-krew> log debug
+howmux> log debug
 
 # Verify:
 # - Debug messages visible in viewer
 # - More verbose output than default
 # - Close tab and reopen
-kiro-krew> log
+howmux> log
 
 # Verify:
 # - Level reverted to config default (info)
@@ -482,14 +482,14 @@ kiro-krew> log
 #### Scenario 3: Buffer Size Override
 ```bash
 # Open log viewer with larger buffer
-kiro-krew> log info 20000
+howmux> log info 20000
 
 # Generate many logs (trigger watcher, open planning tabs, etc.)
 # Verify:
 # - Buffer holds up to 20000 lines
 # - FIFO behavior when buffer full
 # - Close and reopen
-kiro-krew> log
+howmux> log
 
 # Verify:
 # - Buffer size reverted to config default (10000)
@@ -498,10 +498,10 @@ kiro-krew> log
 #### Scenario 4: Planning Tab ACP Flow
 ```bash
 # Open log viewer with debug level
-kiro-krew> log debug
+howmux> log debug
 
 # Open planning tab
-kiro-krew> plan test-debug
+howmux> plan test-debug
 
 # Send a message in planning tab
 [planner] > Hello, can you help me create an issue?
@@ -522,7 +522,7 @@ kiro-krew> plan test-debug
 ```bash
 # Set low max_file_size_mb in config (e.g., 1 MB)
 # Open log viewer
-kiro-krew> log debug
+howmux> log debug
 
 # Generate logs rapidly (multiple planning sessions, watcher activity)
 # Verify:
@@ -535,10 +535,10 @@ kiro-krew> log debug
 #### Scenario 6: Single Tab Constraint
 ```bash
 # Open log viewer
-kiro-krew> log
+howmux> log
 
 # Try to open another log viewer
-kiro-krew> log debug 20000
+howmux> log debug 20000
 
 # Verify:
 # - Prompt appears: "Log viewer already open. View existing or start new?"
@@ -548,7 +548,7 @@ kiro-krew> log debug 20000
 #### Scenario 7: Scrolling and Navigation
 ```bash
 # Open log viewer with debug level
-kiro-krew> log debug
+howmux> log debug
 
 # Generate many logs to fill viewport
 # Test keyboard navigation:
@@ -566,7 +566,7 @@ kiro-krew> log debug
 #### Scenario 8: Tab Closure and Cleanup
 ```bash
 # Open log viewer
-kiro-krew> log
+howmux> log
 
 # Generate some logs
 # Close log tab (Ctrl+W or close command)
@@ -581,7 +581,7 @@ kiro-krew> log
 
 ## Configuration Schema
 
-### `.kiro-krew/config.yaml` Addition
+### `.howmux/config.yaml` Addition
 ```yaml
 # Structured logging configuration
 logging:
@@ -595,7 +595,7 @@ logging:
   max_file_size_mb: 100
   
   # Directory for log files (relative to project root)
-  log_dir: ".kiro-krew/logs"
+  log_dir: ".howmux/logs"
 ```
 
 ## Performance Considerations

@@ -20,16 +20,16 @@
       {
         "assets": [
           {
-            "path": "dist/release/kiro-krew",
-            "label": "kiro-krew macOS ARM64"
+            "path": "dist/release/howmux",
+            "label": "howmux macOS ARM64"
           },
           {
-            "path": "dist/release/kiro-krew-linux-amd64",
-            "label": "kiro-krew Linux AMD64"
+            "path": "dist/release/howmux-linux-amd64",
+            "label": "howmux Linux AMD64"
           },
           {
-            "path": "dist/release/kiro-krew-linux-arm64",
-            "label": "kiro-krew Linux ARM64"
+            "path": "dist/release/howmux-linux-arm64",
+            "label": "howmux Linux ARM64"
           }
         ]
       }

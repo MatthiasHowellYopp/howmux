@@ -6,8 +6,8 @@ This document summarizes the validation and testing results for the planner prom
 
 ## Test Execution Summary
 
-1. ✓ Baseline evaluation: `./kiro-krew eval planner`
-2. ✓ Post-change evaluation: `./kiro-krew eval planner`
+1. ✓ Baseline evaluation: `./howmux eval planner`
+2. ✓ Post-change evaluation: `./howmux eval planner`
 
 ## Performance Metrics
 

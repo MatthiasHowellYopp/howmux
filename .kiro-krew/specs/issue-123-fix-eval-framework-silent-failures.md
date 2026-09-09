@@ -25,12 +25,12 @@ Implement comprehensive logging and error handling to provide clear feedback dur
 
 ### Files to Modify
 - `internal/eval/runner.go` - Add progress logging and improve error handling
-- `cmd/kiro-krew/cmd/eval.go` - Add validation and user feedback
+- `cmd/howmux/cmd/eval.go` - Add validation and user feedback
 
 ### Files Referenced
-- `.kiro-krew/evals/rubrics/*.yaml` - Rubric definitions (read-only)
-- `.kiro-krew/evals/cases/*/` - Test case directories (read-only)
-- `.kiro-krew/evals/results/` - Output directory structure
+- `.howmux/evals/rubrics/*.yaml` - Rubric definitions (read-only)
+- `.howmux/evals/cases/*/` - Test case directories (read-only)
+- `.howmux/evals/results/` - Output directory structure
 
 ## Team Orchestration
 
@@ -69,21 +69,21 @@ This is a single-component fix focused on the evaluation runner with no cross-ag
 
 ```bash
 # Test basic evaluation with progress output
-./kiro-krew eval architect
+./howmux eval architect
 
 # Test specific agent evaluation
-./kiro-krew eval builder
+./howmux eval builder
 
 # Test evaluation with missing components (should show clear errors)
-rm -rf .kiro-krew/evals/cases/architect
-./kiro-krew eval architect
+rm -rf .howmux/evals/cases/architect
+./howmux eval architect
 
 # Test evaluation with invalid rubric (should show clear errors)
-echo "invalid yaml content" > .kiro-krew/evals/rubrics/test.yaml
-./kiro-krew eval test
+echo "invalid yaml content" > .howmux/evals/rubrics/test.yaml
+./howmux eval test
 
 # Verify results are populated (should contain actual data, not empty structures)
-cat .kiro-krew/evals/results/*/summary.json | jq '.agent_scores'
+cat .howmux/evals/results/*/summary.json | jq '.agent_scores'
 ```
 
 ## Implementation Notes
@@ -91,6 +91,6 @@ cat .kiro-krew/evals/results/*/summary.json | jq '.agent_scores'
 - Maintain backwards compatibility with existing JSON result format
 - Use standard Go logging patterns for consistency
 - Add progress dots or spinner for long-running operations
-- Ensure error messages guide users toward resolution (e.g., "Run 'kiro-krew init' to set up evaluation framework")
+- Ensure error messages guide users toward resolution (e.g., "Run 'howmux init' to set up evaluation framework")
 
 Closes #123

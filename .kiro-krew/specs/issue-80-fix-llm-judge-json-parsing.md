@@ -61,7 +61,7 @@ Implement ANSI escape sequence sanitization in the JSON parsing pipeline while m
 
 ### Files to Reference
 - `internal/eval/runner_test.go` - Existing test patterns for deterministic criteria
-- `.kiro-krew/evals/results/667ef0c/` - Current failing evaluation results for testing
+- `.howmux/evals/results/667ef0c/` - Current failing evaluation results for testing
 
 ### Files Unchanged
 - `internal/eval/types.go` - All data structures remain unchanged
@@ -178,24 +178,24 @@ func TestScoreLLMJudge_ANSISequences(t *testing.T) {
 echo 'Test prompt requesting JSON' | kiro-cli chat --no-interactive | hexdump -C
 
 # Run single agent evaluation to test fix
-cd .kiro-krew && go run ../cmd/kiro-krew/main.go eval architect
+cd .howmux && go run ../cmd/howmux/main.go eval architect
 ```
 
 ### Regression Testing on Historical Commit
 ```bash
 # Re-run evaluation on problematic commit 667ef0c
-cd .kiro-krew && go run ../cmd/kiro-krew/main.go eval
+cd .howmux && go run ../cmd/howmux/main.go eval
 jq '.Cases[].Scores[] | select(.Skipped == true)' evals/results/*/architect.json
 
 # Verify 0 skipped rubrics after fix
-cd .kiro-krew && go run ../cmd/kiro-krew/main.go eval
+cd .howmux && go run ../cmd/howmux/main.go eval
 find evals/results -name "*.json" -exec jq -r '.Cases[].Scores[] | select(.Skipped == true) | .Name' {} \;
 ```
 
 ### JSON Structure Validation
 ```bash
 # Verify JSON output structure integrity
-cd .kiro-krew && go run ../cmd/kiro-krew/main.go eval planner
+cd .howmux && go run ../cmd/howmux/main.go eval planner
 jq '.Cases[0].Scores[] | select(.Deterministic == false)' evals/results/*/planner.json
 
 # Check that LLM judge scores are in valid range
@@ -215,10 +215,10 @@ go test ./internal/eval/...
 ### Performance Validation
 ```bash
 # Benchmark evaluation performance
-cd .kiro-krew && time go run ../cmd/kiro-krew/main.go eval
+cd .howmux && time go run ../cmd/howmux/main.go eval
 
 # Test with multiple agents to check scaling
-cd .kiro-krew && time go run ../cmd/kiro-krew/main.go eval architect builder documenter
+cd .howmux && time go run ../cmd/howmux/main.go eval architect builder documenter
 ```
 
 ## Implementation Notes

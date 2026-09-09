@@ -498,15 +498,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 ### Build and Basic Functionality
 ```bash
 # Verify build succeeds
-go build ./cmd/kiro-krew
+go build ./cmd/howmux
 
 # Start application in test mode
-./kiro-krew
+./howmux
 ```
 
 ### Overlay System Testing
 ```bash
-# In kiro-krew TUI, test each overlay command:
+# In howmux TUI, test each overlay command:
 help
 status  
 about
@@ -520,7 +520,7 @@ about
 
 ### Theme Display Testing  
 ```bash
-# In kiro-krew TUI, verify theme display:
+# In howmux TUI, verify theme display:
 # 1. Theme name appears on right side of prompt
 # 2. Uses muted styling
 # 3. Persists during console activity

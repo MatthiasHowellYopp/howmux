@@ -6,7 +6,7 @@
 
 ## Problem Summary
 
-The log tab viewport in the TUI remains empty even though log entries are successfully written to disk in `.kiro-krew/logs/`. This occurs because the `loggingMultiWriter.Write()` function parses incoming JSON log entries looking for a field named `"message"`, but `charmbracelet/log` with `JSONFormatter` actually uses the field name `"msg"` according to the library's convention.
+The log tab viewport in the TUI remains empty even though log entries are successfully written to disk in `.howmux/logs/`. This occurs because the `loggingMultiWriter.Write()` function parses incoming JSON log entries looking for a field named `"message"`, but `charmbracelet/log` with `JSONFormatter` actually uses the field name `"msg"` according to the library's convention.
 
 ### Root Cause Analysis
 
@@ -130,7 +130,7 @@ This should be updated to `"msg"` as well to maintain consistency, ensuring the 
 
 1. **Start the TUI with logging enabled**:
    ```bash
-   ./kiro-krew
+   ./howmux
    ```
 
 2. **Open the log viewer tab**:
@@ -144,7 +144,7 @@ This should be updated to `"msg"` as well to maintain consistency, ensuring the 
 
 4. **Verify file logging unchanged**:
    ```bash
-   cat .kiro-krew/logs/debug-*.log
+   cat .howmux/logs/debug-*.log
    ```
    - Confirm JSON format remains unchanged
    - Verify `"msg"` field is present in JSON output

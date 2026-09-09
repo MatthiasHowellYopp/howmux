@@ -6,7 +6,7 @@
 
 ## Solution Approach
 
-Implement Docker-based container isolation for the `kiro-krew eval` command to eliminate security risks from agent execution. Each eval test case will run in a separate Docker container with:
+Implement Docker-based container isolation for the `howmux eval` command to eliminate security risks from agent execution. Each eval test case will run in a separate Docker container with:
 
 1. **Complete isolation** - No host filesystem access beyond copied project code
 2. **GitHub CLI mocking** - Replace GitHub skills with logging-only mock versions  
@@ -31,12 +31,12 @@ Implement Docker-based container isolation for the `kiro-krew eval` command to e
 ### Files to Modify
 - `internal/eval/runner.go` - Update `invokeAgent()` to use container execution
 - `internal/eval/types.go` - Add container configuration types
-- `cmd/kiro-krew/cmd/eval.go` - Add container control flags
+- `cmd/howmux/cmd/eval.go` - Add container control flags
 - `go.mod` - Add Docker client dependencies
 
 ### Files for Reference
 - `.kiro/skills/discover-qa-tools/SKILL.md` - Project detection patterns
-- `.kiro-krew/evals/cases/*/` - Existing test case structure  
+- `.howmux/evals/cases/*/` - Existing test case structure  
 - `Taskfile.yml` - Build patterns for container inclusion
 
 ## Team Orchestration
@@ -110,7 +110,7 @@ This feature requires coordination between security (containerization) and compa
 - **Dependencies**: Task 4.1
 
 **Task 4.3**: Add CLI flags for container control
-- **File**: `cmd/kiro-krew/cmd/eval.go`  
+- **File**: `cmd/howmux/cmd/eval.go`  
 - **Acceptance**: `--sandbox`, `--no-sandbox`, `--resource-limit` flags control container usage
 - **Dependencies**: Task 4.2
 
@@ -140,29 +140,29 @@ docker version
 go test ./internal/eval/sandbox/... -v
 
 # Test project detection
-go run ./cmd/kiro-krew eval --sandbox --list architect
+go run ./cmd/howmux eval --sandbox --list architect
 
 # Run containerized eval test
-go run ./cmd/kiro-krew eval --sandbox architect basic-spec-generation
+go run ./cmd/howmux eval --sandbox architect basic-spec-generation
 
 # Verify GitHub operations are mocked (should show log entries, not real API calls)
-go run ./cmd/kiro-krew eval --sandbox builder create-github-issue
+go run ./cmd/howmux eval --sandbox builder create-github-issue
 
 # Test resource limits (should timeout)  
-KIRO_KREW_EVAL_TIMEOUT=1s go run ./cmd/kiro-krew eval --sandbox builder long-running-task
+KIRO_KREW_EVAL_TIMEOUT=1s go run ./cmd/howmux eval --sandbox builder long-running-task
 
 # Verify cleanup (no dangling containers)
-docker ps -a | grep kiro-krew-eval
+docker ps -a | grep howmux-eval
 
 # Run full eval suite with sandboxing
-go run ./cmd/kiro-krew eval --sandbox
+go run ./cmd/howmux eval --sandbox
 ```
 
 ## Technical Specifications
 
 ### Container Execution Flow
 1. **Project Analysis**: Detect project type, generate appropriate Dockerfile
-2. **Image Build**: Create custom image with detected toolchain + kiro-krew + kiro-cli
+2. **Image Build**: Create custom image with detected toolchain + howmux + kiro-cli
 3. **Container Start**: Launch with resource limits, copy project code to `/workspace`
 4. **Skill Mocking**: Replace GitHub CLI skill with mock version 
 5. **Agent Execution**: Run kiro-cli with test prompt in isolated environment

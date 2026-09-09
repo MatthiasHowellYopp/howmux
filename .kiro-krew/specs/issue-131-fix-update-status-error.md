@@ -105,7 +105,7 @@ case updateCheckMsg:
 ```bash
 # Test with a repository that has releases
 # Should show normal update status
-./kiro-krew
+./howmux
 # Run: about
 ```
 
@@ -113,7 +113,7 @@ case updateCheckMsg:
 ```bash 
 # Test with repository that has no releases or empty TagName
 # Should hide update status section completely
-./kiro-krew  
+./howmux  
 # Run: about
 # Verify no "Update Status" section appears
 ```

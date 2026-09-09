@@ -2,7 +2,7 @@
 
 **Issue**: #236  
 **Title**: Update planner, builder, and architect agents to use claude-sonnet-4.5  
-**Repository**: jbrinkman/kiro-krew  
+**Repository**: jbrinkman/howmux  
 **Closes**: #236
 
 ## Solution Approach
@@ -17,9 +17,9 @@ The update ensures planner, builder, and architect agents use the latest Claude 
 1. `.kiro/agents/planner.json` - Live planner agent configuration
 2. `.kiro/agents/builder.json` - Live builder agent configuration
 3. `.kiro/agents/architect.json` - Live architect agent configuration
-4. `cmd/kiro-krew/templates/kiro/agents/planner.json` - Template planner configuration
-5. `cmd/kiro-krew/templates/kiro/agents/builder.json` - Template builder configuration
-6. `cmd/kiro-krew/templates/kiro/agents/architect.json` - Template architect configuration
+4. `cmd/howmux/templates/kiro/agents/planner.json` - Template planner configuration
+5. `cmd/howmux/templates/kiro/agents/builder.json` - Template builder configuration
+6. `cmd/howmux/templates/kiro/agents/architect.json` - Template architect configuration
 
 ### Configuration Structure Analysis:
 All six files follow identical JSON structure with only the model field requiring updates:
@@ -47,9 +47,9 @@ This task involves simple, independent JSON file updates with no interdependenci
 
 ### Task 2: Update Template Configurations
 **Acceptance Criteria**:
-- Update `cmd/kiro-krew/templates/kiro/agents/planner.json` model field from `"claude-sonnet-4"` to `"claude-sonnet-4.5"`
-- Update `cmd/kiro-krew/templates/kiro/agents/builder.json` model field from `"claude-sonnet-4"` to `"claude-sonnet-4.5"`
-- Update `cmd/kiro-krew/templates/kiro/agents/architect.json` model field from `"claude-sonnet-4"` to `"claude-sonnet-4.5"`
+- Update `cmd/howmux/templates/kiro/agents/planner.json` model field from `"claude-sonnet-4"` to `"claude-sonnet-4.5"`
+- Update `cmd/howmux/templates/kiro/agents/builder.json` model field from `"claude-sonnet-4"` to `"claude-sonnet-4.5"`
+- Update `cmd/howmux/templates/kiro/agents/architect.json` model field from `"claude-sonnet-4"` to `"claude-sonnet-4.5"`
 - Preserve all other configuration fields exactly as they are
 - Maintain valid JSON formatting
 **Dependencies**: None (can run in parallel with Task 1)
@@ -70,9 +70,9 @@ This task involves simple, independent JSON file updates with no interdependenci
 jq . .kiro/agents/planner.json > /dev/null && echo "planner.json: valid"
 jq . .kiro/agents/builder.json > /dev/null && echo "builder.json: valid"
 jq . .kiro/agents/architect.json > /dev/null && echo "architect.json: valid"
-jq . cmd/kiro-krew/templates/kiro/agents/planner.json > /dev/null && echo "template planner.json: valid"
-jq . cmd/kiro-krew/templates/kiro/agents/builder.json > /dev/null && echo "template builder.json: valid"
-jq . cmd/kiro-krew/templates/kiro/agents/architect.json > /dev/null && echo "template architect.json: valid"
+jq . cmd/howmux/templates/kiro/agents/planner.json > /dev/null && echo "template planner.json: valid"
+jq . cmd/howmux/templates/kiro/agents/builder.json > /dev/null && echo "template builder.json: valid"
+jq . cmd/howmux/templates/kiro/agents/architect.json > /dev/null && echo "template architect.json: valid"
 ```
 
 ### Model Field Verification:
@@ -81,17 +81,17 @@ jq . cmd/kiro-krew/templates/kiro/agents/architect.json > /dev/null && echo "tem
 echo "Live planner model: $(jq -r '.model' .kiro/agents/planner.json)"
 echo "Live builder model: $(jq -r '.model' .kiro/agents/builder.json)"
 echo "Live architect model: $(jq -r '.model' .kiro/agents/architect.json)"
-echo "Template planner model: $(jq -r '.model' cmd/kiro-krew/templates/kiro/agents/planner.json)"
-echo "Template builder model: $(jq -r '.model' cmd/kiro-krew/templates/kiro/agents/builder.json)"
-echo "Template architect model: $(jq -r '.model' cmd/kiro-krew/templates/kiro/agents/architect.json)"
+echo "Template planner model: $(jq -r '.model' cmd/howmux/templates/kiro/agents/planner.json)"
+echo "Template builder model: $(jq -r '.model' cmd/howmux/templates/kiro/agents/builder.json)"
+echo "Template architect model: $(jq -r '.model' cmd/howmux/templates/kiro/agents/architect.json)"
 ```
 
 ### Configuration Synchronization Check:
 ```bash
 # Verify live and template configs remain synchronized (excluding model field)
-diff <(jq 'del(.model)' .kiro/agents/planner.json) <(jq 'del(.model)' cmd/kiro-krew/templates/kiro/agents/planner.json)
-diff <(jq 'del(.model)' .kiro/agents/builder.json) <(jq 'del(.model)' cmd/kiro-krew/templates/kiro/agents/builder.json)
-diff <(jq 'del(.model)' .kiro/agents/architect.json) <(jq 'del(.model)' cmd/kiro-krew/templates/kiro/agents/architect.json)
+diff <(jq 'del(.model)' .kiro/agents/planner.json) <(jq 'del(.model)' cmd/howmux/templates/kiro/agents/planner.json)
+diff <(jq 'del(.model)' .kiro/agents/builder.json) <(jq 'del(.model)' cmd/howmux/templates/kiro/agents/builder.json)
+diff <(jq 'del(.model)' .kiro/agents/architect.json) <(jq 'del(.model)' cmd/howmux/templates/kiro/agents/architect.json)
 ```
 
 ### Expected Validation Results:
@@ -105,5 +105,5 @@ diff <(jq 'del(.model)' .kiro/agents/architect.json) <(jq 'del(.model)' cmd/kiro
 - This is a low-risk configuration update with no breaking changes
 - The change only affects which AI model is used for agent responses
 - All existing agent capabilities, tools, and behaviors are preserved
-- Template synchronization ensures new kiro-krew project initializations use the updated model
+- Template synchronization ensures new howmux project initializations use the updated model
 - Changes take effect immediately for new agent spawns; existing running agents continue with their current configuration until restarted

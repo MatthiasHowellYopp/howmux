@@ -2,7 +2,7 @@
 
 **Issue**: #251  
 **Title**: ACP session creation missing required cwd parameter causing "Improperly formed request" error  
-**Repository**: jbrinkman/kiro-krew  
+**Repository**: jbrinkman/howmux  
 **Closes**: #251
 
 ## Problem Statement
@@ -275,7 +275,7 @@ go test ./internal/tui/... -run TestPlanning -v
 task build
 
 # Run the TUI and test planning tab
-./kiro-krew
+./howmux
 
 # In the REPL:
 # 1. Press Ctrl+Alt+P to switch to planning mode
@@ -286,7 +286,7 @@ task build
 
 ### Manual Verification Checklist
 
-1. **Start kiro-krew and open planning tab**
+1. **Start howmux and open planning tab**
    - No errors in logs during ACP connection
    - `cwd` appears in debug logs during session creation
 
@@ -304,8 +304,8 @@ task build
 ### Expected Log Output
 
 ```
-INFO initializing ACP client with working directory tab_id=planning-1 cwd=/Users/username/projects/kiro-krew
-DEBUG creating ACP session cwd=/Users/username/projects/kiro-krew
+INFO initializing ACP client with working directory tab_id=planning-1 cwd=/Users/username/projects/howmux
+DEBUG creating ACP session cwd=/Users/username/projects/howmux
 INFO streaming ACP session created session_id=<uuid>
 DEBUG sending prompt for streaming session_id=<uuid>
 INFO streaming completed session_id=<uuid>

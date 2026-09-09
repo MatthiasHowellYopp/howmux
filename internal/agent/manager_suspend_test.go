@@ -5,7 +5,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/jbrinkman/kiro-krew/internal/config"
+	"github.com/matthiashowellyopp/howmux/internal/config"
 )
 
 func TestManagerSuspendOnlyAffectsTerminalOutput(t *testing.T) {

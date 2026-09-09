@@ -11,13 +11,13 @@ Closes #21
 
 ## Problem Statement
 
-PR #20 ("Rename project from kiro-krew to howmux") merged as a clean, safe rename, but **claimed completeness it hadn't achieved**. The PR body made assertions that the diff did not verify:
+PR #20 ("Rename project from howmux to howmux") merged as a clean, safe rename, but **claimed completeness it hadn't achieved**. The PR body made assertions that the diff did not verify:
 
 1. **Environment variables claimed as updated but weren't**: The PR body stated `KIRO_KREW_WATCHER_PID` was "updated to `HOWMUX_WATCHER_PID`", but both the writer (`internal/agent/manager.go`) and reader (`internal/hotkey/detector.go`) still used the old name. Because writer and reader **agreed** on the old name, detection kept working and all tests passed — the gap was invisible to CI. (`KIRO_KREW_EVAL_TIMEOUT` in `internal/eval/runner.go` missed the same way.)
 
-2. **Stray references claimed absent but present**: The body said "no stray kiro-krew references remain" — there were ~24-38 in `.go` files, including one user-facing (the About overlay title).
+2. **Stray references claimed absent but present**: The body said "no stray howmux references remain" — there were ~24-38 in `.go` files, including one user-facing (the About overlay title).
 
-3. **Config files not considered part of the rename surface**: Committed runtime artifacts under `.howmux/evals/results/` slipped in because `.gitignore` still pointed at the **old** `.kiro-krew` runtime paths — a config file the "rename the code" pass never examined.
+3. **Config files not considered part of the rename surface**: Committed runtime artifacts under `.howmux/evals/results/` slipped in because `.gitignore` still pointed at the **old** `.howmux` runtime paths — a config file the "rename the code" pass never examined.
 
 This is the **completeness sibling** of the concurrency lesson in #17 (validator-conventions "Anti-Pattern 5: Green Race Detector Without Concurrent Test"). Both are the same meta-failure: **a passing test suite is necessary but not sufficient, and the PR body asserts a property the diff does not verify.** Issue #17 taught the concurrency instance; this issue teaches the completeness / claim-reconciliation instance.
 
@@ -68,7 +68,7 @@ Add guidance to `architect-prompt.md` requiring that when an issue is a sweeping
 | `.kiro/skills/validator-conventions/SKILL.md` | Validator guidance | Add Anti-Pattern 6 for unverified completeness claims |
 | `.kiro/skills/builder-conventions/SKILL.md` | Builder guidance | Add "done" definition for mechanical changes |
 | `.kiro/agents/architect-prompt.md` | Architect guidance | Add full-surface enumeration requirement for mechanical changes |
-| `cmd/kiro-krew/templates/kiro/agents/architect-prompt.md` | Template sync | Mirror architect-prompt.md (not builder/validator skills) |
+| `cmd/howmux/templates/kiro/agents/architect-prompt.md` | Template sync | Mirror architect-prompt.md (not builder/validator skills) |
 
 ### Files Not Modified
 
@@ -137,7 +137,7 @@ awk '/Anti-Pattern 5/,/Anti-Pattern 6/' .kiro/skills/validator-conventions/SKILL
    - Documentation files (`.md`, `README`)
    - Configuration files (`.gitignore`, `Taskfile.yml`, `package.json`, `.releaserc.json`)
    - CI/build workflows (`.github/workflows/*.yml`, Jenkins, Makefiles)
-   - Template-synced files (`cmd/kiro-krew/templates/**`)
+   - Template-synced files (`cmd/howmux/templates/**`)
 3. Requires that for **env-var / symbol renames** the builder verifies **writer and reader are renamed together** — a still-agreeing old-name pair passes tests but is not done (cite the `HOWMUX_WATCHER_PID` / `KIRO_KREW_WATCHER_PID` example from PR #20)
 4. Requires the builder to **reconcile the PR/sentinel description to what actually changed** — do not claim a rename or "no stray references" that a `grep -rn` would contradict
 5. Includes **concrete commands** the builder can run to verify completeness (e.g., `grep -rn "old-token" --include="*.go" --include="*.md" .`)
@@ -157,7 +157,7 @@ grep -niE "gitignore|CI.*workflow|templates|config" .kiro/skills/builder-convent
 grep -niE "writer.*reader|env.*var.*rename|symbol.*rename" .kiro/skills/builder-conventions/SKILL.md
 
 # Verify it's NOT synced (this skill should not appear in templates)
-! grep -r "builder-conventions" cmd/kiro-krew/templates/
+! grep -r "builder-conventions" cmd/howmux/templates/
 ```
 
 ---
@@ -177,7 +177,7 @@ grep -niE "writer.*reader|env.*var.*rename|symbol.*rename" .kiro/skills/builder-
    - Template-synced files (see builder-conventions: `.kiro/agents/*.json`, `.kiro/agents/*.md`, scripts, themes)
 3. Names the **concrete trap from PR #20**: Config files like `.gitignore` and CI workflows are part of the rename surface, not just source files — if the architect doesn't enumerate them, the builder won't check them
 4. Provides guidance that acceptance criteria should state: "All references to `<old-token>` in source, tests, docs, `.gitignore`, CI config, and templates are renamed to `<new-token>`" (or equivalent explicit phrasing)
-5. **Template-synced**: This prompt file MUST be copied to `cmd/kiro-krew/templates/kiro/agents/architect-prompt.md` and `task sync:check` must pass
+5. **Template-synced**: This prompt file MUST be copied to `cmd/howmux/templates/kiro/agents/architect-prompt.md` and `task sync:check` must pass
 
 **Dependencies**: None (can run in parallel with Task 1 and Task 2)
 
@@ -187,7 +187,7 @@ grep -niE "writer.*reader|env.*var.*rename|symbol.*rename" .kiro/skills/builder-
 grep -niE "mechanical.*change|sweep|full surface|gitignore|CI.*config|templates" .kiro/agents/architect-prompt.md
 
 # Verify the template is synced
-diff .kiro/agents/architect-prompt.md cmd/kiro-krew/templates/kiro/agents/architect-prompt.md
+diff .kiro/agents/architect-prompt.md cmd/howmux/templates/kiro/agents/architect-prompt.md
 
 # Verify template sync passes
 task sync:check
@@ -219,7 +219,7 @@ grep -niE "mechanical.*change|full surface|gitignore|CI.*workflow|template" .kir
 task sync:check
 
 # Builder/Validator skills must NOT be in templates (exclusion verified)
-! grep -r "builder-conventions\|validator-conventions" cmd/kiro-krew/templates/kiro/skills/
+! grep -r "builder-conventions\|validator-conventions" cmd/howmux/templates/kiro/skills/
 ```
 
 ### Standard QA
@@ -272,8 +272,8 @@ When designing a mechanical change (rename, move), the architect will:
 
 This guidance addition prevents the exact failure in PR #20:
 - **Architect** would have enumerated `.gitignore` and CI config as part of the rename surface in acceptance criteria
-- **Builder** would have searched `.gitignore` and found the old `.kiro-krew` paths, and verified `KIRO_KREW_WATCHER_PID` writer+reader both moved
-- **Validator** would have rejected the PR body's claim "no stray references" by running `grep -rn kiro-krew` and finding 24–38 instances
+- **Builder** would have searched `.gitignore` and found the old `.howmux` paths, and verified `KIRO_KREW_WATCHER_PID` writer+reader both moved
+- **Validator** would have rejected the PR body's claim "no stray references" by running `grep -rn howmux` and finding 24–38 instances
 
 ---
 
@@ -306,6 +306,6 @@ This guidance addition prevents the exact failure in PR #20:
 | Template sync passes | `task sync:check` exits 0 |
 | QA passes | `task fmt:check && task lint && task test && task build` all exit 0 |
 | Guidance is grep-checkable | All acceptance criteria verifiable via grep + task commands |
-| No template pollution | `*-conventions` skills NOT in `cmd/kiro-krew/templates/` |
+| No template pollution | `*-conventions` skills NOT in `cmd/howmux/templates/` |
 
 All acceptance criteria must be met in one PR. No phased delivery.

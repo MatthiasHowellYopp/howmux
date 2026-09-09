@@ -9,7 +9,7 @@ Project-specific conventions, patterns, and best practices for the builder agent
 
 ## Mandatory Template Synchronization
 
-**Critical for Self-Hosting**: Kiro Krew uses itself to build itself. Live project files and embedded templates must stay in sync so that `kiro-krew init` and `kiro-krew update` always deploy current configurations.
+**Critical for Self-Hosting**: Kiro Krew uses itself to build itself. Live project files and embedded templates must stay in sync so that `howmux init` and `howmux update` always deploy current configurations.
 
 Sync is **one-way** (live → template). CI enforces this via `task sync:check` in the Validate PR workflow.
 
@@ -17,13 +17,13 @@ Sync is **one-way** (live → template). CI enforces this via `task sync:check` 
 
 | Live Path | Template Path |
 |-----------|---------------|
-| `.kiro/agents/*.json` | `cmd/kiro-krew/templates/kiro/agents/` |
-| `.kiro/agents/*.md` | `cmd/kiro-krew/templates/kiro/agents/` |
-| `.kiro-krew/scripts/*.sh` | `cmd/kiro-krew/templates/kiro-krew/scripts/` |
-| `.kiro-krew/themes/*.yaml` | `cmd/kiro-krew/templates/kiro-krew/themes/` |
-| `.kiro-krew/evals/fixtures/*` | `cmd/kiro-krew/templates/kiro-krew/evals/fixtures/` |
-| `.kiro-krew/evals/rubrics/*` | `cmd/kiro-krew/templates/kiro-krew/evals/rubrics/` |
-| `.kiro-krew/evals/cases/**/*` | `cmd/kiro-krew/templates/kiro-krew/evals/cases/` |
+| `.kiro/agents/*.json` | `cmd/howmux/templates/kiro/agents/` |
+| `.kiro/agents/*.md` | `cmd/howmux/templates/kiro/agents/` |
+| `.howmux/scripts/*.sh` | `cmd/howmux/templates/howmux/scripts/` |
+| `.howmux/themes/*.yaml` | `cmd/howmux/templates/howmux/themes/` |
+| `.howmux/evals/fixtures/*` | `cmd/howmux/templates/howmux/evals/fixtures/` |
+| `.howmux/evals/rubrics/*` | `cmd/howmux/templates/howmux/evals/rubrics/` |
+| `.howmux/evals/cases/**/*` | `cmd/howmux/templates/howmux/evals/cases/` |
 
 ### Exclusion Patterns
 
@@ -51,20 +51,20 @@ Run the appropriate commands after modifying any template-synchronized files.
 
 ```bash
 # Agent files (JSON configs and prompt files)
-cp .kiro/agents/*.json cmd/kiro-krew/templates/kiro/agents/
-cp .kiro/agents/*.md cmd/kiro-krew/templates/kiro/agents/
+cp .kiro/agents/*.json cmd/howmux/templates/kiro/agents/
+cp .kiro/agents/*.md cmd/howmux/templates/kiro/agents/
 
 # Scripts
-cp .kiro-krew/scripts/*.sh cmd/kiro-krew/templates/kiro-krew/scripts/
+cp .howmux/scripts/*.sh cmd/howmux/templates/howmux/scripts/
 
 # Themes
-cp .kiro-krew/themes/*.yaml cmd/kiro-krew/templates/kiro-krew/themes/
+cp .howmux/themes/*.yaml cmd/howmux/templates/howmux/themes/
 
 # Evals (excluding results directory)
-cp .kiro-krew/evals/fixtures/* cmd/kiro-krew/templates/kiro-krew/evals/fixtures/
-cp .kiro-krew/evals/rubrics/* cmd/kiro-krew/templates/kiro-krew/evals/rubrics/
-mkdir -p cmd/kiro-krew/templates/kiro-krew/evals/cases/
-cp -r .kiro-krew/evals/cases/* cmd/kiro-krew/templates/kiro-krew/evals/cases/
+cp .howmux/evals/fixtures/* cmd/howmux/templates/howmux/evals/fixtures/
+cp .howmux/evals/rubrics/* cmd/howmux/templates/howmux/evals/rubrics/
+mkdir -p cmd/howmux/templates/howmux/evals/cases/
+cp -r .howmux/evals/cases/* cmd/howmux/templates/howmux/evals/cases/
 ```
 
 ### Verification
@@ -101,14 +101,14 @@ Include sync verification status in sentinel files:
 - Sync Verification: ✅ PASS
 
 **Sync Commands Used**:
-- `cp .kiro/agents/builder.json cmd/kiro-krew/templates/kiro/agents/`
+- `cp .kiro/agents/builder.json cmd/howmux/templates/kiro/agents/`
 ```
 
 ## Implementation Patterns
 
 ### Quality Assurance
 - Run ALL discovered QA commands before completion
-- Use QA discovery results from `.kiro-krew/artifacts/qa-tools.md`
+- Use QA discovery results from `.howmux/artifacts/qa-tools.md`
 - Document specific QA command sources (CI vs build tool)
 
 ### File Modifications
@@ -118,7 +118,7 @@ Include sync verification status in sentinel files:
 - Document changes in sentinel files including sync status
 
 ### Error Recovery
-- Address validator feedback from `.kiro-krew/artifacts/validator-<issue>.md`
+- Address validator feedback from `.howmux/artifacts/validator-<issue>.md`
 - Focus on specific failing commands identified by validator
 - Include sync verification in error recovery process
 - Document how feedback was incorporated
@@ -180,14 +180,14 @@ grep -rn "old-token" \
 grep -rn "old-token" .github/workflows/ .gitlab-ci.yml Makefile Jenkinsfile
 
 # Template-synced files (see Template Synchronization section)
-grep -rn "old-token" cmd/kiro-krew/templates/
+grep -rn "old-token" cmd/howmux/templates/
 ```
 
 ### Critical: Config Files Are Part of the Surface
 
 Config files like `.gitignore`, `Taskfile.yml`, CI workflows (`.github/workflows/*.yml`), and build config are **part of the rename surface**, not ancillary files.
 
-**Example from PR #20**: `.gitignore` still pointed at old `.kiro-krew/` runtime paths after rename to `howmux`, causing committed artifacts under `.howmux/` to slip through (the "rename the code" pass never examined `.gitignore` as part of the surface).
+**Example from PR #20**: `.gitignore` still pointed at old `.howmux/` runtime paths after rename to `howmux`, causing committed artifacts under `.howmux/` to slip through (the "rename the code" pass never examined `.gitignore` as part of the surface).
 
 **Must check**:
 - `.gitignore` — runtime path references
@@ -232,7 +232,7 @@ grep -rn "os.Getenv.*OLD_NAME" --include="*.go" .
 - "No stray references" if repo-wide search finds them
 - "All Z updated" if writer/reader pairs disagree or config files still use old names
 
-**PR body / sentinel file claims become testable criteria** — the validator will check them. If you claim "no stray kiro-krew references remain", the validator will run `grep -rn "kiro-krew"` and fail validation if it finds matches.
+**PR body / sentinel file claims become testable criteria** — the validator will check them. If you claim "no stray howmux references remain", the validator will run `grep -rn "howmux"` and fail validation if it finds matches.
 
 ### Completeness Verification Commands
 
@@ -275,27 +275,27 @@ grep -rn "old-token" --include="*.go" . | wc -l
 
 ### Real-World Example: PR #20
 
-**Issue**: Rename project from `kiro-krew` to `howmux`
+**Issue**: Rename project from `howmux` to `howmux`
 
 **What "done" should have meant**:
-1. Repo-wide search for `kiro-krew` returns only justified/historical matches
+1. Repo-wide search for `howmux` returns only justified/historical matches
 2. Config files (`.gitignore`, CI workflows) updated to new name
 3. Env vars renamed in both writer AND reader
 4. Template-synced files updated (agent configs, scripts)
 
 **What actually happened**:
-1. ~24-38 stray `kiro-krew` references in `.go` files (including user-facing "Kiro Krew" in About overlay)
-2. `.gitignore` still pointed at `.kiro-krew/` → committed artifacts under `.howmux/` slipped through
+1. ~24-38 stray `howmux` references in `.go` files (including user-facing "Kiro Krew" in About overlay)
+2. `.gitignore` still pointed at `.howmux/` → committed artifacts under `.howmux/` slipped through
 3. Env var `KIRO_KREW_WATCHER_PID` unchanged in both writer and reader (tests passed but rename incomplete)
 
 **How to prevent**:
 ```bash
 # Before claiming "done", run:
-grep -rn "kiro-krew" --include="*.go" . | wc -l
+grep -rn "howmux" --include="*.go" . | wc -l
 # Expected: 0 (or only justified matches documented in PR)
 
 # Check config files
-grep -rn "kiro-krew" .gitignore .github/workflows/ Taskfile.yml
+grep -rn "howmux" .gitignore .github/workflows/ Taskfile.yml
 # Expected: 0
 
 # Check env vars moved together

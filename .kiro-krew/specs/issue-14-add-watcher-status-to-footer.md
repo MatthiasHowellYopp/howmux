@@ -230,13 +230,13 @@ Run these commands to verify the implementation:
 
 ```bash
 # Build the project
-go build ./cmd/kiro-krew
+go build ./cmd/howmux
 
 # Run tests
 go test ./internal/tui/... -v
 
 # Run the application and verify visually
-./kiro-krew
+./howmux
 # Then in the REPL:
 # 1. Check footer shows "watcher: inactive"
 # 2. Run "watch start" - footer should update to show "watcher: active (owner/repo, interval)"

@@ -19,10 +19,10 @@ Implement optional console logging using Go's `io.MultiWriter` to tee agent stdo
 ### Files to Modify
 - `internal/config/config.go` - Add ConsoleLogging field to Config struct
 - `internal/agent/manager.go` - Implement tee writer logic in Spawn() and retryAgent() methods
-- `.kiro-krew/config.yaml` (template) - Document new console_logging option
+- `.howmux/config.yaml` (template) - Document new console_logging option
 
 ### Files Referenced (No Changes)
-- `cmd/kiro-krew/main.go` - Uses config.Load(), will automatically pick up new field
+- `cmd/howmux/main.go` - Uses config.Load(), will automatically pick up new field
 - `internal/tui/tui.go` - Consumes manager, no changes needed
 - `internal/watcher/watcher.go` - Uses manager, no changes needed
 
@@ -76,7 +76,7 @@ No external API changes or database modifications required.
 - No performance impact when console logging disabled
 
 ### Task 3: Update Configuration Template
-**File**: Template config file for `kiro-krew init`
+**File**: Template config file for `howmux init`
 **Changes**:
 - Add commented example: `# console_logging: false  # Enable real-time agent output in console`
 
@@ -89,8 +89,8 @@ No external API changes or database modifications required.
 ```bash
 # Test 1: Verify config loading with new field
 cd test-project
-echo "console_logging: true" >> .kiro-krew/config.yaml
-kiro-krew # Should start without config errors
+echo "console_logging: true" >> .howmux/config.yaml
+howmux # Should start without config errors
 
 # Test 2: Test console output enabled
 # (Configure console_logging: true, spawn agent, verify output appears in console)

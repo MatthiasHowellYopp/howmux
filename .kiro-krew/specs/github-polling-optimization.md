@@ -27,7 +27,7 @@ This approach maintains responsiveness while being respectful of API limits and 
 
 ### Configuration Files
 - `internal/config/config.go` - Add new polling configuration options
-- `.kiro-krew/config.yaml` - Update with new polling parameters
+- `.howmux/config.yaml` - Update with new polling parameters
 
 ### TUI Integration Files
 - `internal/tui/tui.go` - Add async polling status indicators
@@ -160,7 +160,7 @@ polling:
 
 ```bash
 # Test async polling doesn't block UI
-kiro-krew
+howmux
 # In TUI: verify input remains responsive during polling
 
 # Test rate limit handling
@@ -174,7 +174,7 @@ poll status  # Should show cache usage
 
 # Test configuration
 # Verify all new config options load correctly
-grep -A 10 "polling:" .kiro-krew/config.yaml
+grep -A 10 "polling:" .howmux/config.yaml
 
 # Test graceful shutdown
 # Start watcher, stop immediately - should not hang

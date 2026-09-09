@@ -27,10 +27,10 @@ Extend the existing `scoreDeterministic` function in `internal/eval/runner.go` t
 - `internal/eval/runner_test.go` (new) - Unit tests for checker implementations
 
 ### Files Referenced for Context
-- `.kiro-krew/evals/rubrics/planner.yaml` - Contains `acceptance_criteria_testability` criterion
-- `.kiro-krew/evals/rubrics/validator.yaml` - Contains `test_execution` criterion
-- `.kiro-krew/evals/rubrics/builder.yaml` - Contains `code_correctness` and `test_coverage` criteria
-- `.kiro-krew/evals/cases/*/case-1.yaml` - Test case examples for validation
+- `.howmux/evals/rubrics/planner.yaml` - Contains `acceptance_criteria_testability` criterion
+- `.howmux/evals/rubrics/validator.yaml` - Contains `test_execution` criterion
+- `.howmux/evals/rubrics/builder.yaml` - Contains `code_correctness` and `test_coverage` criteria
+- `.howmux/evals/cases/*/case-1.yaml` - Test case examples for validation
 
 ## Team Orchestration
 
@@ -161,24 +161,24 @@ go test ./internal/eval/... -v
 ### Integration Testing
 ```bash
 # Run evaluation on existing test cases
-go run ./cmd/kiro-krew eval
+go run ./cmd/howmux eval
 
 # Verify no criteria are skipped
-grep -r "skipped.*true" .kiro-krew/evals/results/*/
+grep -r "skipped.*true" .howmux/evals/results/*/
 ```
 
 ### Regression Testing  
 ```bash
 # Compare results before/after implementation
-go run ./cmd/kiro-krew eval > before.txt
+go run ./cmd/howmux eval > before.txt
 # (implement changes)
-go run ./cmd/kiro-krew eval > after.txt
+go run ./cmd/howmux eval > after.txt
 diff before.txt after.txt
 ```
 
 ### Performance Validation
 ```bash
-time go run ./cmd/kiro-krew eval
+time go run ./cmd/howmux eval
 ```
 
 ## Success Metrics

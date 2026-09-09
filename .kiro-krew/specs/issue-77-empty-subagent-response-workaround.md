@@ -18,7 +18,7 @@ Due to a bug in Kiro CLI, subagents occasionally return empty responses even whe
 4. **Preserve Existing Logic**: Maintain all current retry escalation behavior for legitimate failures
 
 ### Architectural Decisions
-- **Sentinel File Approach**: Each agent writes a well-known file (`.kiro-krew/artifacts/<agent>-<issue>.md`) on completion, avoiding false positives from pre-existing files
+- **Sentinel File Approach**: Each agent writes a well-known file (`.howmux/artifacts/<agent>-<issue>.md`) on completion, avoiding false positives from pre-existing files
 - **Non-Breaking Implementation**: Workaround activates only for empty responses, preserving normal failure handling
 - **Clear Separation**: All workaround code is isolated and marked with clear comments for easy removal
 
@@ -46,7 +46,7 @@ Each agent declares a `sentinelFile` path pattern. The agent writes this file up
 ```json
 {
   "name": "architect",
-  "sentinelFile": ".kiro-krew/artifacts/architect-<issue>.md",
+  "sentinelFile": ".howmux/artifacts/architect-<issue>.md",
   "prompt": "file://./architect-prompt.md",
   "tools": ["read", "write", "shell"],
   "allowedTools": ["read", "write", "shell"],
@@ -58,7 +58,7 @@ Each agent declares a `sentinelFile` path pattern. The agent writes this file up
 ```json
 {
   "name": "builder",
-  "sentinelFile": ".kiro-krew/artifacts/builder-<issue>.md",
+  "sentinelFile": ".howmux/artifacts/builder-<issue>.md",
   "description": "Focused engineering agent that executes ONE task at a time. Builds, implements, creates.",
   "prompt": "file://./builder-prompt.md",
   "tools": ["read", "write", "shell"],
@@ -72,7 +72,7 @@ Each agent declares a `sentinelFile` path pattern. The agent writes this file up
 ```json
 {
   "name": "validator",
-  "sentinelFile": ".kiro-krew/artifacts/validator-<issue>.md",
+  "sentinelFile": ".howmux/artifacts/validator-<issue>.md",
   "description": "Read-only validation agent that verifies task completion against acceptance criteria.",
   "prompt": "file://./validator-prompt.md",
   "tools": ["read", "write", "shell"],
@@ -92,7 +92,7 @@ Note: Validator gains `write` permission scoped to creating its sentinel file on
 ```json
 {
   "name": "documenter",
-  "sentinelFile": ".kiro-krew/artifacts/documenter-<issue>.md",
+  "sentinelFile": ".howmux/artifacts/documenter-<issue>.md",
   "description": "Generates documentation for completed and validated features.",
   "prompt": "file://./documenter-prompt.md",
   "tools": ["read", "write"],
@@ -116,20 +116,20 @@ When a subagent returns an empty response, before escalating to the next retry s
 
 1. **Check for Sentinel File**: Read the agent's `sentinelFile` from its JSON config and check existence:
    ```bash
-   test -f .kiro-krew/artifacts/<agent>-<issue>.md
+   test -f .howmux/artifacts/<agent>-<issue>.md
    ```
 2. **Handle Detection Results**:
    - **If sentinel file exists**: Read its contents for context, log incident with "empty-response-workaround" label, and continue workflow normally
    - **If sentinel file missing**: Proceed with normal retry escalation
 
-Each subagent writes a sentinel file at `.kiro-krew/artifacts/<agent>-<issue>.md` upon successful completion, including a summary of work performed.
+Each subagent writes a sentinel file at `.howmux/artifacts/<agent>-<issue>.md` upon successful completion, including a summary of work performed.
 ```
 
 ## Step-by-Step Task Breakdown
 
 ### Task 1: Update Agent Configuration Files
 **Acceptance Criteria:**
-- All agent JSON files contain `sentinelFile` field with path `.kiro-krew/artifacts/<agent>-<issue>.md`
+- All agent JSON files contain `sentinelFile` field with path `.howmux/artifacts/<agent>-<issue>.md`
 - Validator gains `write` permission scoped to sentinel file
 - JSON syntax is valid and parseable
 
@@ -158,10 +158,10 @@ jq '.sentinelFile' .kiro/agents/architect.json
 grep -A 10 "TEMPORARY WORKAROUND" .kiro/agents/krew-lead-prompt.md
 
 # Test sentinel file detection
-mkdir -p .kiro-krew/artifacts
-touch .kiro-krew/artifacts/architect-77.md
-test -f .kiro-krew/artifacts/architect-77.md && echo "Sentinel detection works"
-rm .kiro-krew/artifacts/architect-77.md
+mkdir -p .howmux/artifacts
+touch .howmux/artifacts/architect-77.md
+test -f .howmux/artifacts/architect-77.md && echo "Sentinel detection works"
+rm .howmux/artifacts/architect-77.md
 ```
 
 ### Task 3: Test Workaround Implementation  
@@ -174,12 +174,12 @@ rm .kiro-krew/artifacts/architect-77.md
 **Validation Commands:**
 ```bash
 # Create test sentinel and verify detection
-mkdir -p .kiro-krew/artifacts
-echo "# Test" > .kiro-krew/artifacts/builder-77.md
-test -f .kiro-krew/artifacts/builder-77.md && echo "Test sentinel detected"
+mkdir -p .howmux/artifacts
+echo "# Test" > .howmux/artifacts/builder-77.md
+test -f .howmux/artifacts/builder-77.md && echo "Test sentinel detected"
 
 # Clean up test
-rm .kiro-krew/artifacts/builder-77.md
+rm .howmux/artifacts/builder-77.md
 ```
 
 ## Team Orchestration
@@ -216,12 +216,12 @@ for agent in architect builder validator documenter; do
 done
 
 # Test sentinel file detection
-mkdir -p .kiro-krew/artifacts
-echo "# Test summary" > .kiro-krew/artifacts/architect-99.md
-test -f .kiro-krew/artifacts/architect-99.md && echo "✓ Sentinel detection works"
+mkdir -p .howmux/artifacts
+echo "# Test summary" > .howmux/artifacts/architect-99.md
+test -f .howmux/artifacts/architect-99.md && echo "✓ Sentinel detection works"
 
 # Cleanup
-rm -f .kiro-krew/artifacts/architect-99.md
+rm -f .howmux/artifacts/architect-99.md
 ```
 
 ### Runtime Validation

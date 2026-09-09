@@ -34,9 +34,9 @@ Add explicit background color to `OverlayContent` style to match `OverlayBorder`
 ### Secondary Files (Validation/Testing)
 - `internal/tui/tui.go` - Overlay rendering logic (no changes needed)
 - `internal/tui/commands.go` - Status command implementation (no changes needed)
-- `.kiro-krew/themes/high-contrast.yaml` - High-contrast theme definition (reference only)
-- `.kiro-krew/themes/default.yaml` - Default theme definition (validation)
-- `.kiro-krew/themes/light.yaml` - Light theme definition (validation)
+- `.howmux/themes/high-contrast.yaml` - High-contrast theme definition (reference only)
+- `.howmux/themes/default.yaml` - Default theme definition (validation)
+- `.howmux/themes/light.yaml` - Light theme definition (validation)
 
 ## Team Orchestration
 
@@ -88,10 +88,10 @@ OverlayContent: lipgloss.NewStyle().
 ### Build and Basic Functionality
 ```bash
 # Build the application
-go build -o kiro-krew ./cmd/kiro-krew
+go build -o howmux ./cmd/howmux
 
 # Launch TUI (requires terminal)
-./kiro-krew
+./howmux
 ```
 
 ### Theme Testing Sequence

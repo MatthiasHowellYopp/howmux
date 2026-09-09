@@ -19,7 +19,7 @@ The current evaluation framework in `internal/eval/runner.go` will be enhanced w
 
 ### Files to Modify
 
-- `cmd/kiro-krew/cmd/eval.go` - Enhanced CLI command interface
+- `cmd/howmux/cmd/eval.go` - Enhanced CLI command interface
 - `internal/eval/runner.go` - Core evaluation engine with progressive execution
 - `internal/eval/types.go` - Extended data structures for enhanced functionality
 - `internal/eval/progress.go` - **NEW** - Progress tracking and display
@@ -27,9 +27,9 @@ The current evaluation framework in `internal/eval/runner.go` will be enhanced w
 
 ### Files to Reference
 
-- `.kiro-krew/evals/cases/*/` - Test case YAML files (for schema extension)
-- `.kiro-krew/evals/results/` - Result directory structure
-- `cmd/kiro-krew/cmd/root.go` - CLI command registration
+- `.howmux/evals/cases/*/` - Test case YAML files (for schema extension)
+- `.howmux/evals/results/` - Result directory structure
+- `cmd/howmux/cmd/root.go` - CLI command registration
 
 ## Team Orchestration
 
@@ -46,14 +46,14 @@ This enhancement requires coordinated changes across multiple components:
 ### Task 1: Extend CLI Command Interface
 
 **Acceptance Criteria**:
-- Support `kiro-krew eval agent testcase` for single test execution
-- Support `kiro-krew eval agent --case=testcase` alternative syntax
-- Support `kiro-krew eval agent --list` to show available test cases
-- Support `kiro-krew eval agent --resume` for interrupted evaluation resumption
-- Maintain backward compatibility with `kiro-krew eval agent`
+- Support `howmux eval agent testcase` for single test execution
+- Support `howmux eval agent --case=testcase` alternative syntax
+- Support `howmux eval agent --list` to show available test cases
+- Support `howmux eval agent --resume` for interrupted evaluation resumption
+- Maintain backward compatibility with `howmux eval agent`
 
 **Implementation**:
-- Modify `cmd/kiro-krew/cmd/eval.go` to parse new flags and arguments
+- Modify `cmd/howmux/cmd/eval.go` to parse new flags and arguments
 - Add validation for test case names and agent names
 - Implement list functionality to enumerate available tests
 
@@ -141,29 +141,29 @@ This enhancement requires coordinated changes across multiple components:
 
 ```bash
 # Test selective execution
-kiro-krew eval architect basic-spec-generation
-kiro-krew eval architect --case=basic-spec-generation
+howmux eval architect basic-spec-generation
+howmux eval architect --case=basic-spec-generation
 
 # Test list functionality
-kiro-krew eval architect --list
+howmux eval architect --list
 
 # Test progress and error handling
-kiro-krew eval architect  # Should show progress and handle errors gracefully
+howmux eval architect  # Should show progress and handle errors gracefully
 
 # Test resumption
 # (Interrupt evaluation mid-run)
-kiro-krew eval architect --resume
+howmux eval architect --resume
 
 # Verify result files contain error details
-cat .kiro-krew/evals/results/*/architect.json | jq '.cases[] | select(.case_name == "basic-spec-generation") | .error_context'
+cat .howmux/evals/results/*/architect.json | jq '.cases[] | select(.case_name == "basic-spec-generation") | .error_context'
 
 # Test configurable thresholds
 # (Add min_score: 90 to a test case YAML)
-kiro-krew eval architect basic-spec-generation  # Should show custom threshold
+howmux eval architect basic-spec-generation  # Should show custom threshold
 
 # Verify progressive saving
 # (Check results directory during evaluation)
-ls -la .kiro-krew/evals/results/*/
+ls -la .howmux/evals/results/*/
 ```
 
 ## Implementation Priority

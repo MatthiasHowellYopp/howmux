@@ -216,10 +216,10 @@ The menu should be positioned above the footer input line. The `layerOverlay()` 
 ### Build and Manual Testing
 ```bash
 # Build the application
-go build ./cmd/kiro-krew
+go build ./cmd/howmux
 
 # Run and test autocomplete functionality
-./kiro-krew
+./howmux
 
 # Test scenarios in REPL:
 # 1. Type "w" — should show ghost text AND dropdown menu
