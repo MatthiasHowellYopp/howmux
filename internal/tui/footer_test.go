@@ -6,6 +6,7 @@ import (
 
 	"github.com/jbrinkman/kiro-krew/internal/agent"
 	"github.com/jbrinkman/kiro-krew/internal/config"
+	"github.com/jbrinkman/kiro-krew/internal/watcher"
 )
 
 func TestFooterRendersExactly3Lines(t *testing.T) {
@@ -16,8 +17,9 @@ func TestFooterRendersExactly3Lines(t *testing.T) {
 	styles := NewStyles(theme)
 	autocomplete := NewAutocompleteInput(registry, styles)
 	tabManager := NewTabManager()
+	w := watcher.New(cfg, manager)
 
-	fm := NewFooterManager(styles, cfg, autocomplete, tabManager)
+	fm := NewFooterManager(styles, cfg, w, autocomplete, tabManager)
 	fm.Resize(80, 24)
 
 	tests := []struct {
@@ -49,8 +51,9 @@ func TestFooterDropdownRendersExactly3LinesWithoutDropdown(t *testing.T) {
 	styles := NewStyles(theme)
 	autocomplete := NewAutocompleteInput(registry, styles)
 	tabManager := NewTabManager()
+	w := watcher.New(cfg, manager)
 
-	fm := NewFooterManager(styles, cfg, autocomplete, tabManager)
+	fm := NewFooterManager(styles, cfg, w, autocomplete, tabManager)
 	fm.Resize(80, 24)
 
 	tests := []struct {
