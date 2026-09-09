@@ -3,7 +3,7 @@ package agent
 import (
 	"testing"
 
-	"github.com/jbrinkman/kiro-krew/internal/config"
+	"github.com/matthiashowellyopp/howmux/internal/config"
 )
 
 func TestExtractBaseBranchOverride(t *testing.T) {

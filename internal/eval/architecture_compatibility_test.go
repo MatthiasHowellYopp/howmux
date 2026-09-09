@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/jbrinkman/kiro-krew/internal/eval/sandbox"
+	"github.com/matthiashowellyopp/howmux/internal/eval/sandbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

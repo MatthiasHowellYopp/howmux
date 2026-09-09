@@ -38,7 +38,7 @@ fi
 
 echo "💡 Next steps:"
 echo "   1. Run Task 2-5 to synchronize all differences"
-echo "   2. Verify with 'kiro-krew init' in test directory" 
+echo "   2. Verify with 'howmux init' in test directory" 
 echo "   3. Ensure fixtures directory is properly created"
 
 exit 1

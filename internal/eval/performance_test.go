@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/docker/docker/api/types/container"
-	"github.com/jbrinkman/kiro-krew/internal/eval/sandbox"
+	"github.com/matthiashowellyopp/howmux/internal/eval/sandbox"
 	"github.com/stretchr/testify/require"
 )
 

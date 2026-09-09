@@ -15,8 +15,8 @@ import (
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
-	"github.com/jbrinkman/kiro-krew/internal/config"
-	"github.com/jbrinkman/kiro-krew/internal/eval/sandbox"
+	"github.com/matthiashowellyopp/howmux/internal/config"
+	"github.com/matthiashowellyopp/howmux/internal/eval/sandbox"
 	"gopkg.in/yaml.v3"
 )
 
@@ -154,7 +154,7 @@ func RunCleanup() error {
 	fmt.Printf("✅ Cleanup complete: %d/%d containers removed\n", cleaned, len(containers))
 
 	// Prompt about Dockerfile preservation
-	dockerfileDir := filepath.Join(".kiro-krew", "evals", "tmp", "dockerfiles")
+	dockerfileDir := filepath.Join(".howmux", "evals", "tmp", "dockerfiles")
 	if entries, err := os.ReadDir(dockerfileDir); err == nil && len(entries) > 0 {
 		fmt.Printf("📁 Found %d preserved Dockerfiles in %s\n", len(entries), dockerfileDir)
 		fmt.Println("💡 These are preserved for debugging. Remove manually if no longer needed.")
@@ -221,7 +221,7 @@ func runSingleTestCase(agent string, testcase string) error {
 	}
 
 	timestamp := generateTimestampPrefix()
-	resultsDir := filepath.Join(".kiro-krew", "evals", "results", timestamp)
+	resultsDir := filepath.Join(".howmux", "evals", "results", timestamp)
 	if err := os.MkdirAll(resultsDir, 0755); err != nil {
 		return fmt.Errorf("failed to create results directory: %w", err)
 	}
@@ -320,7 +320,7 @@ func Run(agent string, cConfig *ContainerConfig) error {
 	fmt.Printf(" %v\n", startupTime)
 
 	// Task 2: Validate rubrics directory exists
-	rubricsDir := filepath.Join(".kiro-krew", "evals", "rubrics")
+	rubricsDir := filepath.Join(".howmux", "evals", "rubrics")
 	if _, err := os.Stat(rubricsDir); os.IsNotExist(err) {
 		return fmt.Errorf("❌ Fatal: rubrics directory not found at %s", rubricsDir)
 	}
@@ -341,11 +341,11 @@ func Run(agent string, cConfig *ContainerConfig) error {
 	}
 
 	if len(rubrics) == 0 {
-		return fmt.Errorf("❌ Fatal: no rubrics found in .kiro-krew/evals/rubrics/")
+		return fmt.Errorf("❌ Fatal: no rubrics found in .howmux/evals/rubrics/")
 	}
 
 	timestamp := generateTimestampPrefix()
-	resultsDir := filepath.Join(".kiro-krew", "evals", "results", timestamp+"-"+gitHash)
+	resultsDir := filepath.Join(".howmux", "evals", "results", timestamp+"-"+gitHash)
 	if err := os.MkdirAll(resultsDir, 0755); err != nil {
 		return fmt.Errorf("failed to create results directory: %w", err)
 	}
@@ -1164,7 +1164,7 @@ func parseMaxScore(scoring string) int {
 }
 
 func loadRubrics(agentFilter string) ([]Rubric, error) {
-	dir := filepath.Join(".kiro-krew", "evals", "rubrics")
+	dir := filepath.Join(".howmux", "evals", "rubrics")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read rubrics directory: %w", err)
@@ -1195,7 +1195,7 @@ func loadRubrics(agentFilter string) ([]Rubric, error) {
 }
 
 func loadCases(agent string) ([]TestCase, error) {
-	dir := filepath.Join(".kiro-krew", "evals", "cases", agent)
+	dir := filepath.Join(".howmux", "evals", "cases", agent)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read cases directory for %s: %w", agent, err)
@@ -1248,7 +1248,7 @@ func getGitShortHash() (string, error) {
 func runWithResume(agent string) error {
 	fmt.Println("🔄 Scanning for incomplete evaluations...")
 
-	resultsBaseDir := filepath.Join(".kiro-krew", "evals", "results")
+	resultsBaseDir := filepath.Join(".howmux", "evals", "results")
 	entries, err := os.ReadDir(resultsBaseDir)
 	if err != nil {
 		return fmt.Errorf("❌ failed to read results directory: %w", err)
@@ -1681,7 +1681,7 @@ func RunPerformanceInvestigation(agent string) error {
 	// Create results directory for performance report
 	timestamp := generateTimestampPrefix()
 	gitHash, _ := getGitShortHash()
-	resultsDir := filepath.Join(".kiro-krew", "evals", "results", timestamp+"-perf-"+gitHash)
+	resultsDir := filepath.Join(".howmux", "evals", "results", timestamp+"-perf-"+gitHash)
 	if err := os.MkdirAll(resultsDir, 0755); err != nil {
 		return fmt.Errorf("failed to create results directory: %w", err)
 	}
@@ -1733,7 +1733,7 @@ func RunPerformanceInvestigation(agent string) error {
 
 // saveDebugContainerInfo saves container registry information for debug mode
 func saveDebugContainerInfo(containerID, imageName, customImageName, platform, agent string) error {
-	debugDir := filepath.Join(".kiro-krew", "evals", "tmp", "debug")
+	debugDir := filepath.Join(".howmux", "evals", "tmp", "debug")
 	if err := os.MkdirAll(debugDir, 0755); err != nil {
 		return fmt.Errorf("creating debug directory: %w", err)
 	}

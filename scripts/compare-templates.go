@@ -38,7 +38,7 @@ func main() {
 		MissingInLive:      []string{},
 	}
 
-	templateBase := "cmd/kiro-krew/templates"
+	templateBase := "cmd/howmux/templates"
 
 	// --agents-only compares just the agent configs (used by `task sync:check`,
 	// which relies on this tool's JSON-aware, local-only-allowlist comparison
@@ -52,12 +52,12 @@ func main() {
 		report.Summary.TotalTemplateFiles = countFiles(templateBase + "/kiro/agents")
 		report.Summary.TotalLiveFiles = countFiles(".kiro/agents")
 	} else {
-		// Compare kiro-krew directory
-		compareDirectory(templateBase+"/kiro-krew", ".kiro-krew", &report)
+		// Compare howmux directory
+		compareDirectory(templateBase+"/howmux", ".howmux", &report)
 		// Compare kiro directory
 		compareDirectory(templateBase+"/kiro", ".kiro", &report)
 		report.Summary.TotalTemplateFiles = countFiles(templateBase)
-		report.Summary.TotalLiveFiles = countFiles(".kiro-krew") + countFiles(".kiro")
+		report.Summary.TotalLiveFiles = countFiles(".howmux") + countFiles(".kiro")
 	}
 
 	// Calculate summary

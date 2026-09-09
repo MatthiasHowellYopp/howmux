@@ -13,8 +13,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jbrinkman/kiro-krew/internal/config"
-	"github.com/jbrinkman/kiro-krew/internal/github"
+	"github.com/matthiashowellyopp/howmux/internal/config"
+	"github.com/matthiashowellyopp/howmux/internal/github"
 )
 
 type Status string
@@ -226,7 +226,7 @@ func (m *Manager) Spawn(issueNumber int, repo string) (*Agent, error) {
 	log.Printf("[agent] resolved base branch for issue #%d: %s", issueNumber, baseBranch)
 
 	// Create worktree before spawning agent so it runs inside it
-	createScript := filepath.Join(".kiro-krew", "scripts", "worktree-create.sh")
+	createScript := filepath.Join(".howmux", "scripts", "worktree-create.sh")
 	createCmd := exec.Command("bash", createScript, worktreeName, baseBranch)
 	wtOutput, err := createCmd.Output()
 	if err != nil {
@@ -237,7 +237,7 @@ func (m *Manager) Spawn(issueNumber int, repo string) (*Agent, error) {
 	log.Printf("[agent] created worktree at %s", worktreePath)
 
 	// Create per-issue log file for agent output
-	agentLogDir := filepath.Join(".kiro-krew", "logs")
+	agentLogDir := filepath.Join(".howmux", "logs")
 	os.MkdirAll(agentLogDir, 0755)
 	agentLogPath := filepath.Join(agentLogDir, fmt.Sprintf("issue-%d.log", issueNumber))
 	agentLogFile, err := os.OpenFile(agentLogPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
@@ -509,7 +509,7 @@ func (m *Manager) retryAgent(agent *Agent) {
 
 	// Ensure worktree exists (it should from initial spawn, but recreate if needed)
 	if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
-		createScript := filepath.Join(".kiro-krew", "scripts", "worktree-create.sh")
+		createScript := filepath.Join(".howmux", "scripts", "worktree-create.sh")
 		createCmd := exec.Command("bash", createScript, worktreeName, baseBranch)
 		if wtOutput, err := createCmd.Output(); err != nil {
 			log.Printf("[agent] retry failed to create worktree for issue #%d: %v", agent.IssueNumber, err)
@@ -529,7 +529,7 @@ func (m *Manager) retryAgent(agent *Agent) {
 	}
 
 	// Reopen log file for retry (append mode)
-	agentLogPath := filepath.Join(".kiro-krew", "logs", fmt.Sprintf("issue-%d.log", agent.IssueNumber))
+	agentLogPath := filepath.Join(".howmux", "logs", fmt.Sprintf("issue-%d.log", agent.IssueNumber))
 	agentLogFile, err := os.OpenFile(agentLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		log.Printf("[agent] retry failed to open log file for issue #%d: %v", agent.IssueNumber, err)
@@ -610,7 +610,7 @@ func (m *Manager) cleanupWorktree(issueNumber, pid int) error {
 
 // cleanupRetryFile removes the retry count file for the given issue
 func (m *Manager) cleanupRetryFile(issueNumber int) error {
-	retryPath := filepath.Join(".kiro-krew", "retries", fmt.Sprintf("issue-%d.count", issueNumber))
+	retryPath := filepath.Join(".howmux", "retries", fmt.Sprintf("issue-%d.count", issueNumber))
 	if err := os.Remove(retryPath); err != nil {
 		if os.IsNotExist(err) {
 			return nil

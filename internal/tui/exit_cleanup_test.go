@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jbrinkman/kiro-krew/internal/session"
+	"github.com/matthiashowellyopp/howmux/internal/session"
 )
 
 // TestPerformExitCleanupIsBounded verifies the Ctrl+C hard-quit cleanup path

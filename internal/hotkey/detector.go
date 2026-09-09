@@ -15,7 +15,7 @@ type HotkeyErrorMsg struct {
 	Err error
 }
 
-// IsKiroKrewContext validates that the current process is running in a kiro-krew terminal
+// IsKiroKrewContext validates that the current process is running in a howmux terminal
 func IsKiroKrewContext() bool {
 	return os.Getenv("KIRO_KREW_WATCHER_PID") != ""
 }
@@ -31,7 +31,7 @@ func HandleKeyMsg(msg tea.KeyPressMsg) tea.Cmd {
 		if !IsKiroKrewContext() {
 			return func() tea.Msg {
 				return HotkeyErrorMsg{
-					Err: fmt.Errorf("hotkey toggle not available outside kiro-krew context"),
+					Err: fmt.Errorf("hotkey toggle not available outside howmux context"),
 				}
 			}
 		}

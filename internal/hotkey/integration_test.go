@@ -8,7 +8,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/jbrinkman/kiro-krew/internal/session"
+	"github.com/matthiashowellyopp/howmux/internal/session"
 )
 
 // mockTUIModel simulates the TUI model for testing
@@ -61,7 +61,7 @@ func TestHotkeyIntegrationEndToEnd(t *testing.T) {
 	defer os.Chdir(originalDir)
 	os.Chdir(tempDir)
 
-	// Set kiro-krew context
+	// Set howmux context
 	os.Setenv("KIRO_KREW_WATCHER_PID", "12345")
 	defer os.Unsetenv("KIRO_KREW_WATCHER_PID")
 
@@ -124,7 +124,7 @@ func TestHotkeyIntegrationEndToEnd(t *testing.T) {
 	})
 
 	t.Run("Error Handling Outside Context", func(t *testing.T) {
-		// Remove kiro-krew context
+		// Remove howmux context
 		os.Unsetenv("KIRO_KREW_WATCHER_PID")
 
 		// Create fresh model
@@ -145,10 +145,10 @@ func TestHotkeyIntegrationEndToEnd(t *testing.T) {
 
 		// Verify error was received
 		if errorModel.errorReceived == nil {
-			t.Error("Expected error when hotkey pressed outside kiro-krew context")
+			t.Error("Expected error when hotkey pressed outside howmux context")
 		}
 
-		if !strings.Contains(errorModel.errorReceived.Error(), "not available outside kiro-krew context") {
+		if !strings.Contains(errorModel.errorReceived.Error(), "not available outside howmux context") {
 			t.Errorf("Expected context error, got: %v", errorModel.errorReceived)
 		}
 
@@ -309,7 +309,7 @@ func TestSessionIntegration(t *testing.T) {
 }
 
 // Error for context validation
-var ErrNotInKiroKrewContext = fmt.Errorf("hotkey toggle not available outside kiro-krew context")
+var ErrNotInKiroKrewContext = fmt.Errorf("hotkey toggle not available outside howmux context")
 
 func TestHotkeyValidation(t *testing.T) {
 	tests := []struct {
@@ -348,7 +348,7 @@ func TestHotkeyValidation(t *testing.T) {
 				// Simulate error condition manually since we can't create exact KeyMsg
 				errorMsg := HotkeyErrorMsg{Err: ErrNotInKiroKrewContext}
 				if errorMsg.Err == nil {
-					t.Error("Expected error when not in kiro-krew context")
+					t.Error("Expected error when not in howmux context")
 				}
 			}
 

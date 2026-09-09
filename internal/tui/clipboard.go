@@ -4,7 +4,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/atotto/clipboard"
-	"github.com/jbrinkman/kiro-krew/internal/logging"
+	"github.com/matthiashowellyopp/howmux/internal/logging"
 )
 
 // insertAtCursor inserts insert into current at the given rune index cursorPos

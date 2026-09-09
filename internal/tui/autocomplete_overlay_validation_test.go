@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jbrinkman/kiro-krew/internal/agent"
-	"github.com/jbrinkman/kiro-krew/internal/config"
-	"github.com/jbrinkman/kiro-krew/internal/watcher"
+	"github.com/matthiashowellyopp/howmux/internal/agent"
+	"github.com/matthiashowellyopp/howmux/internal/config"
+	"github.com/matthiashowellyopp/howmux/internal/watcher"
 )
 
 func TestTask4IntegrationValidation(t *testing.T) {

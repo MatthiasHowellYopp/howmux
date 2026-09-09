@@ -9,12 +9,12 @@ func TestHotkeyErrorHandling(t *testing.T) {
 	// Test IsKiroKrewContext behavior
 	os.Unsetenv("KIRO_KREW_WATCHER_PID")
 	if IsKiroKrewContext() {
-		t.Error("Expected false when not in kiro-krew context")
+		t.Error("Expected false when not in howmux context")
 	}
 
 	os.Setenv("KIRO_KREW_WATCHER_PID", "12345")
 	if !IsKiroKrewContext() {
-		t.Error("Expected true when in kiro-krew context")
+		t.Error("Expected true when in howmux context")
 	}
 	os.Unsetenv("KIRO_KREW_WATCHER_PID")
 }

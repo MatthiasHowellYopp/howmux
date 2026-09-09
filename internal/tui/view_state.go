@@ -3,7 +3,7 @@ package tui
 import (
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/jbrinkman/kiro-krew/internal/agent"
+	"github.com/matthiashowellyopp/howmux/internal/agent"
 )
 
 // ViewType represents the different views in the TUI

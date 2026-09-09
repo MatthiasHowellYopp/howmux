@@ -1,10 +1,10 @@
 # Agent Conventions Skills
 
-Agent conventions skills allow you to create project-specific customizations for Kiro Krew agents without modifying core agent configurations. This system enables teams to define coding standards, patterns, and workflows that agents will follow automatically.
+Agent conventions skills allow you to create project-specific customizations for Howmux agents without modifying core agent configurations. This system enables teams to define coding standards, patterns, and workflows that agents will follow automatically.
 
 ## How It Works
 
-Kiro Krew agents can reference optional "conventions skills" through their manifest files. These skills contain project-specific instructions that supplement the agent's base behavior:
+Howmux agents can reference optional "conventions skills" through their manifest files. These skills contain project-specific instructions that supplement the agent's base behavior:
 
 ```json
 {
@@ -71,7 +71,7 @@ You can create conventions for any agent:
 
 ## Template Synchronization
 
-The `builder-conventions` skill includes special instructions for maintaining synchronization between template files and live project files. This ensures that changes to configuration files are reflected in both the active project and the templates used for `kiro-krew init`.
+The `builder-conventions` skill includes special instructions for maintaining synchronization between template files and live project files. This ensures that changes to configuration files are reflected in both the active project and the templates used for `howmux init`.
 
 ### Synchronized File Types
 
@@ -79,11 +79,11 @@ When the builder agent modifies these file types, it automatically updates both 
 
 | File Type | Live Location | Template Location |
 |-----------|---------------|-------------------|
-| Agent Manifests | `.kiro/agents/*.json` | `cmd/kiro-krew/templates/kiro/agents/*.json` |
-| Evaluation Cases | `.kiro/evals/**/*` | `cmd/kiro-krew/templates/kiro/evals/**/*` |
-| Rubrics | `.kiro/rubrics/**/*` | `cmd/kiro-krew/templates/kiro/rubrics/**/*` |
-| Scripts | `.kiro-krew/scripts/**/*` | `cmd/kiro-krew/templates/kiro-krew/scripts/**/*` |
-| Themes | `.kiro/themes/**/*` | `cmd/kiro-krew/templates/kiro/themes/**/*` |
+| Agent Manifests | `.kiro/agents/*.json` | `cmd/howmux/templates/kiro/agents/*.json` |
+| Evaluation Cases | `.kiro/evals/**/*` | `cmd/howmux/templates/kiro/evals/**/*` |
+| Rubrics | `.kiro/rubrics/**/*` | `cmd/howmux/templates/kiro/rubrics/**/*` |
+| Scripts | `.howmux/scripts/**/*` | `cmd/howmux/templates/howmux/scripts/**/*` |
+| Themes | `.kiro/themes/**/*` | `cmd/howmux/templates/kiro/themes/**/*` |
 
 ### Sync Verification
 
@@ -92,12 +92,12 @@ The builder-conventions skill provides commands to verify synchronization:
 ```bash
 # Check agent manifest sync
 for agent in architect builder documenter krew-lead planner validator; do
-  diff .kiro/agents/$agent.json cmd/kiro-krew/templates/kiro/agents/$agent.json
+  diff .kiro/agents/$agent.json cmd/howmux/templates/kiro/agents/$agent.json
 done
 
 # Verify script functionality
-.kiro-krew/scripts/worktree-create.sh test-worktree
-.kiro-krew/scripts/worktree-merge.sh test-worktree
+.howmux/scripts/worktree-create.sh test-worktree
+.howmux/scripts/worktree-merge.sh test-worktree
 ```
 
 ## Best Practices
@@ -166,7 +166,7 @@ The conventions skills system is designed to be optional and non-breaking:
 - **Partial Implementation**: You can implement conventions for only some agents
 - **Gradual Adoption**: Add conventions incrementally as your project evolves
 
-This ensures that existing Kiro Krew projects continue working without modification, while new projects can benefit from project-specific customizations.
+This ensures that existing Howmux projects continue working without modification, while new projects can benefit from project-specific customizations.
 
 ## Examples
 

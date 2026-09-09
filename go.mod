@@ -1,4 +1,4 @@
-module github.com/jbrinkman/kiro-krew
+module github.com/matthiashowellyopp/howmux
 
 go 1.25.0
 
