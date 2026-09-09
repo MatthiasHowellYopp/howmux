@@ -6,6 +6,7 @@ import (
 
 	"github.com/jbrinkman/kiro-krew/internal/agent"
 	"github.com/jbrinkman/kiro-krew/internal/config"
+	"github.com/jbrinkman/kiro-krew/internal/watcher"
 )
 
 func TestTask4IntegrationValidation(t *testing.T) {
@@ -17,7 +18,8 @@ func TestTask4IntegrationValidation(t *testing.T) {
 	styles := NewStyles(theme)
 	autocomplete := NewAutocompleteInput(registry, styles)
 	tabManager := NewTabManager()
-	footerManager := NewFooterManager(styles, cfg, autocomplete, tabManager)
+	w := watcher.New(cfg, manager)
+	footerManager := NewFooterManager(styles, cfg, w, autocomplete, tabManager)
 	footerManager.Resize(80, 24)
 
 	t.Run("AutocompleteAppearsAsOverlayWithoutAffectingLayout", func(t *testing.T) {
@@ -231,7 +233,8 @@ func TestLayoutStabilityAcrossAllTabs(t *testing.T) {
 	styles := NewStyles(theme)
 	autocomplete := NewAutocompleteInput(registry, styles)
 	tabManager := NewTabManager()
-	footerManager := NewFooterManager(styles, cfg, autocomplete, tabManager)
+	w := watcher.New(cfg, manager)
+	footerManager := NewFooterManager(styles, cfg, w, autocomplete, tabManager)
 	footerManager.Resize(80, 24)
 
 	// Create tabs

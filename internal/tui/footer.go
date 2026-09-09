@@ -6,12 +6,14 @@ import (
 
 	"github.com/jbrinkman/kiro-krew/internal/config"
 	"github.com/jbrinkman/kiro-krew/internal/session"
+	"github.com/jbrinkman/kiro-krew/internal/watcher"
 )
 
 // FooterManager manages the two-row footer display system
 type FooterManager struct {
 	styles            *Styles
 	config            *config.Config
+	watcher           *watcher.Watcher
 	contextTracker    *ContextTracker
 	autocompleteInput *AutocompleteInput
 	tabManager        *TabManager
@@ -26,10 +28,11 @@ type FooterContent struct {
 }
 
 // NewFooterManager creates a new footer manager
-func NewFooterManager(styles *Styles, config *config.Config, autocompleteInput *AutocompleteInput, tabManager *TabManager) *FooterManager {
+func NewFooterManager(styles *Styles, config *config.Config, watcher *watcher.Watcher, autocompleteInput *AutocompleteInput, tabManager *TabManager) *FooterManager {
 	return &FooterManager{
 		styles:            styles,
 		config:            config,
+		watcher:           watcher,
 		contextTracker:    NewContextTracker(),
 		autocompleteInput: autocompleteInput,
 		tabManager:        tabManager,
@@ -124,7 +127,24 @@ func (fm *FooterManager) renderStatusRow(activeTabType TabType) string {
 
 // renderBaseInfo renders the base information shown on all tabs
 func (fm *FooterManager) renderBaseInfo() string {
-	return fmt.Sprintf("theme: %s | Ctrl+Y copy · Ctrl+C quit", fm.config.Theme)
+	watcherStatus := fm.renderWatcherStatus()
+	return fmt.Sprintf("%s | theme: %s | Ctrl+Y copy · Ctrl+C quit", watcherStatus, fm.config.Theme)
+}
+
+// renderWatcherStatus formats the watcher status for display
+func (fm *FooterManager) renderWatcherStatus() string {
+	if fm.watcher == nil {
+		return "watcher: unavailable"
+	}
+
+	if !fm.watcher.Running() {
+		return "watcher: inactive"
+	}
+
+	// Format poll interval for display
+	interval := fm.config.PollInterval.String()
+
+	return fmt.Sprintf("watcher: active (%s, %s)", fm.config.Repo, interval)
 }
 
 // renderPlanningInfo renders context usage and directory information for planning tabs
