@@ -703,6 +703,171 @@ When a change **adds or modifies cross-goroutine access to shared state**, use t
 
 ---
 
+### Anti-Pattern 6: Trusting the PR Body's Completeness Claim
+
+**❌ WRONG APPROACH**:
+
+**Issue**: PR #20 ("Rename project from kiro-krew to howmux")
+
+**PR Body Claims**:
+> "Environment variables updated: `KIRO_KREW_WATCHER_PID` → `HOWMUX_WATCHER_PID`"
+> "No stray kiro-krew references remain"
+
+**Implementation Reality**:
+```go
+// internal/agent/manager.go (WRITER)
+env = append(env, fmt.Sprintf("KIRO_KREW_WATCHER_PID=%d", m.watcherPID))
+
+// internal/hotkey/detector.go (READER)
+watcherPID := os.Getenv("KIRO_KREW_WATCHER_PID")
+```
+
+**Validator Response** (INCORRECT):
+```markdown
+### Criterion: Rename environment variables
+- **Status**: ✅ PASS
+- **Evidence**: All tests pass, no errors reported
+- **Finding**: Environment variable handling working correctly
+
+### Criterion: No stray references remain
+- **Status**: ✅ PASS
+- **Evidence**: Code review looks clean
+```
+
+**Why This Is Wrong**: The validator accepted the PR body's **completeness claims** without verifying them against the actual repository state. Both the writer and reader **still agreed on the OLD name** (`KIRO_KREW_WATCHER_PID`), so detection kept working and tests passed — but the rename was incomplete. A simple `grep -rn "KIRO_KREW"` would have found ~24-38 stray references in `.go` files, including one user-facing (the About overlay title).
+
+This is the **completeness sibling** of Anti-Pattern 5 (race detector without concurrent test): both are "passing tests are necessary but not sufficient, and the PR asserts a property the diff does not verify."
+
+---
+
+**✅ CORRECT APPROACH**:
+
+When a PR body makes **completeness assertions** — phrases like "renamed X", "no more Y / no stray Y remain", "all Z updated", "migrated to W" — those become **testable criteria** the validator must check via repo-wide search.
+
+**Validator Response**:
+
+```markdown
+### Criterion: Rename environment variables (KIRO_KREW_* → HOWMUX_*)
+- **Status**: ❌ FAIL
+- **Evidence**: 
+  1. Searched for old env var name across codebase
+     ```bash
+     grep -rn "KIRO_KREW_WATCHER_PID" --include="*.go" .
+     ```
+  2. Found writer and reader both still using old name
+- **Finding**: 
+  - Writer in internal/agent/manager.go:156 sets `KIRO_KREW_WATCHER_PID`
+  - Reader in internal/hotkey/detector.go:89 reads `KIRO_KREW_WATCHER_PID`
+  - Both still agree on OLD name (tests pass because system is internally consistent)
+  - But rename is INCOMPLETE (PR claims this was updated to `HOWMUX_WATCHER_PID`)
+- **Location**: 
+  - internal/agent/manager.go:156
+  - internal/hotkey/detector.go:89
+- **Verification Method**: Repo-wide grep + manual inspection
+
+**Reasoning**: PR body claimed "`KIRO_KREW_WATCHER_PID` updated to `HOWMUX_WATCHER_PID`", but grep reveals both writer and reader still use the old name. Writer/reader pairs that still agree on the OLD name are the exact trap — tests pass because the system is internally consistent, but the rename is incomplete.
+
+### Criterion: No stray kiro-krew references remain
+- **Status**: ❌ FAIL
+- **Evidence**: 
+  ```bash
+  grep -rn "kiro-krew" --include="*.go" . | wc -l
+  # Result: 24-38 matches found
+  ```
+- **Finding**: 
+  - Multiple stray references in `.go` files
+  - About overlay title still says "Kiro Krew" (user-facing)
+  - Config files like `.gitignore` still reference `.kiro-krew/` paths from old project
+- **Verification Method**: Repo-wide grep for old token
+
+**Reasoning**: PR body claimed "no stray kiro-krew references remain", but repo-wide search contradicts this claim. This is a **completeness verification failure** — the validator must reconcile PR claims against actual repository state.
+```
+
+---
+
+### Completeness Claim Verification Procedure
+
+When a PR makes completeness assertions, **verify them against the repository state**:
+
+#### For Rename Claims ("renamed X to Y", "all X updated")
+
+**Verification Commands**:
+```bash
+# Search for old token across ALL file types (not just source)
+grep -rn "old-token" \
+  --include="*.go" \
+  --include="*.md" \
+  --include="*.yaml" \
+  --include="*.yml" \
+  --include="*.json" \
+  --include=".gitignore" \
+  --include="Makefile" \
+  --include="Taskfile.yml" \
+  .
+
+# Check config files explicitly (they're often missed in rename passes)
+grep -rn "old-token" .gitignore .github/workflows/ Taskfile.yml
+```
+
+**PASS Criteria**:
+- Old token only appears in intentional/justified contexts (e.g., historical docs, migration notes)
+- All writer+reader symbol pairs moved together (env vars, struct fields accessed cross-package)
+
+**FAIL Criteria**:
+- Old token found in source, tests, config, CI, or docs where PR claimed it was renamed
+- Writer/reader pairs where both still agree on the OLD name (tests pass, but rename is incomplete)
+
+#### For "No Stray References" Claims
+
+**Verification Commands**:
+```bash
+# Repo-wide search for the token PR claims is eliminated
+grep -rn "claimed-eliminated-token" .
+
+# Check every file type (source, tests, docs, config, CI)
+find . -type f \
+  ! -path "./.git/*" \
+  ! -path "./.worktrees/*" \
+  ! -path "./vendor/*" \
+  -exec grep -l "claimed-eliminated-token" {} \;
+```
+
+**PASS Criteria**:
+- Zero matches OR only justified/intentional matches (documented as exceptions)
+
+**FAIL Criteria**:
+- Any matches in user-facing strings, code, tests, or config files where PR claimed elimination was complete
+
+#### For Environment Variable / Symbol Renames
+
+**Critical Check**: **Verify writer and reader were both renamed**
+
+**Verification Commands**:
+```bash
+# Find the writer (where env var is SET)
+grep -rn "os.Setenv\|env.*append.*ENV_VAR" --include="*.go" .
+
+# Find the reader (where env var is READ)
+grep -rn "os.Getenv.*ENV_VAR" --include="*.go" .
+
+# Both must use the NEW name for rename to be complete
+```
+
+**The Trap**: Writer/reader pairs that still agree on the **OLD name** are invisible to tests (system is internally consistent) but fail the completeness check.
+
+**Example from PR #20**:
+- Writer (`manager.go`): `KIRO_KREW_WATCHER_PID` ❌ (old name)
+- Reader (`detector.go`): `KIRO_KREW_WATCHER_PID` ❌ (old name)
+- **Both agree on old name** → tests pass → validator must catch it
+
+**PASS Criteria**:
+- Writer and reader both use the NEW name
+
+**FAIL Criteria**:
+- Writer uses old name OR reader uses old name (even if both still agree)
+
+---
+
 ## Real-World Example: PR #238 Analysis
 
 This is the EXACT scenario that Issue #242 addresses - an implementation that should have failed validation but passed.

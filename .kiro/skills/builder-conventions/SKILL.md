@@ -135,6 +135,174 @@ Include sync verification status in sentinel files:
 - Follow project's documentation format
 - Include usage examples for new functionality
 
+## Sweeping and Mechanical Changes
+
+When implementing a **sweeping mechanical change** (rename, move across packages, version bump across dependencies), "done" requires **repo-wide verification across all file types** — not just source code.
+
+### Definition
+
+A **mechanical change** is one where the same transformation must be applied consistently everywhere:
+- **Rename**: project name, package name, struct/type name, env var name
+- **Move**: relocating a type or package and updating all references
+- **Version bump**: updating dependency versions across all lockfiles and imports
+
+### Completeness Requirements
+
+**"Done" means**:
+1. **Repo-wide search** for the old token across **all file types** returns only intentional/justified matches
+2. **Writer and reader pairs** were renamed together (env vars, symbols, struct fields)
+3. **Config files** are part of the surface (not just source code)
+
+**Search ALL file types**:
+```bash
+# Not just source files
+grep -rn "old-token" \
+  --include="*.go" \
+  --include="*.ts" \
+  --include="*.py" \
+  --include="*.java" \
+  .
+
+# Also: tests, docs, config, CI
+grep -rn "old-token" \
+  --include="*_test.go" \
+  --include="*.md" \
+  --include="README*" \
+  --include=".gitignore" \
+  --include="Taskfile.yml" \
+  --include="package.json" \
+  --include="go.mod" \
+  --include="*.yaml" \
+  --include="*.yml" \
+  .
+
+# CI and build config explicitly
+grep -rn "old-token" .github/workflows/ .gitlab-ci.yml Makefile Jenkinsfile
+
+# Template-synced files (see Template Synchronization section)
+grep -rn "old-token" cmd/kiro-krew/templates/
+```
+
+### Critical: Config Files Are Part of the Surface
+
+Config files like `.gitignore`, `Taskfile.yml`, CI workflows (`.github/workflows/*.yml`), and build config are **part of the rename surface**, not ancillary files.
+
+**Example from PR #20**: `.gitignore` still pointed at old `.kiro-krew/` runtime paths after rename to `howmux`, causing committed artifacts under `.howmux/` to slip through (the "rename the code" pass never examined `.gitignore` as part of the surface).
+
+**Must check**:
+- `.gitignore` — runtime path references
+- `Taskfile.yml` / `Makefile` — task names, paths
+- `.github/workflows/*.yml` — job names, paths, artifact names
+- `package.json` / `go.mod` / `pom.xml` — package/module names
+- `.releaserc.json` / release scripts — artifact names
+- Template-synced files (see Mandatory Template Synchronization section)
+
+### Writer and Reader Must Move Together
+
+For **env-var or symbol renames**, verify the **writer and reader are renamed together**.
+
+**The Trap**: Writer/reader pairs that still agree on the OLD name pass tests (system is internally consistent) but are incomplete.
+
+**Example from PR #20**:
+```go
+// Writer (internal/agent/manager.go) — OLD NAME
+env = append(env, fmt.Sprintf("KIRO_KREW_WATCHER_PID=%d", m.watcherPID))
+
+// Reader (internal/hotkey/detector.go) — OLD NAME
+watcherPID := os.Getenv("KIRO_KREW_WATCHER_PID")
+
+// Both agree on OLD name → tests pass → but rename is INCOMPLETE
+```
+
+**Verification procedure**:
+```bash
+# Find writer (where env var is SET)
+grep -rn "os.Setenv\|env.*append.*OLD_NAME" --include="*.go" .
+
+# Find reader (where env var is READ)
+grep -rn "os.Getenv.*OLD_NAME" --include="*.go" .
+
+# Both results must be EMPTY (or show only NEW name) for rename to be complete
+```
+
+### Reconcile PR/Sentinel Description to Actual Changes
+
+**Do not claim**:
+- "Renamed X" if a `grep -rn "X"` contradicts it
+- "No stray references" if repo-wide search finds them
+- "All Z updated" if writer/reader pairs disagree or config files still use old names
+
+**PR body / sentinel file claims become testable criteria** — the validator will check them. If you claim "no stray kiro-krew references remain", the validator will run `grep -rn "kiro-krew"` and fail validation if it finds matches.
+
+### Completeness Verification Commands
+
+Run these commands **before claiming "done"** on a mechanical change:
+
+```bash
+# Repo-wide search for old token (adjust file types for language)
+grep -rn "old-token" \
+  --include="*.go" \
+  --include="*_test.go" \
+  --include="*.md" \
+  --include="*.yaml" \
+  --include="*.yml" \
+  --include="*.json" \
+  --include=".gitignore" \
+  --include="Taskfile.yml" \
+  --include="Makefile" \
+  .
+
+# Config files explicitly
+grep -rn "old-token" .gitignore .github/workflows/ Taskfile.yml
+
+# Templates (if this project has embedded templates)
+grep -rn "old-token" cmd/*/templates/ templates/
+
+# Count matches (should be zero or only justified exceptions)
+grep -rn "old-token" --include="*.go" . | wc -l
+```
+
+**Justified exceptions** (document these in PR body):
+- Historical docs or migration notes that intentionally reference the old name
+- Test fixtures that verify backward compatibility
+- Embedded third-party code that shouldn't be modified
+
+**Unjustified matches** (these are incomplete):
+- User-facing strings (About dialog, help text, error messages)
+- Config files (`.gitignore`, CI workflows)
+- Tests or docs that should reference the new name
+- Env var writers/readers
+
+### Real-World Example: PR #20
+
+**Issue**: Rename project from `kiro-krew` to `howmux`
+
+**What "done" should have meant**:
+1. Repo-wide search for `kiro-krew` returns only justified/historical matches
+2. Config files (`.gitignore`, CI workflows) updated to new name
+3. Env vars renamed in both writer AND reader
+4. Template-synced files updated (agent configs, scripts)
+
+**What actually happened**:
+1. ~24-38 stray `kiro-krew` references in `.go` files (including user-facing "Kiro Krew" in About overlay)
+2. `.gitignore` still pointed at `.kiro-krew/` → committed artifacts under `.howmux/` slipped through
+3. Env var `KIRO_KREW_WATCHER_PID` unchanged in both writer and reader (tests passed but rename incomplete)
+
+**How to prevent**:
+```bash
+# Before claiming "done", run:
+grep -rn "kiro-krew" --include="*.go" . | wc -l
+# Expected: 0 (or only justified matches documented in PR)
+
+# Check config files
+grep -rn "kiro-krew" .gitignore .github/workflows/ Taskfile.yml
+# Expected: 0
+
+# Check env vars moved together
+grep -rn "KIRO_KREW" --include="*.go" .
+# Expected: 0 (all should be HOWMUX_*)
+```
+
 ## Go Concurrency Rules
 
 ### Mutex-Guarded Fields
