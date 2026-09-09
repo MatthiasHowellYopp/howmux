@@ -134,3 +134,88 @@ Include sync verification status in sentinel files:
 - Update relevant docs when adding features
 - Follow project's documentation format
 - Include usage examples for new functionality
+
+## Go Concurrency Rules
+
+### Mutex-Guarded Fields
+
+A field protected by a `sync.Mutex` or `sync.RWMutex` must **only** be accessed while holding the appropriate lock. This applies to:
+- Direct field access within the struct's methods
+- **Accessor methods** (getters/setters) called from other goroutines
+
+**Pattern**: If a struct has a mutex and fields guarded by it, every method that reads or writes those fields must acquire the lock first.
+
+**Example** (Watcher):
+```go
+type Watcher struct {
+    mu      sync.RWMutex
+    started bool         // Guarded by mu
+    // ...
+}
+
+// ✅ Correct: accessor acquires lock
+func (w *Watcher) Running() bool {
+    w.mu.RLock()
+    defer w.mu.RUnlock()
+    return w.started
+}
+
+// ❌ Wrong: accessor reads without lock
+func (w *Watcher) Running() bool {
+    return w.started  // RACE with Start/Stop
+}
+```
+
+### Cross-Goroutine Access
+
+When adding a feature that reads shared state from a **different goroutine** than the writers, verify the accessor method is lock-guarded:
+- **TUI render path** reading agent/watcher/session state → accessor must hold lock
+- **Command handler** reading state written by background loop → accessor must hold lock
+- **Status display** reading dynamically updated fields → accessor must hold lock
+
+**If no lock-guarded accessor exists**, either:
+1. Add locking to the existing accessor (if it's unlocked), or
+2. Create a new lock-guarded accessor method
+
+Do **not** directly access struct fields from outside the struct, even if they are exported — use accessor methods so locking stays encapsulated.
+
+### Concurrent Test Requirement
+
+When a change adds a **new concurrent access path** (e.g., wiring the footer to read watcher state):
+1. Add a test that exercises the accessor **concurrently** with the writers (e.g., `Start()`/`Stop()`)
+2. The test must run the accessor in a loop while another goroutine modifies the state
+3. Verify the test passes with `-race`: `go test -race ./path/to/package`
+
+**Why**: A passing race detector with **no concurrent test** proves nothing — the detector only flags races it observes at runtime. If your test doesn't exercise the concurrent path, `-race` stays silent even when a race exists.
+
+**Example**:
+```go
+func TestRunningConcurrentAccess(t *testing.T) {
+    w := New(cfg, mgr)
+    done := make(chan struct{})
+
+    // Goroutine: flip state
+    go func() {
+        for {
+            select {
+            case <-done:
+                return
+            default:
+                w.Start()
+                time.Sleep(1 * time.Millisecond)
+                w.Stop()
+                time.Sleep(1 * time.Millisecond)
+            }
+        }
+    }()
+
+    // Main goroutine: read concurrently
+    for i := 0; i < 1000; i++ {
+        _ = w.Running()  // Would race without RLock
+    }
+
+    close(done)
+}
+```
+
+This test **would fail** under `-race` if `Running()` didn't hold the lock, proving the test exercises the race-prone path.
