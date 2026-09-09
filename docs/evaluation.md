@@ -242,7 +242,7 @@ Containers run with strict resource limits to prevent runaway processes:
 |----------|---------------|----------------------|
 | CPU | 1.0 core (1,000,000 μs) | `KIRO_KREW_EVAL_CPU_QUOTA` |
 | Memory | 512MB | `KIRO_KREW_EVAL_MEMORY_LIMIT` |
-| Timeout | 5 minutes | `KIRO_KREW_EVAL_TIMEOUT` |
+| Timeout | 5 minutes | `HOWMUX_EVAL_TIMEOUT` |
 | Network | Disabled | N/A |
 
 Configure resource limits via environment variables:
@@ -254,7 +254,7 @@ KIRO_KREW_EVAL_MEMORY_LIMIT=268435456 \
 howmux eval --sandbox architect
 
 # Set 30-second timeout for quick tests
-KIRO_KREW_EVAL_TIMEOUT=30s \
+HOWMUX_EVAL_TIMEOUT=30s \
 howmux eval --sandbox builder
 ```
 
@@ -347,7 +347,7 @@ KIRO_KREW_EVAL_MEMORY_LIMIT=1073741824 howmux eval --sandbox
 **Timeout errors:**
 ```bash
 # Increase timeout for complex evaluations
-KIRO_KREW_EVAL_TIMEOUT=10m howmux eval --sandbox
+HOWMUX_EVAL_TIMEOUT=10m howmux eval --sandbox
 ```
 
 **Build failures:**

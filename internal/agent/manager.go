@@ -264,7 +264,7 @@ func (m *Manager) Spawn(issueNumber int, repo string) (*Agent, error) {
 	cmd.Env = append(os.Environ(),
 		fmt.Sprintf("ISSUE_NUMBER=%d", issueNumber),
 		fmt.Sprintf("REPO=%s", repo),
-		fmt.Sprintf("KIRO_KREW_WATCHER_PID=%d", os.Getpid()),
+		fmt.Sprintf("HOWMUX_WATCHER_PID=%d", os.Getpid()),
 		fmt.Sprintf("WORKTREE_PATH=%s", worktreePath))
 
 	if err := cmd.Start(); err != nil {
@@ -558,7 +558,7 @@ func (m *Manager) retryAgent(agent *Agent) {
 	cmd.Env = append(os.Environ(),
 		fmt.Sprintf("ISSUE_NUMBER=%d", agent.IssueNumber),
 		fmt.Sprintf("REPO=%s", m.config.Repo),
-		fmt.Sprintf("KIRO_KREW_WATCHER_PID=%d", os.Getpid()),
+		fmt.Sprintf("HOWMUX_WATCHER_PID=%d", os.Getpid()),
 		fmt.Sprintf("WORKTREE_PATH=%s", worktreePath))
 
 	if err := cmd.Start(); err != nil {

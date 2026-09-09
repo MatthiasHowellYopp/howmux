@@ -767,7 +767,7 @@ func invokeAgentInContainer(agent, prompt string, cConfig *ContainerConfig) (str
 
 // invokeAgentNative executes kiro-cli natively (original implementation)
 func invokeAgentNative(agent, prompt string) (string, CostInfo, *ErrorContext, error) {
-	timeoutStr := os.Getenv("KIRO_KREW_EVAL_TIMEOUT")
+	timeoutStr := os.Getenv("HOWMUX_EVAL_TIMEOUT")
 	timeout := 2 * time.Minute
 	if timeoutStr != "" {
 		if parsedTimeout, err := time.ParseDuration(timeoutStr); err == nil {
@@ -786,7 +786,7 @@ func invokeAgentNative(agent, prompt string) (string, CostInfo, *ErrorContext, e
 
 	// Capture relevant environment variables
 	envVars := make(map[string]string)
-	for _, key := range []string{"KIRO_KREW_EVAL_TIMEOUT"} {
+	for _, key := range []string{"HOWMUX_EVAL_TIMEOUT"} {
 		if val := os.Getenv(key); val != "" {
 			envVars[key] = val
 		}

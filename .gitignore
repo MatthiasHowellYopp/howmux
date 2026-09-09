@@ -11,9 +11,23 @@ test-results/
 /kiro-krew-validate
 /test-kiro-krew
 cmd/kiro-krew/kiro-krew
+/howmux
+/howmux-test
+/howmux-validate
+/test-howmux
+cmd/howmux/howmux
 /specs/
 .kiro-krew/retries/
 **/.kiro-krew/evals/tmp/
+# Runtime output dirs (renamed kiro-krew -> howmux): never commit these
+.howmux/retries/
+.howmux/artifacts/
+.howmux/sessions/
+.howmux/logs/
+.howmux/evals/results/
+.howmux/evals/tmp/
+**/.howmux/sessions/
+**/.howmux/evals/tmp/
 /test-build
 .kiro-krew/sessions/
 .kiro-krew/artifacts/

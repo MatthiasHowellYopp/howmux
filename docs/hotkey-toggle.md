@@ -36,7 +36,7 @@ The hotkey provides seamless switching between these modes:
 
 The hotkey toggle only works when:
 - Running inside a Howmux terminal session
-- The `KIRO_KREW_WATCHER_PID` environment variable is set
+- The `HOWMUX_WATCHER_PID` environment variable is set
 - You're in an interactive TUI session
 
 If used outside this context, you'll receive an error message: "hotkey toggle not available outside howmux context"
