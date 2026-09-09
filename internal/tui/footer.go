@@ -6,12 +6,14 @@ import (
 
 	"github.com/jbrinkman/kiro-krew/internal/config"
 	"github.com/jbrinkman/kiro-krew/internal/session"
+	"github.com/jbrinkman/kiro-krew/internal/watcher"
 )
 
 // FooterManager manages the two-row footer display system
 type FooterManager struct {
 	styles            *Styles
 	config            *config.Config
+	watcher           *watcher.Watcher
 	contextTracker    *ContextTracker
 	autocompleteInput *AutocompleteInput
 	tabManager        *TabManager
@@ -26,10 +28,11 @@ type FooterContent struct {
 }
 
 // NewFooterManager creates a new footer manager
-func NewFooterManager(styles *Styles, config *config.Config, autocompleteInput *AutocompleteInput, tabManager *TabManager) *FooterManager {
+func NewFooterManager(styles *Styles, config *config.Config, autocompleteInput *AutocompleteInput, tabManager *TabManager, watcher *watcher.Watcher) *FooterManager {
 	return &FooterManager{
 		styles:            styles,
 		config:            config,
+		watcher:           watcher,
 		contextTracker:    NewContextTracker(),
 		autocompleteInput: autocompleteInput,
 		tabManager:        tabManager,
@@ -124,7 +127,23 @@ func (fm *FooterManager) renderStatusRow(activeTabType TabType) string {
 
 // renderBaseInfo renders the base information shown on all tabs
 func (fm *FooterManager) renderBaseInfo() string {
-	return fmt.Sprintf("theme: %s | Ctrl+Y copy · Ctrl+C quit", fm.config.Theme)
+	baseInfo := fmt.Sprintf("theme: %s", fm.config.Theme)
+
+	// Add watcher status if watcher is available
+	if fm.watcher != nil {
+		var watcherStatus string
+		if fm.watcher.Running() {
+			watcherStatus = fmt.Sprintf("watcher: active (%s, %s)",
+				fm.config.Repo,
+				fm.config.PollInterval)
+		} else {
+			watcherStatus = "watcher: inactive"
+		}
+		baseInfo = fmt.Sprintf("%s | %s", baseInfo, watcherStatus)
+	}
+
+	// Append keyboard shortcuts
+	return fmt.Sprintf("%s | Ctrl+Y copy · Ctrl+C quit", baseInfo)
 }
 
 // renderPlanningInfo renders context usage and directory information for planning tabs
