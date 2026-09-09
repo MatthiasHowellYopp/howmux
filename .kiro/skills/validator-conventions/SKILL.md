@@ -611,6 +611,98 @@ All 10 acceptance criteria met but validation fails due to QA failures. Tests mu
 
 ---
 
+### Anti-Pattern 5: Green Race Detector Without Concurrent Test
+
+**❌ WRONG APPROACH**:
+
+**Issue Criterion**:
+> "Add `Running()` accessor to allow footer to display watcher status"
+
+**Implementation**:
+```go
+// Unlocked accessor
+func (w *Watcher) Running() bool {
+    return w.started  // RACE: w.started written under lock in Start/Stop
+}
+```
+
+**Validator Response** (INCORRECT):
+```markdown
+### Criterion: Running() accessor added
+- **Status**: ✅ PASS
+- **Evidence**: Executed `task test` — all tests pass under `-race`
+- **Finding**: Race detector reports no issues
+
+**QA Results**:
+- Tests: ✅ PASS (including -race flag)
+```
+
+**Why This Is Wrong**: The race detector only flags races it **observes at runtime**. If no test exercises `Running()` concurrently with `Start()`/`Stop()`, the race goes undetected even though it exists in production (the footer render loop calls `Running()` while the watcher goroutine modifies `w.started`).
+
+A green `-race` output with **no concurrent test** is not evidence of correctness — it's evidence that the test suite didn't exercise the race-prone path.
+
+---
+
+**✅ CORRECT APPROACH**:
+
+**Validator checks for concurrent test**:
+
+```bash
+# Search for a test that exercises Running() concurrently
+grep -A 20 "func Test.*Concurrent" internal/watcher/watcher_test.go
+```
+
+**If no concurrent test exists**, validation FAILS:
+
+```markdown
+### Criterion: Thread-safe Running() accessor
+- **Status**: ❌ FAIL
+- **Evidence**: 
+  1. Inspected `Running()` implementation in internal/watcher/watcher.go:270
+  2. Searched for concurrent test in watcher_test.go
+  3. Ran `task test` with `-race`
+- **Finding**: 
+  - `Running()` reads `w.started` without acquiring lock (line 271)
+  - `w.started` is written under `w.mu.Lock()` in Start/Stop (lines 42, 52)
+  - No test exercises `Running()` concurrently with Start/Stop
+  - Race detector passes only because no test drives the concurrent path
+- **Verification Method**: Code inspection + test search + race detector
+
+**Reasoning**: This is a **data race** — `Running()` reads `w.started` from the render goroutine while `Start()`/`Stop()` write it under lock from the watcher goroutine. The race detector didn't catch it because the test suite doesn't exercise `Running()` concurrently with state mutations. This is a **critical concurrency bug** and fails validation.
+
+### Recommendations:
+1. Add `w.mu.RLock()` + `defer w.mu.RUnlock()` to `Running()` before reading `w.started`
+2. Add a concurrent test that calls `Running()` in a loop while another goroutine flips state via Start/Stop
+3. Verify `go test -race ./internal/watcher/` passes after the fix
+```
+
+---
+
+## Concurrency Verification Checklist
+
+When a change **adds or modifies cross-goroutine access to shared state**, use this checklist:
+
+- [ ] **Identify the shared state**: Does the change read/write a field in a struct with a `sync.Mutex` or `sync.RWMutex`?
+- [ ] **Verify locking**: Does the accessor method acquire the lock before accessing the field?
+- [ ] **Check for concurrent test**: Does a test exercise the accessor concurrently with writers?
+- [ ] **Run race detector**: Does `go test -race` pass?
+- [ ] **Confirm the test drives concurrency**: Would the test **fail** under `-race` if the lock were removed?
+
+**FAIL validation if**:
+- Shared state accessed without holding its lock (even if tests pass)
+- No concurrent test exists for a new cross-goroutine access (even if `-race` is green)
+- The concurrent test doesn't actually drive the race-prone path (e.g., sequential test mislabeled as "concurrent")
+
+**Example criterion wording**:
+```markdown
+### Criterion: Thread-safe accessor for shared state
+- **Type**: Implementation + Correctness
+- **Specified Approach**: Lock-guarded accessor + concurrent test
+- **Source**: Issue requires adding footer display of watcher status
+```
+
+---
+
 ## Real-World Example: PR #238 Analysis
 
 This is the EXACT scenario that Issue #242 addresses - an implementation that should have failed validation but passed.

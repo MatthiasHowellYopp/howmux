@@ -21,6 +21,36 @@ Create design spec at `.kiro-krew/specs/issue-<number>-<slug>.md` (relative to c
 - **Step-by-Step Task Breakdown**: Detailed implementation sequence with acceptance criteria that leads to complete issue resolution in one PR
 - **Validation Commands**: Commands to verify the implementation works correctly
 
+## Concurrency Analysis (Required for All Changes)
+
+When analyzing a GitHub issue and designing the solution, explicitly identify whether the change introduces **cross-goroutine access to shared state**.
+
+### Concurrent Access Boundaries in Kiro-Krew
+
+The following are goroutine boundaries where shared state access requires locking:
+- **TUI render loop** (render goroutine) reading agent/watcher/session state
+- **Command handlers** (main goroutine) reading/writing state concurrently with background loops
+- **Watcher poll loop** (watcher goroutine) writing tracked issues while commands read them
+- **Agent manager** (spawner goroutine) writing agent state while status commands read it
+
+### Detection Rules
+
+A change introduces a **concurrency concern** if it:
+1. Adds a call from one goroutine to read/write a field in a type with a `sync.Mutex` or `sync.RWMutex`
+2. Wires the TUI render path (e.g., `FooterManager`, `View()` methods) to read shared state from a background service (watcher, agent manager, session)
+3. Adds a command handler that reads/writes state modified by a background goroutine
+
+**Example**: Reading `Watcher` state from the footer/render path requires calling a lock-guarded accessor method like `Running()`, which must acquire `w.mu.RLock()` before reading `w.started`.
+
+### Design Specification Requirements
+
+When a change crosses a concurrency boundary:
+1. **Call it out explicitly** in the Solution Approach section
+2. **Add an acceptance criterion** in the task breakdown stating: "All access to shared field `X` is done under its lock" or "Accessor method `Y()` acquires the appropriate lock before reading/writing state"
+3. **Require a concurrent test** as an acceptance criterion: "Add a test that exercises the accessor concurrently with state mutations so `go test -race` can observe the access pattern"
+
+This ensures the builder knows the accessor must be lock-guarded and the validator can verify that both the locking and the concurrent test are present.
+
 ## Implementation Approach
 
 **CRITICAL**: Kiro-krew processes each issue as a single, complete solution delivered via one pull request. Do NOT break work into phases, incremental delivery, or multi-PR approaches.

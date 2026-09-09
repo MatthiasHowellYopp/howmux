@@ -38,6 +38,9 @@ func New(cfg *config.Config, mgr *agent.Manager) *Watcher {
 }
 
 func (w *Watcher) Start() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
 	if w.started {
 		return
 	}
@@ -49,6 +52,9 @@ func (w *Watcher) Start() {
 }
 
 func (w *Watcher) Stop() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
 	if !w.started {
 		return
 	}
@@ -268,5 +274,7 @@ func (w *Watcher) getCurrentRetryCount(issueNumber int) int {
 }
 
 func (w *Watcher) Running() bool {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
 	return w.started
 }
