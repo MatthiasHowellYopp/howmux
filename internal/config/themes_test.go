@@ -61,6 +61,7 @@ func TestValidateTheme(t *testing.T) {
 			Surface       string `yaml:"surface"`
 			AgentSuccess  string `yaml:"agent_success"`
 			AgentFail     string `yaml:"agent_fail"`
+			Timestamp     string `yaml:"timestamp"`
 		}{
 			Primary:       "#FF0000",
 			Secondary:     "#00FF00",
@@ -77,6 +78,7 @@ func TestValidateTheme(t *testing.T) {
 			Surface:       "#111111",
 			AgentSuccess:  "#00AA00",
 			AgentFail:     "#FF0000",
+			Timestamp:     "#888888",
 		},
 	}
 

@@ -53,6 +53,9 @@ type Styles struct {
 	PlanningError              lipgloss.Style
 	PlanningStreamingIndicator lipgloss.Style
 	PlanningPrompt             lipgloss.Style
+
+	// Timestamp style
+	Timestamp lipgloss.Style
 }
 
 func NewStyles(theme *config.Theme) *Styles {
@@ -134,6 +137,9 @@ func NewStyles(theme *config.Theme) *Styles {
 		PlanningPrompt: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(theme.Colors.Primary)).
 			Bold(true),
+
+		// Timestamp style
+		Timestamp: lipgloss.NewStyle().Foreground(lipgloss.Color(theme.Colors.Timestamp)),
 	}
 }
 

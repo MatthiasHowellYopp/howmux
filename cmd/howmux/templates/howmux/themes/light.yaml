@@ -16,3 +16,4 @@ colors:
   surface: "#F5F5F5"
   agent_success: "#007700"
   agent_fail: "#CC0000"
+  timestamp: "#666666"

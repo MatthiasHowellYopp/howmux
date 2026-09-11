@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
@@ -115,6 +116,51 @@ func (ov *OutputView) Resize(width, height int) {
 	ov.refreshContent()
 }
 
+// isWorkflowPhase returns true if the line is a workflow phase indicator.
+// A workflow phase line starts with ">" AND contains one of the workflow keywords.
+func (ov *OutputView) isWorkflowPhase(line string) bool {
+	// Efficient prefix check first
+	if !strings.HasPrefix(line, ">") {
+		return false
+	}
+
+	// Lowercase for case-insensitive matching
+	lower := strings.ToLower(line)
+
+	// Workflow keywords (case-insensitive)
+	keywords := []string{
+		"reading", "delegat", "spawn", "check", "push",
+		"creat", "label", "request", "discover", "validat",
+		"qa", "quality", "successfully", "completed", "finished",
+	}
+
+	for _, keyword := range keywords {
+		if strings.Contains(lower, keyword) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// injectTimestamps prepends timestamps to workflow phase lines.
+// Returns a new slice with timestamps injected where appropriate.
+func (ov *OutputView) injectTimestamps(lines []string, styles *Styles) []string {
+	result := make([]string, 0, len(lines))
+
+	for _, line := range lines {
+		if ov.isWorkflowPhase(line) {
+			timestamp := time.Now().Format("2006-01-02 15:04:05")
+			timestampStr := styles.Timestamp.Render("[" + timestamp + "]")
+			result = append(result, timestampStr+" "+line)
+		} else {
+			result = append(result, line)
+		}
+	}
+
+	return result
+}
+
 // refreshContent updates the viewport content with latest agent output
 func (ov *OutputView) refreshContent() {
 	agents := ov.manager.List()
@@ -186,6 +232,9 @@ func (ov *OutputView) refreshContent() {
 				"No captured output yet.",
 			}
 		}
+
+		// Inject timestamps into workflow phase lines
+		agentOutput = ov.injectTimestamps(agentOutput, ov.styles)
 
 		// Wrap and indent agent output
 		for _, line := range agentOutput {
