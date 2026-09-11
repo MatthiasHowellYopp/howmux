@@ -33,12 +33,27 @@ Extract the issue number, repo, and worktree name from this message and use them
    2. Check for binary files among newly staged files: `git diff --cached --name-only --diff-filter=A`. For each file, check if it's executable (`-x`) or matches binary patterns (`.exe`, `.so`, `.dylib`, `.dll`, `.o`, `.a`, or names matching `howmux*`, `*-test`, `*-validate`)
    3. For any binary file found, unstage it with `git reset HEAD <file>` and remove it with `rm -f <file>`. If unstaging fails, halt and report the error
    4. Run `git commit -m "feat: <issue-title>" && git push -u origin spec/<worktree-name>`
-8. **Create PR**: Create a well-formed PR with a detailed description. Use `gh pr create --repo <repo> --head spec/<worktree-name> --base <base_branch> --title "<issue-title>" --body "<body>"` where:
+8. **Create PR**: Create a well-formed PR with a detailed description. Write the PR body to a temporary file for safe handling of special characters (backticks, quotes), then create the PR using `--body-file`:
+   ```bash
+   # Set up cleanup trap to ensure temp file removal
+   trap 'rm -f /tmp/pr-body-<number>.md' EXIT
+   
+   # Write PR body to temp file (using single quotes to prevent shell expansion)
+   cat > /tmp/pr-body-<number>.md << 'EOF'
+   <body>
+   EOF
+   
+   # Create PR using --body-file
+   gh pr create --repo <repo> --head spec/<worktree-name> --base <base_branch> --title "<issue-title>" --body-file /tmp/pr-body-<number>.md
+   ```
+   Where:
    - `<base_branch>` is the branch the worktree was created from (resolved from config or default)
+   - `<number>` is the issue number
    - The body includes:
      - A summary of what was changed and why
      - List of key files modified/created
      - `Closes #<number>` at the end
+   - The temp file is automatically cleaned up on exit via the trap handler (even on failure or interruption)
 9. **Request Copilot Review** (Optional): If Copilot reviews are enabled, run `gh pr edit --add-reviewer @copilot`. Handle errors gracefully without failing the workflow.
 10. **Label Done**: Run `gh issue edit <number> --repo <repo> --add-label <label>-done` (where label matches the trigger label, e.g. `howmux`)
 11. **On Failure**: Run `gh issue edit <number> --repo <repo> --add-label <label>-failed`
