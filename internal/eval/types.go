@@ -27,16 +27,24 @@ type SetupEntry struct {
 	Path    string `yaml:"path,omitempty" json:"path,omitempty"` // optional path for file entries
 }
 
+// ExpectedCall defines a behavioral assertion on external tool invocations.
+type ExpectedCall struct {
+	Tool         string   `yaml:"tool" json:"tool"`                                       // Tool name (e.g. gh, jtk, asana)
+	Subcommand   string   `yaml:"subcommand,omitempty" json:"subcommand,omitempty"`       // Subcommand (e.g. "pr create", "issue edit")
+	RequiredArgs []string `yaml:"required_args,omitempty" json:"required_args,omitempty"` // Substrings/flags that must appear in args
+}
+
 // TestCase defines input and expected characteristics for an agent evaluation.
 type TestCase struct {
-	Name           string       `yaml:"name" json:"name"`
-	Description    string       `yaml:"description" json:"description"`
-	Input          string       `yaml:"input" json:"input"`
-	ExpectedOutput string       `yaml:"expected_output,omitempty" json:"expected_output,omitempty"`
-	Context        []string     `yaml:"context,omitempty" json:"context,omitempty"`
-	Setup          []SetupEntry `yaml:"setup,omitempty" json:"setup,omitempty"`
-	Agent          string       `yaml:"agent" json:"agent"`
-	MinScore       *float64     `yaml:"min_score,omitempty" json:"min_score,omitempty"` // Success threshold (0-100), defaults to 80%
+	Name           string         `yaml:"name" json:"name"`
+	Description    string         `yaml:"description" json:"description"`
+	Input          string         `yaml:"input" json:"input"`
+	ExpectedOutput string         `yaml:"expected_output,omitempty" json:"expected_output,omitempty"`
+	ExpectedCalls  []ExpectedCall `yaml:"expected_calls,omitempty" json:"expected_calls,omitempty"`
+	Context        []string       `yaml:"context,omitempty" json:"context,omitempty"`
+	Setup          []SetupEntry   `yaml:"setup,omitempty" json:"setup,omitempty"`
+	Agent          string         `yaml:"agent" json:"agent"`
+	MinScore       *float64       `yaml:"min_score,omitempty" json:"min_score,omitempty"` // Success threshold (0-100), defaults to 80%
 }
 
 // CostInfo tracks token usage and estimated cost.

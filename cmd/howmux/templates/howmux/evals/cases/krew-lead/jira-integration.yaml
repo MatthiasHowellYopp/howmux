@@ -1,0 +1,42 @@
+name: jira-integration
+description: "Test krew-lead's Jira integration workflow with external call validation"
+agent: krew-lead
+input: |
+  Process GitHub issue #78: "Sync status to Jira ticket AEA-123"
+  
+  Task requirements:
+  1. Read the Jira ticket AEA-123 to understand current status
+  2. Orchestrate the standard workflow (architect → builder → validator)
+  3. After successful completion, add a comment to AEA-123 with the PR link
+setup:
+  - type: file
+    label: "Issue Details"
+    path: ".howmux/evals/fixtures/jira-sync-issue.md"
+  - type: text
+    label: "Worktree Name"
+    content: "issue-78-12345"
+  - type: text
+    label: "Repository"
+    content: "jbrinkman/howmux"
+  - type: text
+    label: "Jira Ticket"
+    content: "AEA-123"
+context:
+  - "Must fetch Jira ticket AEA-123 to verify it exists and understand context"
+  - "After workflow completion, should add a comment to the Jira ticket"
+  - "This validates multi-service integration (GitHub + Jira)"
+  - "Demonstrates jtk CLI usage for Atlassian interactions"
+expected_output: |
+  Orchestration plan including:
+  - Jira ticket verification via jtk issues get
+  - Standard workflow execution
+  - Jira comment addition with PR link and completion status
+expected_calls:
+  - tool: jtk
+    subcommand: issues get
+    required_args:
+      - "AEA-123"
+  - tool: jtk
+    subcommand: comments add
+    required_args:
+      - "AEA-123"

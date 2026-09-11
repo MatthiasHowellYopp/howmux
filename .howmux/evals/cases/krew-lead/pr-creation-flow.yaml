@@ -1,0 +1,44 @@
+name: pr-creation-flow
+description: "Test krew-lead's PR creation and issue labeling workflow with external call validation"
+agent: krew-lead
+input: |
+  Process GitHub issue #42: "Add status command to TUI"
+  
+  Complete the full workflow:
+  1. Setup worktree for issue-42-12345
+  2. Orchestrate architect → builder → validator
+  3. Create PR that closes issue #42
+  4. Label issue #42 as howmux-done after successful PR creation
+setup:
+  - type: file
+    label: "Issue Details"
+    path: ".howmux/evals/fixtures/status-command-issue.md"
+  - type: text
+    label: "Worktree Name"
+    content: "issue-42-12345"
+  - type: text
+    label: "Repository"
+    content: "jbrinkman/howmux"
+  - type: text
+    label: "Label from Config"
+    content: "howmux"
+context:
+  - "Must create PR with title that references issue #42"
+  - "PR body should include 'Closes #42' to auto-link"
+  - "After PR creation, must add done label (howmux-done) to the issue"
+  - "This validates the external GitHub CLI interactions"
+expected_output: |
+  Orchestration plan including:
+  - PR creation with proper auto-close reference
+  - Issue labeling with howmux-done after success
+  - Confirmation of PR URL and issue state update
+expected_calls:
+  - tool: gh
+    subcommand: pr create
+    required_args:
+      - "Closes #42"
+  - tool: gh
+    subcommand: issue edit
+    required_args:
+      - "--add-label"
+      - "howmux-done"
