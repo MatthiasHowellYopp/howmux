@@ -56,14 +56,23 @@ type CriterionScore struct {
 	Reasoning     string `json:"reasoning,omitempty"`
 }
 
+// ExternalCall represents a recorded external tool invocation
+type ExternalCall struct {
+	Timestamp string   `json:"timestamp"`
+	Tool      string   `json:"tool"`
+	Args      []string `json:"args"`
+	RawLine   string   `json:"raw_line"`
+}
+
 // CaseResult holds scores and cost for one test case.
 type CaseResult struct {
-	CaseName     string           `json:"case_name"`
-	ActualOutput string           `json:"actual_output"`
-	Scores       []CriterionScore `json:"scores"`
-	AgentCost    CostInfo         `json:"agent_cost"`
-	JudgeCost    CostInfo         `json:"judge_cost"`
-	ErrorContext *ErrorContext    `json:"error_context,omitempty"`
+	CaseName      string           `json:"case_name"`
+	ActualOutput  string           `json:"actual_output"`
+	Scores        []CriterionScore `json:"scores"`
+	AgentCost     CostInfo         `json:"agent_cost"`
+	JudgeCost     CostInfo         `json:"judge_cost"`
+	ErrorContext  *ErrorContext    `json:"error_context,omitempty"`
+	ExternalCalls []ExternalCall   `json:"external_calls,omitempty"`
 }
 
 // ErrorContext captures execution details for debugging failed tests.
