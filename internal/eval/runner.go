@@ -393,7 +393,7 @@ func evaluate(rubric Rubric, cases []TestCase, gitHash string, out io.Writer, cC
 			cr.ActualOutput = ""
 		} else {
 			fmt.Fprintf(out, " → running agent...")
-			actualOutput, cost, errorContext, err := invokeAgent(rubric.Agent, prompt, cConfig)
+			actualOutput, cost, errorContext, externalCalls, err := invokeAgent(rubric.Agent, prompt, cConfig)
 			if err != nil {
 				fmt.Fprintf(out, " ❌ (agent failed)\n")
 				fmt.Fprintf(out, "      Error: %v\n", err)
@@ -403,6 +403,7 @@ func evaluate(rubric Rubric, cases []TestCase, gitHash string, out io.Writer, cC
 				cr.ActualOutput = actualOutput
 				cr.AgentCost = cost
 				cr.ErrorContext = errorContext
+				cr.ExternalCalls = externalCalls
 				fmt.Fprintf(out, " → evaluating...")
 			}
 		}
@@ -529,10 +530,11 @@ func assemblePrompt(setup []SetupEntry, input string) (string, error) {
 }
 
 // invokeAgent executes kiro-cli with the given agent and prompt, with timeout support
-func invokeAgent(agent, prompt string, cConfig *ContainerConfig) (string, CostInfo, *ErrorContext, error) {
+func invokeAgent(agent, prompt string, cConfig *ContainerConfig) (string, CostInfo, *ErrorContext, []ExternalCall, error) {
 	// Use container execution if configured
 	if cConfig != nil {
-		return invokeAgentInContainer(agent, prompt, cConfig)
+		output, cost, errCtx, err := invokeAgentInContainer(agent, prompt, cConfig)
+		return output, cost, errCtx, nil, err // Container mode doesn't record external calls yet
 	}
 
 	return invokeAgentNative(agent, prompt)
@@ -766,7 +768,7 @@ func invokeAgentInContainer(agent, prompt string, cConfig *ContainerConfig) (str
 }
 
 // invokeAgentNative executes kiro-cli natively (original implementation)
-func invokeAgentNative(agent, prompt string) (string, CostInfo, *ErrorContext, error) {
+func invokeAgentNative(agent, prompt string) (string, CostInfo, *ErrorContext, []ExternalCall, error) {
 	timeoutStr := os.Getenv("HOWMUX_EVAL_TIMEOUT")
 	timeout := 2 * time.Minute
 	if timeoutStr != "" {
@@ -778,23 +780,46 @@ func invokeAgentNative(agent, prompt string) (string, CostInfo, *ErrorContext, e
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
+	// Set up fake tools and isolated workspace
+	tempBase, err := os.MkdirTemp("", "howmux-eval-native-*")
+	if err != nil {
+		return "", CostInfo{}, nil, nil, fmt.Errorf("creating temp workspace: %w", err)
+	}
+	defer os.RemoveAll(tempBase)
+
+	toolsDir, callLogPath, cleanup, err := SetupFakeTools(tempBase)
+	if err != nil {
+		return "", CostInfo{}, nil, nil, fmt.Errorf("setting up fake tools: %w", err)
+	}
+	defer cleanup()
+
+	// Create per-case working directory
+	workspaceDir := filepath.Join(tempBase, "workspace")
+	if err := os.MkdirAll(workspaceDir, 0755); err != nil {
+		return "", CostInfo{}, nil, nil, fmt.Errorf("creating workspace: %w", err)
+	}
+
 	cmd := exec.CommandContext(ctx, "kiro-cli", "chat", "--agent", agent, "--no-interactive", "--trust-all-tools")
 	cmd.Stdin = strings.NewReader(prompt)
+	cmd.Dir = workspaceDir // Isolated working directory
 
-	// Capture working directory
-	workingDir, _ := os.Getwd()
+	// Build hermetic environment
+	env := os.Environ()
+	env = prependPathEnv(env, toolsDir) // Fake tools first on PATH
+	env = append(env, fmt.Sprintf("HOWMUX_EVAL_CALL_LOG=%s", callLogPath))
+	cmd.Env = env
 
-	// Capture relevant environment variables
+	// Capture relevant environment variables for error context
 	envVars := make(map[string]string)
-	for _, key := range []string{"HOWMUX_EVAL_TIMEOUT"} {
+	for _, key := range []string{"HOWMUX_EVAL_TIMEOUT", "HOWMUX_EVAL_CALL_LOG"} {
 		if val := os.Getenv(key); val != "" {
 			envVars[key] = val
 		}
 	}
+	envVars["HOWMUX_EVAL_CALL_LOG"] = callLogPath
 
 	start := time.Now()
 	var stdout, stderr []byte
-	var err error
 
 	// Use CombinedOutput to capture both stdout and stderr
 	output := &strings.Builder{}
@@ -823,7 +848,7 @@ func invokeAgentNative(agent, prompt string) (string, CostInfo, *ErrorContext, e
 
 		errorContext = &ErrorContext{
 			Command:     fmt.Sprintf("kiro-cli chat --agent %s --no-interactive --trust-all-tools", agent),
-			WorkingDir:  workingDir,
+			WorkingDir:  workspaceDir,
 			Environment: envVars,
 			Stderr:      string(stderr),
 			ExitCode:    exitCode,
@@ -835,15 +860,18 @@ func invokeAgentNative(agent, prompt string) (string, CostInfo, *ErrorContext, e
 			if errorContext != nil {
 				errorContext.Stderr = fmt.Sprintf("timeout after %v\n%s", timeout, errorContext.Stderr)
 			}
-			return "", CostInfo{}, errorContext, fmt.Errorf("kiro-cli timeout after %v", timeout)
+			return "", CostInfo{}, errorContext, nil, fmt.Errorf("kiro-cli timeout after %v", timeout)
 		}
-		return "", CostInfo{}, errorContext, fmt.Errorf("kiro-cli invocation failed: %w", err)
+		return "", CostInfo{}, errorContext, nil, fmt.Errorf("kiro-cli invocation failed: %w", err)
 	}
+
+	// Read recorded external calls
+	recordedCalls, _ := readCallLog(callLogPath)
 
 	result := stripANSISequences(string(stdout))
 	cost := estimateCost(prompt, result)
 
-	return result, cost, errorContext, nil
+	return result, cost, errorContext, recordedCalls, nil
 }
 
 func scoreDeterministic(criterion Criterion, tc TestCase, actualOutput string) (int, string, bool) {
@@ -1372,7 +1400,7 @@ func evaluateProgressive(rubric Rubric, cases []TestCase, gitHash string, out io
 			cr.ActualOutput = ""
 		} else {
 			fmt.Fprintf(out, " → running agent...")
-			actualOutput, cost, errorContext, err := invokeAgent(rubric.Agent, prompt, cConfig)
+			actualOutput, cost, errorContext, externalCalls, err := invokeAgent(rubric.Agent, prompt, cConfig)
 			if err != nil {
 				fmt.Fprintf(out, " ❌ (agent failed)\n")
 				fmt.Fprintf(out, "      Error: %v\n", err)
@@ -1382,6 +1410,7 @@ func evaluateProgressive(rubric Rubric, cases []TestCase, gitHash string, out io
 				cr.ActualOutput = actualOutput
 				cr.AgentCost = cost
 				cr.ErrorContext = errorContext
+				cr.ExternalCalls = externalCalls
 				fmt.Fprintf(out, " → evaluating...")
 			}
 		}
