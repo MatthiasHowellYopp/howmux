@@ -442,6 +442,54 @@ func evaluate(rubric Rubric, cases []TestCase, gitHash string, out io.Writer, cC
 			cr.Scores = append(cr.Scores, score)
 		}
 
+		// Task 3: Add external calls scoring if expected calls are defined
+		if len(tc.ExpectedCalls) > 0 {
+			satisfied, missing, unexpected := AnalyzeCalls(cr.ExternalCalls, tc.ExpectedCalls)
+
+			// Calculate score: full marks if all satisfied, proportional deduction for missing/unexpected
+			maxScore := 5
+			score := maxScore
+
+			if len(missing) > 0 || len(unexpected) > 0 {
+				// Score based on satisfaction ratio
+				satisfactionRatio := float64(len(satisfied)) / float64(len(tc.ExpectedCalls))
+				score = int(float64(maxScore) * satisfactionRatio)
+
+				// Further deduct for unexpected calls (but don't go below 1)
+				if len(unexpected) > 0 && score > 1 {
+					score = max(1, score-len(unexpected))
+				}
+			}
+
+			// Build reasoning with discrepancy summary
+			var reasoningParts []string
+			if len(satisfied) > 0 {
+				reasoningParts = append(reasoningParts, fmt.Sprintf("Satisfied: %s", strings.Join(satisfied, ", ")))
+			}
+			if len(missing) > 0 {
+				reasoningParts = append(reasoningParts, fmt.Sprintf("Missing: %s", strings.Join(missing, ", ")))
+			}
+			if len(unexpected) > 0 {
+				reasoningParts = append(reasoningParts, fmt.Sprintf("Unexpected: %s", strings.Join(unexpected, ", ")))
+			}
+
+			reasoning := strings.Join(reasoningParts, "; ")
+			if reasoning == "" {
+				reasoning = "all expected calls satisfied"
+			}
+
+			callScore := CriterionScore{
+				Name:          "external_calls_adherence",
+				MaxScore:      maxScore,
+				Score:         score,
+				Deterministic: true,
+				Reasoning:     reasoning,
+				Skipped:       false,
+			}
+
+			cr.Scores = append(cr.Scores, callScore)
+		}
+
 		// Task 4: Color-coded final status for the case
 		if cr.ActualOutput != "" {
 			totalScore := 0
@@ -1446,6 +1494,54 @@ func evaluateProgressive(rubric Rubric, cases []TestCase, gitHash string, out io
 			}
 
 			cr.Scores = append(cr.Scores, score)
+		}
+
+		// Task 3: Add external calls scoring if expected calls are defined
+		if len(tc.ExpectedCalls) > 0 {
+			satisfied, missing, unexpected := AnalyzeCalls(cr.ExternalCalls, tc.ExpectedCalls)
+
+			// Calculate score: full marks if all satisfied, proportional deduction for missing/unexpected
+			maxScore := 5
+			score := maxScore
+
+			if len(missing) > 0 || len(unexpected) > 0 {
+				// Score based on satisfaction ratio
+				satisfactionRatio := float64(len(satisfied)) / float64(len(tc.ExpectedCalls))
+				score = int(float64(maxScore) * satisfactionRatio)
+
+				// Further deduct for unexpected calls (but don't go below 1)
+				if len(unexpected) > 0 && score > 1 {
+					score = max(1, score-len(unexpected))
+				}
+			}
+
+			// Build reasoning with discrepancy summary
+			var reasoningParts []string
+			if len(satisfied) > 0 {
+				reasoningParts = append(reasoningParts, fmt.Sprintf("Satisfied: %s", strings.Join(satisfied, ", ")))
+			}
+			if len(missing) > 0 {
+				reasoningParts = append(reasoningParts, fmt.Sprintf("Missing: %s", strings.Join(missing, ", ")))
+			}
+			if len(unexpected) > 0 {
+				reasoningParts = append(reasoningParts, fmt.Sprintf("Unexpected: %s", strings.Join(unexpected, ", ")))
+			}
+
+			reasoning := strings.Join(reasoningParts, "; ")
+			if reasoning == "" {
+				reasoning = "all expected calls satisfied"
+			}
+
+			callScore := CriterionScore{
+				Name:          "external_calls_adherence",
+				MaxScore:      maxScore,
+				Score:         score,
+				Deterministic: true,
+				Reasoning:     reasoning,
+				Skipped:       false,
+			}
+
+			cr.Scores = append(cr.Scores, callScore)
 		}
 
 		// Add or update the case result
