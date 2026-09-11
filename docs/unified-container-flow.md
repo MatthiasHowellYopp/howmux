@@ -112,8 +112,8 @@ The eval system now uses a unified **generate → build → create → verify** 
 kiro-cli eval --debug --sandbox architect simple-task
 
 # Check saved artifacts
-ls -la .kiro-krew/evals/tmp/dockerfiles/
-cat .kiro-krew/evals/tmp/containers.json
+ls -la .howmux/evals/tmp/dockerfiles/
+cat .howmux/evals/tmp/containers.json
 
 # Inspect debug containers
 docker ps -a | grep kiro-eval-debug

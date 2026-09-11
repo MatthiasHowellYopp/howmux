@@ -17,7 +17,7 @@ type HotkeyErrorMsg struct {
 
 // IsKiroKrewContext validates that the current process is running in a kiro-krew terminal
 func IsKiroKrewContext() bool {
-	return os.Getenv("KIRO_KREW_WATCHER_PID") != ""
+	return os.Getenv("HOWMUX_WATCHER_PID") != ""
 }
 
 // IsCtrlOptionP checks if the key sequence matches Ctrl+Option+P

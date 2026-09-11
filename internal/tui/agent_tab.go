@@ -5,7 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/jbrinkman/kiro-krew/internal/agent"
+	"github.com/matthiashowellyopp/howmux/internal/agent"
 )
 
 // AgentTab implements Tab interface for individual agent views

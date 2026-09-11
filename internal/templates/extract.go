@@ -31,7 +31,7 @@ func Extract(srcDir, destDir string, force bool) error {
 		case relSlash == "kiro" || strings.HasPrefix(relSlash, "kiro/"):
 			relSlash = ".kiro" + strings.TrimPrefix(relSlash, "kiro")
 		case relSlash == "kiro-krew" || strings.HasPrefix(relSlash, "kiro-krew/"):
-			relSlash = ".kiro-krew" + strings.TrimPrefix(relSlash, "kiro-krew")
+			relSlash = ".howmux" + strings.TrimPrefix(relSlash, "kiro-krew")
 		}
 
 		destPath := filepath.Join(destDir, filepath.FromSlash(relSlash))
@@ -48,7 +48,7 @@ func Extract(srcDir, destDir string, force bool) error {
 
 		// config.yaml is NEVER overwritten (preserve user settings)
 		configPath := filepath.ToSlash(destPath)
-		if strings.HasSuffix(configPath, "/.kiro-krew/config.yaml") || strings.HasSuffix(configPath, ".kiro-krew/config.yaml") {
+		if strings.HasSuffix(configPath, "/.howmux/config.yaml") || strings.HasSuffix(configPath, ".howmux/config.yaml") {
 			if _, err := os.Stat(destPath); err == nil {
 				return nil
 			}

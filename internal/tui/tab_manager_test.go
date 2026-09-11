@@ -6,7 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/jbrinkman/kiro-krew/internal/config"
+	"github.com/matthiashowellyopp/howmux/internal/config"
 )
 
 func TestTabManager(t *testing.T) {

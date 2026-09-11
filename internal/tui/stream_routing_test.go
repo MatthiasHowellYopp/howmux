@@ -3,7 +3,7 @@ package tui
 import (
 	"testing"
 
-	"github.com/jbrinkman/kiro-krew/internal/acp"
+	"github.com/matthiashowellyopp/howmux/internal/acp"
 )
 
 // TestStreamMessageRoutesToOriginatingTab is a regression test for the bug where

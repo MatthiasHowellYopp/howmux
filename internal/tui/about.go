@@ -3,7 +3,7 @@ package tui
 import (
 	"fmt"
 
-	"github.com/jbrinkman/kiro-krew/internal/version"
+	"github.com/matthiashowellyopp/howmux/internal/version"
 )
 
 // AboutDialog manages about dialog state and content generation

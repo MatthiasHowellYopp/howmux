@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jbrinkman/kiro-krew/internal/config"
-	"github.com/jbrinkman/kiro-krew/internal/eval/sandbox"
+	"github.com/matthiashowellyopp/howmux/internal/config"
+	"github.com/matthiashowellyopp/howmux/internal/eval/sandbox"
 )
 
 func TestCreateContainerConfig_WithSandboxConfig(t *testing.T) {
