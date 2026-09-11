@@ -9,9 +9,9 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/jbrinkman/kiro-krew/internal/agent"
-	"github.com/jbrinkman/kiro-krew/internal/config"
-	"github.com/jbrinkman/kiro-krew/internal/session"
+	"github.com/matthiashowellyopp/howmux/internal/agent"
+	"github.com/matthiashowellyopp/howmux/internal/config"
+	"github.com/matthiashowellyopp/howmux/internal/session"
 )
 
 func TestMultipleAgentsOutputCapture(t *testing.T) {

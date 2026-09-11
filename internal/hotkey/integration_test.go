@@ -8,7 +8,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/jbrinkman/kiro-krew/internal/session"
+	"github.com/matthiashowellyopp/howmux/internal/session"
 )
 
 // mockTUIModel simulates the TUI model for testing
@@ -62,8 +62,8 @@ func TestHotkeyIntegrationEndToEnd(t *testing.T) {
 	os.Chdir(tempDir)
 
 	// Set kiro-krew context
-	os.Setenv("KIRO_KREW_WATCHER_PID", "12345")
-	defer os.Unsetenv("KIRO_KREW_WATCHER_PID")
+	os.Setenv("HOWMUX_WATCHER_PID", "12345")
+	defer os.Unsetenv("HOWMUX_WATCHER_PID")
 
 	model := newMockTUIModel()
 
@@ -125,7 +125,7 @@ func TestHotkeyIntegrationEndToEnd(t *testing.T) {
 
 	t.Run("Error Handling Outside Context", func(t *testing.T) {
 		// Remove kiro-krew context
-		os.Unsetenv("KIRO_KREW_WATCHER_PID")
+		os.Unsetenv("HOWMUX_WATCHER_PID")
 
 		// Create fresh model
 		errorModel := newMockTUIModel()
@@ -153,7 +153,7 @@ func TestHotkeyIntegrationEndToEnd(t *testing.T) {
 		}
 
 		// Restore context for other tests
-		os.Setenv("KIRO_KREW_WATCHER_PID", "12345")
+		os.Setenv("HOWMUX_WATCHER_PID", "12345")
 	})
 }
 
@@ -332,9 +332,9 @@ func TestHotkeyValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.contextSet {
-				os.Setenv("KIRO_KREW_WATCHER_PID", "12345")
+				os.Setenv("HOWMUX_WATCHER_PID", "12345")
 			} else {
-				os.Unsetenv("KIRO_KREW_WATCHER_PID")
+				os.Unsetenv("HOWMUX_WATCHER_PID")
 			}
 
 			// Test context validation
@@ -352,7 +352,7 @@ func TestHotkeyValidation(t *testing.T) {
 				}
 			}
 
-			os.Unsetenv("KIRO_KREW_WATCHER_PID")
+			os.Unsetenv("HOWMUX_WATCHER_PID")
 		})
 	}
 }
@@ -364,8 +364,8 @@ func TestCompleteWorkflow(t *testing.T) {
 	defer os.Chdir(originalDir)
 	os.Chdir(tempDir)
 
-	os.Setenv("KIRO_KREW_WATCHER_PID", "12345")
-	defer os.Unsetenv("KIRO_KREW_WATCHER_PID")
+	os.Setenv("HOWMUX_WATCHER_PID", "12345")
+	defer os.Unsetenv("HOWMUX_WATCHER_PID")
 
 	model := newMockTUIModel()
 
@@ -433,7 +433,7 @@ func TestCompleteWorkflow(t *testing.T) {
 		}
 
 		// Step 7: Test error conditions
-		os.Unsetenv("KIRO_KREW_WATCHER_PID")
+		os.Unsetenv("HOWMUX_WATCHER_PID")
 		model.errorReceived = nil
 		model.update(HotkeyErrorMsg{Err: ErrNotInKiroKrewContext})
 

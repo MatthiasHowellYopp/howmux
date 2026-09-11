@@ -71,7 +71,7 @@ You can create conventions for any agent:
 
 ## Template Synchronization
 
-The `builder-conventions` skill includes special instructions for maintaining synchronization between template files and live project files. This ensures that changes to configuration files are reflected in both the active project and the templates used for `kiro-krew init`.
+The `builder-conventions` skill includes special instructions for maintaining synchronization between template files and live project files. This ensures that changes to configuration files are reflected in both the active project and the templates used for `howmux init`.
 
 ### Synchronized File Types
 
@@ -79,11 +79,11 @@ When the builder agent modifies these file types, it automatically updates both 
 
 | File Type | Live Location | Template Location |
 |-----------|---------------|-------------------|
-| Agent Manifests | `.kiro/agents/*.json` | `cmd/kiro-krew/templates/kiro/agents/*.json` |
-| Evaluation Cases | `.kiro/evals/**/*` | `cmd/kiro-krew/templates/kiro/evals/**/*` |
-| Rubrics | `.kiro/rubrics/**/*` | `cmd/kiro-krew/templates/kiro/rubrics/**/*` |
-| Scripts | `.kiro-krew/scripts/**/*` | `cmd/kiro-krew/templates/kiro-krew/scripts/**/*` |
-| Themes | `.kiro/themes/**/*` | `cmd/kiro-krew/templates/kiro/themes/**/*` |
+| Agent Manifests | `.kiro/agents/*.json` | `cmd/howmux/templates/kiro/agents/*.json` |
+| Evaluation Cases | `.kiro/evals/**/*` | `cmd/howmux/templates/kiro/evals/**/*` |
+| Rubrics | `.kiro/rubrics/**/*` | `cmd/howmux/templates/kiro/rubrics/**/*` |
+| Scripts | `.howmux/scripts/**/*` | `cmd/howmux/templates/howmux/scripts/**/*` |
+| Themes | `.kiro/themes/**/*` | `cmd/howmux/templates/kiro/themes/**/*` |
 
 ### Sync Verification
 
@@ -92,12 +92,12 @@ The builder-conventions skill provides commands to verify synchronization:
 ```bash
 # Check agent manifest sync
 for agent in architect builder documenter krew-lead planner validator; do
-  diff .kiro/agents/$agent.json cmd/kiro-krew/templates/kiro/agents/$agent.json
+  diff .kiro/agents/$agent.json cmd/howmux/templates/kiro/agents/$agent.json
 done
 
 # Verify script functionality
-.kiro-krew/scripts/worktree-create.sh test-worktree
-.kiro-krew/scripts/worktree-merge.sh test-worktree
+.howmux/scripts/worktree-create.sh test-worktree
+.howmux/scripts/worktree-merge.sh test-worktree
 ```
 
 ## Best Practices

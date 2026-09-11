@@ -39,13 +39,13 @@ The hotkey toggle only works when:
 - The `KIRO_KREW_WATCHER_PID` environment variable is set
 - You're in an interactive TUI session
 
-If used outside this context, you'll receive an error message: "hotkey toggle not available outside kiro-krew context"
+If used outside this context, you'll receive an error message: "hotkey toggle not available outside howmux context"
 
 ## Usage Examples
 
 ### Starting a Planning Session
 ```
-kiro-krew> status
+howmux> status
 No agents running
 
 # Press Ctrl+Alt+P to switch to planning mode
@@ -57,14 +57,14 @@ No agents running
 # While in planning mode, press Ctrl+Alt+P
 # Returns to console with previous state preserved
 
-kiro-krew> watch start
+howmux> watch start
 Watcher started
 ```
 
 ### Alternative: Command-Based Planning
 You can also access planning mode via command:
 ```
-kiro-krew> plan Create user authentication system
+howmux> plan Create user authentication system
 ```
 
 ## Session Management
@@ -77,7 +77,7 @@ kiro-krew> plan Create user authentication system
 ### Session Cleanup
 - Sessions are automatically cleaned up on application exit
 - Orphaned sessions from crashed processes are detected and cleaned up
-- Session data is stored in `.kiro-krew/sessions/`
+- Session data is stored in `.howmux/sessions/`
 
 ## Technical Details
 

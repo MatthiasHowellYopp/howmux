@@ -7,7 +7,7 @@ import (
 
 func TestLoad_BaseBranchDefault(t *testing.T) {
 	tmpDir := t.TempDir()
-	configDir := tmpDir + string(os.PathSeparator) + ".kiro-krew"
+	configDir := tmpDir + string(os.PathSeparator) + ".howmux"
 	if err := os.Mkdir(configDir, 0755); err != nil {
 		t.Fatalf("Failed to create config dir: %v", err)
 	}
@@ -89,7 +89,7 @@ base_branch: release/v1.0`,
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
-			configDir := tmpDir + string(os.PathSeparator) + ".kiro-krew"
+			configDir := tmpDir + string(os.PathSeparator) + ".howmux"
 			if err := os.Mkdir(configDir, 0755); err != nil {
 				t.Fatalf("Failed to create config dir: %v", err)
 			}
@@ -133,7 +133,7 @@ func TestLoad_BaseBranchBackwardCompatibility(t *testing.T) {
 		{
 			name: "minimal config",
 			configContent: `repo: test/repo
-label: kiro-krew`,
+label: howmux`,
 			description: "Config without base_branch should work",
 		},
 		{
@@ -146,7 +146,7 @@ jira:
 		{
 			name: "config with all fields except base_branch",
 			configContent: `repo: test/repo
-label: kiro-krew
+label: howmux
 poll_interval: 5m
 max_retries: 3
 console_logging: true`,
@@ -165,7 +165,7 @@ sandbox:
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
-			configDir := tmpDir + string(os.PathSeparator) + ".kiro-krew"
+			configDir := tmpDir + string(os.PathSeparator) + ".howmux"
 			if err := os.Mkdir(configDir, 0755); err != nil {
 				t.Fatalf("Failed to create config dir: %v", err)
 			}
@@ -203,7 +203,7 @@ sandbox:
 
 func TestLoad_BaseBranchEmptyString(t *testing.T) {
 	tmpDir := t.TempDir()
-	configDir := tmpDir + string(os.PathSeparator) + ".kiro-krew"
+	configDir := tmpDir + string(os.PathSeparator) + ".howmux"
 	if err := os.Mkdir(configDir, 0755); err != nil {
 		t.Fatalf("Failed to create config dir: %v", err)
 	}
@@ -269,7 +269,7 @@ base_branch: "  dev  "`,
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
-			configDir := tmpDir + string(os.PathSeparator) + ".kiro-krew"
+			configDir := tmpDir + string(os.PathSeparator) + ".howmux"
 			if err := os.Mkdir(configDir, 0755); err != nil {
 				t.Fatalf("Failed to create config dir: %v", err)
 			}

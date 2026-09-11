@@ -7,19 +7,19 @@ import (
 
 func TestIsKiroKrewContext(t *testing.T) {
 	// Test without environment variable
-	os.Unsetenv("KIRO_KREW_WATCHER_PID")
+	os.Unsetenv("HOWMUX_WATCHER_PID")
 	if IsKiroKrewContext() {
-		t.Error("Expected IsKiroKrewContext to return false when KIRO_KREW_WATCHER_PID is not set")
+		t.Error("Expected IsKiroKrewContext to return false when HOWMUX_WATCHER_PID is not set")
 	}
 
 	// Test with environment variable
-	os.Setenv("KIRO_KREW_WATCHER_PID", "12345")
+	os.Setenv("HOWMUX_WATCHER_PID", "12345")
 	if !IsKiroKrewContext() {
-		t.Error("Expected IsKiroKrewContext to return true when KIRO_KREW_WATCHER_PID is set")
+		t.Error("Expected IsKiroKrewContext to return true when HOWMUX_WATCHER_PID is set")
 	}
 
 	// Cleanup
-	os.Unsetenv("KIRO_KREW_WATCHER_PID")
+	os.Unsetenv("HOWMUX_WATCHER_PID")
 }
 
 func TestIsCtrlOptionP(t *testing.T) {

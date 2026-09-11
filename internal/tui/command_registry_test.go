@@ -3,8 +3,8 @@ package tui
 import (
 	"testing"
 
-	"github.com/jbrinkman/kiro-krew/internal/agent"
-	"github.com/jbrinkman/kiro-krew/internal/config"
+	"github.com/matthiashowellyopp/howmux/internal/agent"
+	"github.com/matthiashowellyopp/howmux/internal/config"
 )
 
 func TestCommandRegistry(t *testing.T) {
