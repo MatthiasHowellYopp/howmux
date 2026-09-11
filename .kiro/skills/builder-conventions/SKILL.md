@@ -17,13 +17,13 @@ Sync is **one-way** (live → template). CI enforces this via `task sync:check` 
 
 | Live Path | Template Path |
 |-----------|---------------|
-| `.kiro/agents/*.json` | `cmd/kiro-krew/templates/kiro/agents/` |
-| `.kiro/agents/*.md` | `cmd/kiro-krew/templates/kiro/agents/` |
-| `.kiro-krew/scripts/*.sh` | `cmd/kiro-krew/templates/kiro-krew/scripts/` |
-| `.kiro-krew/themes/*.yaml` | `cmd/kiro-krew/templates/kiro-krew/themes/` |
-| `.kiro-krew/evals/fixtures/*` | `cmd/kiro-krew/templates/kiro-krew/evals/fixtures/` |
-| `.kiro-krew/evals/rubrics/*` | `cmd/kiro-krew/templates/kiro-krew/evals/rubrics/` |
-| `.kiro-krew/evals/cases/**/*` | `cmd/kiro-krew/templates/kiro-krew/evals/cases/` |
+| `.kiro/agents/*.json` | `cmd/howmux/templates/kiro/agents/` |
+| `.kiro/agents/*.md` | `cmd/howmux/templates/kiro/agents/` |
+| `.howmux/scripts/*.sh` | `cmd/howmux/templates/howmux/scripts/` |
+| `.howmux/themes/*.yaml` | `cmd/howmux/templates/howmux/themes/` |
+| `.howmux/evals/fixtures/*` | `cmd/howmux/templates/howmux/evals/fixtures/` |
+| `.howmux/evals/rubrics/*` | `cmd/howmux/templates/howmux/evals/rubrics/` |
+| `.howmux/evals/cases/**/*` | `cmd/howmux/templates/howmux/evals/cases/` |
 
 ### Exclusion Patterns
 
@@ -51,20 +51,20 @@ Run the appropriate commands after modifying any template-synchronized files.
 
 ```bash
 # Agent files (JSON configs and prompt files)
-cp .kiro/agents/*.json cmd/kiro-krew/templates/kiro/agents/
-cp .kiro/agents/*.md cmd/kiro-krew/templates/kiro/agents/
+cp .kiro/agents/*.json cmd/howmux/templates/kiro/agents/
+cp .kiro/agents/*.md cmd/howmux/templates/kiro/agents/
 
 # Scripts
-cp .kiro-krew/scripts/*.sh cmd/kiro-krew/templates/kiro-krew/scripts/
+cp .howmux/scripts/*.sh cmd/howmux/templates/howmux/scripts/
 
 # Themes
-cp .kiro-krew/themes/*.yaml cmd/kiro-krew/templates/kiro-krew/themes/
+cp .howmux/themes/*.yaml cmd/howmux/templates/howmux/themes/
 
 # Evals (excluding results directory)
-cp .kiro-krew/evals/fixtures/* cmd/kiro-krew/templates/kiro-krew/evals/fixtures/
-cp .kiro-krew/evals/rubrics/* cmd/kiro-krew/templates/kiro-krew/evals/rubrics/
-mkdir -p cmd/kiro-krew/templates/kiro-krew/evals/cases/
-cp -r .kiro-krew/evals/cases/* cmd/kiro-krew/templates/kiro-krew/evals/cases/
+cp .howmux/evals/fixtures/* cmd/howmux/templates/howmux/evals/fixtures/
+cp .howmux/evals/rubrics/* cmd/howmux/templates/howmux/evals/rubrics/
+mkdir -p cmd/howmux/templates/howmux/evals/cases/
+cp -r .howmux/evals/cases/* cmd/howmux/templates/howmux/evals/cases/
 ```
 
 ### Verification
@@ -79,29 +79,99 @@ If verification fails, re-run the sync commands above for the affected file cate
 
 ## Workflow Integration
 
+**Critical Requirement**: If your task created or modified files under any synced directory, you MUST copy them to their template mirrors before completion. This applies to **newly created files** (not just edits to existing files).
+
 When completing tasks that modify template-synchronized files, follow this sequence:
 
 1. **Implement** — complete the assigned task
-2. **Sync** — run the appropriate sync commands from above
-3. **Verify** — run `task sync:check` (task cannot be marked complete if this fails)
-4. **QA** — run `task lint` and `task test`
+2. **Sync** — run the appropriate sync commands from above for any new or modified files
+3. **Verify** — run `task sync:check` and confirm it passes locally
+4. **QA** — run all discovered QA commands (`task lint`, `task test`, etc.)
 5. **Complete** — create sentinel file documenting results
+
+**Task cannot be marked complete if `sync:check` fails.**
+
+### Synced Surfaces Checklist
+
+Before marking a task complete, if you created or modified files under any of these directories, you MUST mirror them to templates:
+
+- `.howmux/scripts/` → `cmd/howmux/templates/howmux/scripts/`
+- `.howmux/themes/` → `cmd/howmux/templates/howmux/themes/`
+- `.howmux/evals/fixtures/` → `cmd/howmux/templates/howmux/evals/fixtures/`
+- `.howmux/evals/rubrics/` → `cmd/howmux/templates/howmux/evals/rubrics/`
+- `.howmux/evals/cases/` → `cmd/howmux/templates/howmux/evals/cases/` (recursive)
+- `.kiro/agents/*.json` → `cmd/howmux/templates/kiro/agents/` (excluding local-only entries per guidance)
+- `.kiro/agents/*.md` → `cmd/howmux/templates/kiro/agents/`
+
+**Excluded from sync**: `*-conventions` skills (`.kiro/skills/*-conventions/`) are project-specific and must NOT be synced.
+
+**This applies to**:
+- ✅ New files created
+- ✅ Edits to existing files
+- ✅ File renames or moves
+
+### Verification Fallback
+
+If `task sync:check` cannot be run (task binary unavailable), verify manually:
+
+```bash
+# Agents comparison (JSON-aware, ignores local-only entries)
+go run scripts/compare-templates.go --agents-only
+
+# Direct diff for other synced dirs
+diff -rq .howmux/scripts/ cmd/howmux/templates/howmux/scripts/
+diff -rq .howmux/themes/ cmd/howmux/templates/howmux/themes/
+diff -rq --exclude=results --exclude=.DS_Store --exclude=tmp .howmux/evals/ cmd/howmux/templates/howmux/evals/
+```
+
+All commands must produce no output (or only "Files ... and ... are identical") for sync to be valid.
 
 ### Sentinel File Requirements
 
-Include sync verification status in sentinel files:
+Include sync verification status in sentinel files. For tasks that touch synced surfaces, sync verification is MANDATORY.
+
+**Example for tasks that created new files under synced directories**:
 
 ```markdown
 ## Task Complete
 
-**Template Sync**: ✅ VERIFIED (or "N/A - no template files modified")
+**Files Modified**:
+- Created: `.howmux/evals/cases/krew-lead/case-001-spawn-builder.yaml` (NEW)
+- Created: `.howmux/evals/fixtures/sample-issue.md` (NEW)
+- Edited: `.kiro/agents/builder.json`
+
+**Template Sync**: ✅ VERIFIED
+- Mirrored new eval case and fixture to templates
+- Updated agent JSON in template (local-only creds-agent block excluded)
+- `task sync:check` passed locally
+
+**QA Results**:
+- Linting: ✅ PASS (`task lint`)
+- Tests: ✅ PASS (`task test`)
+- Formatting: ✅ PASS (`task fmt:check`)
+- Sync Verification: ✅ PASS (`task sync:check`)
+
+**Sync Commands Used**:
+```bash
+mkdir -p cmd/howmux/templates/howmux/evals/cases/krew-lead/
+cp .howmux/evals/cases/krew-lead/case-001-spawn-builder.yaml cmd/howmux/templates/howmux/evals/cases/krew-lead/
+cp .howmux/evals/fixtures/sample-issue.md cmd/howmux/templates/howmux/evals/fixtures/
+cp .kiro/agents/builder.json cmd/howmux/templates/kiro/agents/
+# (Then manually removed local-only creds-agent MCP block from template copy)
+task sync:check  # ✅ PASS
+```
+```
+
+**Example for tasks that didn't touch synced files**:
+
+```markdown
+## Task Complete
+
+**Template Sync**: N/A - no template files modified
+
 **QA Results**:
 - Linting: ✅ PASS
 - Tests: ✅ PASS
-- Sync Verification: ✅ PASS
-
-**Sync Commands Used**:
-- `cp .kiro/agents/builder.json cmd/kiro-krew/templates/kiro/agents/`
 ```
 
 ## Implementation Patterns
