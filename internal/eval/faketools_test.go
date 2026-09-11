@@ -2,6 +2,7 @@ package eval
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -282,9 +283,72 @@ malformed
 	})
 }
 
-// TestInvokeAgentNative_HermeticExecution verifies that native invocation uses fake tools
-// Note: This test requires kiro-cli to be installed and an agent to be configured.
-// If kiro-cli or the agent is not available, the test will fail with a clear error.
+// TestFakeToolInterception proves the core hermetic guarantee of issue #27
+// directly, without depending on kiro-cli, a configured agent, or the network:
+// with the fake-tools dir prepended to PATH and HOWMUX_EVAL_CALL_LOG set, a
+// `gh` invocation resolves to the fake (never the real binary), returns the
+// fake's canned response, and is recorded to the call log. This is exactly the
+// mechanism invokeAgentNative wires up for the agent; testing it directly makes
+// the safety property verifiable in CI (where kiro-cli is absent).
+func TestFakeToolInterception(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake shim is a bash script; interception test is POSIX-only")
+	}
+
+	toolsDir, callLogPath, cleanup, err := SetupFakeTools(t.TempDir())
+	if err != nil {
+		t.Fatalf("SetupFakeTools: %v", err)
+	}
+	defer cleanup()
+
+	// Build the same hermetic environment invokeAgentNative uses: fake tools
+	// first on PATH, plus the call-log location.
+	env := prependPathEnv(os.Environ(), toolsDir)
+	env = append(env, "HOWMUX_EVAL_CALL_LOG="+callLogPath)
+
+	// A write command that, against the real gh, would create a PR. Here it must
+	// hit the fake and mutate nothing. Invoke through a shell so `gh` is resolved
+	// from the PATH we injected at runtime — this mirrors how the agent shells
+	// out to gh (Go's exec.Command resolves a bare name against the parent PATH
+	// at construction time, which would bypass the fake).
+	cmd := exec.Command("bash", "-c",
+		`gh pr create --repo owner/repo --title "hermetic test" --body "should never reach real GitHub"`)
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("fake gh invocation failed (is the fake on PATH?): %v\noutput: %s", err, out)
+	}
+
+	// 1) The fake resolved and returned its canned pr-create response — proving
+	//    the real gh was not used.
+	if !strings.Contains(string(out), `"number": 42`) {
+		t.Errorf("expected fake gh canned pr-create response, got: %q", string(out))
+	}
+
+	// 2) The call was recorded to the log via HOWMUX_EVAL_CALL_LOG.
+	calls, err := readCallLog(callLogPath)
+	if err != nil {
+		t.Fatalf("readCallLog: %v", err)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("expected exactly 1 recorded call, got %d: %+v", len(calls), calls)
+	}
+	c := calls[0]
+	if c.Tool != "gh" {
+		t.Errorf("recorded tool = %q, want %q", c.Tool, "gh")
+	}
+	if len(c.Args) < 2 || c.Args[0] != "pr" || c.Args[1] != "create" {
+		t.Errorf("recorded args = %v, want to start with [pr create]", c.Args)
+	}
+	if !strings.Contains(c.RawLine, "--repo owner/repo") {
+		t.Errorf("recorded raw line missing the args: %q", c.RawLine)
+	}
+}
+
+// TestInvokeAgentNative_Hermetic verifies that invokeAgentNative itself wires up
+// the hermetic environment. It runs only when kiro-cli is available; the core
+// interception guarantee is proven kiro-cli-independently by
+// TestFakeToolInterception above.
 func TestInvokeAgentNative_HermeticExecution(t *testing.T) {
 	// Check if kiro-cli is available
 	if _, err := os.Stat("/usr/local/bin/kiro-cli"); os.IsNotExist(err) {
@@ -301,33 +365,21 @@ func TestInvokeAgentNative_HermeticExecution(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Skip("kiro-cli not found in common locations - skipping hermetic execution test")
+			t.Skip("kiro-cli not found in common locations - skipping kiro-cli-dependent test")
 		}
 	}
 
-	// Create a simple prompt that would trigger a gh command (if the agent attempts it)
-	// Note: Most agents won't actually call gh unless the prompt specifically asks for it
 	prompt := "List GitHub issues using the gh CLI tool."
-
-	// Use a lightweight agent if available, otherwise skip
-	// The architect agent is typically available in the howmux project
 	agent := "architect"
 
-	// This will fail if the agent doesn't exist, which is expected in minimal test environments
 	output, cost, errCtx, externalCalls, err := invokeAgentNative(agent, prompt)
-
-	// The invocation may fail if the agent isn't configured, which is OK for this test environment
-	// We primarily want to verify that the fake tools setup doesn't error
 	if err != nil {
-		// Check if it's an agent-not-found error vs a setup error
 		if errCtx != nil && strings.Contains(errCtx.Stderr, "agent") {
-			t.Skipf("agent %q not configured - skipping hermetic execution test", agent)
+			t.Skipf("agent %q not configured - skipping kiro-cli-dependent test", agent)
 		}
-		// If it's another type of error, report it
 		t.Logf("invocation failed (may be expected): %v", err)
 	}
 
-	// If we got here, verify the structure is correct
 	if output != "" {
 		t.Logf("agent output received: %d bytes", len(output))
 	}
@@ -335,7 +387,8 @@ func TestInvokeAgentNative_HermeticExecution(t *testing.T) {
 		t.Logf("cost tracked: %+v", cost)
 	}
 
-	// External calls may be empty if the agent didn't invoke gh
+	// Any recorded call must be to the fake gh (never a non-gh/real tool),
+	// confirming invokeAgentNative injected the fake tools onto PATH.
 	t.Logf("external calls recorded: %d", len(externalCalls))
 	for i, call := range externalCalls {
 		t.Logf("  call %d: %s %v", i, call.Tool, call.Args)
@@ -343,8 +396,4 @@ func TestInvokeAgentNative_HermeticExecution(t *testing.T) {
 			t.Errorf("unexpected tool recorded: %q (expected \"gh\")", call.Tool)
 		}
 	}
-
-	// The key verification: no actual GitHub API calls were made
-	// (This is implicit - if fake tools weren't on PATH, real gh would have been called)
-	t.Log("hermetic execution verified: fake tools setup completed without error")
 }
