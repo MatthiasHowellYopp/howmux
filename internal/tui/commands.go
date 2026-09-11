@@ -484,7 +484,7 @@ func (m model) handleTheme(args []string) (model, tea.Cmd) {
 
 func checkForUpdateCmd() tea.Cmd {
 	return func() tea.Msg {
-		release, err := github.GetLatestRelease("jbrinkman/kiro-krew")
+		release, err := github.GetLatestRelease("matthiashowellyopp/howmux")
 		return updateCheckMsg{release: release, err: err}
 	}
 }
