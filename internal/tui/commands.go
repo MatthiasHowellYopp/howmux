@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"log"
 	"os/exec"
 	"sort"
 	"strconv"
@@ -617,19 +616,6 @@ func (m model) switchToConsoleMode() (model, tea.Cmd) {
 			// Force save session state when switching away
 			planningTab.SaveSession()
 		}
-	}
-
-	// Handle legacy planning session cleanup
-	if m.activePlanningSession != nil {
-		// Suspend and preserve planning session state with error handling
-		if err := m.activePlanningSession.SuspendAndDetach(); err != nil {
-			m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("Failed to suspend planning session: %v", err)))
-			log.Printf("Planning session suspend error: %v", err)
-			// Continue anyway, don't block mode switch
-		} else {
-			m = m.appendActivity(m.styles.Success.Render("Planning session suspended"))
-		}
-		m.activePlanningSession = nil
 	}
 
 	// Stop context tracking when exiting planning mode
