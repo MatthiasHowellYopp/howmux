@@ -334,8 +334,8 @@ func TestDetectAgentFallback(t *testing.T) {
 			expected: true,
 		},
 		{
-			name:     "falling back pattern only",
-			stderr:   "Warning: Falling back to default client due to configuration error",
+			name:     "falling back co-occurring with agent context",
+			stderr:   "Warning: falling back — could not load agent 'architect'",
 			expected: true,
 		},
 		{
@@ -344,9 +344,19 @@ func TestDetectAgentFallback(t *testing.T) {
 			expected: true,
 		},
 		{
-			name:     "falling back case insensitive",
-			stderr:   "FALLING BACK to default",
+			name:     "falling back with agent, case insensitive",
+			stderr:   "FALLING BACK: AGENT resolution failed",
 			expected: true,
+		},
+		{
+			name:     "unrelated falling back without agent context (false positive guard)",
+			stderr:   "Warning: Falling back to default client due to configuration error",
+			expected: false,
+		},
+		{
+			name:     "unrelated model/network fallback",
+			stderr:   "network error: falling back to secondary endpoint",
+			expected: false,
 		},
 		{
 			name:     "normal agent output",

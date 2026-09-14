@@ -815,13 +815,30 @@ func invokeAgentInContainer(agent, prompt string, cConfig *ContainerConfig) (str
 	return result, cost, nil, nil
 }
 
-// detectAgentFallback inspects kiro-cli stderr for agent-resolution failure signals.
-// Returns true if fallback was detected (agent could not be resolved).
+// detectAgentFallback inspects kiro-cli stderr for the specific signal that it
+// could not resolve the requested agent and silently fell back to a default
+// client (which would otherwise be scored as a real result).
+//
+// This is deliberately narrow to avoid false positives: a false positive fails a
+// legitimate eval run, which is the same "untrustworthy score" problem in the
+// other direction. "no agent with name" is the specific, safe signal and matches
+// on its own. The generic phrase "falling back" is NOT matched on its own — it
+// appears in unrelated fallbacks (retries, model/network fallback, or messages
+// from tools the agent invokes) — so it only counts when it co-occurs with an
+// agent-resolution context ("agent"), which is kiro-cli's actual message shape
+// ("... falling back ... agent ..." / "no agent with name <x> found").
+//
+// NOTE: this is coupled to kiro-cli's exact stderr wording. If kiro-cli changes
+// its agent-resolution / fallback messages, update the signals below.
 func detectAgentFallback(stderr string) bool {
 	lowerStderr := strings.ToLower(stderr)
-	// Check for kiro-cli's agent-resolution failure messages
-	return strings.Contains(lowerStderr, "no agent with name") ||
-		strings.Contains(lowerStderr, "falling back")
+	if strings.Contains(lowerStderr, "no agent with name") {
+		return true
+	}
+	// Only treat a generic "falling back" as agent-resolution failure when it
+	// co-occurs with agent context, so unrelated fallbacks don't fail the case.
+	return strings.Contains(lowerStderr, "falling back") &&
+		strings.Contains(lowerStderr, "agent")
 }
 
 // invokeAgentNative executes kiro-cli natively (original implementation)
@@ -913,12 +930,19 @@ func invokeAgentNative(agent, prompt string) (string, CostInfo, *ErrorContext, [
 
 	// Detect agent-resolution fallback before checking other errors
 	if detectAgentFallback(string(stderr)) {
+		// Capture the real exit code; kiro-cli typically exits 0 while falling
+		// back, but don't assume it — a fallback coinciding with a non-zero exit
+		// should report the actual code.
+		fallbackExitCode := 0
+		if exitError, ok := err.(*exec.ExitError); ok {
+			fallbackExitCode = exitError.ExitCode()
+		}
 		errCtx := &ErrorContext{
 			Command:     fmt.Sprintf("kiro-cli chat --agent %s --no-interactive --trust-all-tools", agent),
 			WorkingDir:  workspaceDir,
 			Environment: envVars,
 			Stderr:      string(stderr),
-			ExitCode:    0, // kiro-cli exits 0 even when falling back
+			ExitCode:    fallbackExitCode,
 		}
 		return "", CostInfo{}, errCtx, nil, fmt.Errorf("agent resolution failed: kiro-cli could not resolve agent '%s' and fell back to default client (see stderr for details)", agent)
 	}
