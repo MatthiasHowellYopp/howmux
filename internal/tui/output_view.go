@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"hash/fnv"
 	"strings"
 	"time"
 
@@ -21,7 +22,7 @@ type OutputView struct {
 	cachedOutput   []string
 	agentID        string               // Filter output by this agent ID, empty string shows all
 	lastGen        uint64               // last observed OutputCapture generation
-	lineTimestamps map[string]time.Time // Cache of timestamps for phase transitions, key: "<issue>:<lineIndex>"
+	lineTimestamps map[string]time.Time // Cache of phase-line timestamps, key: "<issue>:<contentHash>"
 }
 
 // SetStyles updates the styles used by this view.
@@ -192,11 +193,18 @@ func (ov *OutputView) refreshContent() {
 		}
 
 		// Wrap and indent agent output, injecting timestamps at phase transitions
-		for lineIndex, line := range agentOutput {
+		for _, line := range agentOutput {
 			// Check if this line is a phase transition
 			if detectPhaseTransition(line) {
-				// Generate cache key: "<issue>:<lineIndex>"
-				cacheKey := fmt.Sprintf("%d:%d", agentItem.IssueNumber, lineIndex)
+				// Key the cache by the line's IDENTITY (issue + content hash),
+				// not its slice position. The output comes from a fixed-size ring
+				// buffer, so a line's index shifts as older lines scroll off;
+				// keying by index would pin a cached timestamp to a position that
+				// later holds a different line, showing a stale timestamp. Hashing
+				// the content keeps a phase line's first-seen timestamp stable
+				// across redraws and buffer wraps, and distinct phase lines get
+				// distinct timestamps.
+				cacheKey := fmt.Sprintf("%d:%08x", agentItem.IssueNumber, hashLine(line))
 
 				// If no cached timestamp exists for this line, store current time
 				if _, exists := ov.lineTimestamps[cacheKey]; !exists {
@@ -230,60 +238,38 @@ func (ov *OutputView) refreshContent() {
 	// Intentionally do not force-scroll here; preserve the user's scroll position.
 }
 
-// detectPhaseTransition detects if a line represents a workflow phase boundary
+// detectPhaseTransition reports whether a line is a genuine workflow-phase
+// boundary. Phase lines are the agent's structured phase markers: they start
+// with ">" AND name a workflow phase. Requiring both anchors avoids timestamping
+// ordinary narrative that merely contains verbs like "read"/"check"/"create"
+// ("let me check the imports", "I'll read the config"), which pervade agent
+// output and would otherwise get stamped, defeating the feature's purpose.
 func detectPhaseTransition(line string) bool {
-	// Lines starting with '>' are agent narrative markers
 	trimmed := strings.TrimSpace(line)
-	if strings.HasPrefix(trimmed, ">") {
-		return true
+
+	// Must be an agent phase marker.
+	if !strings.HasPrefix(trimmed, ">") {
+		return false
 	}
 
-	// Detect workflow keywords (case-insensitive, word-boundary aware)
-	lower := strings.ToLower(line)
-
-	// Use word boundaries to avoid false positives like "undelegated"
-	keywords := []string{
-		" delegate ",
-		" delegating ",
-		" delegated ",
-		" reading ",
-		" read ",
-		" checking ",
-		" check ",
-		" pushing ",
-		" push ",
-		" create ",
-		" creating ",
-		" label ",
+	// ...and must name a workflow phase.
+	lower := strings.ToLower(trimmed)
+	phaseKeywords := []string{
+		"delegat",  // delegate / delegating / delegated
+		"reading",  // "reading issue/spec/..."
+		"checking", // "checking code quality"
+		"pushing",  // "pushing branch"
+		"creating", // "creating PR/worktree"
+		"spawn",    // "spawning builder"
+		"labeling", // "labeling issue"
+		"validat",  // validate / validating
 		"qa loop",
 		"quality assurance",
+		"discover",
+		"request", // "requesting review"
 	}
-
-	// Check for keywords with word boundaries at start/end
-	for _, keyword := range keywords {
-		if strings.Contains(lower, keyword) {
-			return true
-		}
-	}
-
-	// Check for keywords at start of line
-	startKeywords := []string{
-		"delegate",
-		"delegating",
-		"delegated",
-		"reading",
-		"read",
-		"checking",
-		"check",
-		"pushing",
-		"push",
-		"create",
-		"creating",
-		"label",
-	}
-
-	for _, keyword := range startKeywords {
-		if strings.HasPrefix(lower, keyword+" ") || strings.HasPrefix(lower, keyword+"s ") {
+	for _, kw := range phaseKeywords {
+		if strings.Contains(lower, kw) {
 			return true
 		}
 	}
@@ -294,6 +280,15 @@ func detectPhaseTransition(line string) bool {
 // formatTimestamp formats a timestamp in the fixed format [YYYY-MM-DD HH:MM:SS]
 func formatTimestamp(t time.Time) string {
 	return t.Format("[2006-01-02 15:04:05]")
+}
+
+// hashLine returns a stable hash of a line's content, used to key the timestamp
+// cache by line identity rather than by its (unstable) position in the output
+// ring buffer.
+func hashLine(line string) uint32 {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(line))
+	return h.Sum32()
 }
 
 // wrapText wraps text to fit within the specified width

@@ -28,26 +28,28 @@ func TestPhaseTransitionDetection(t *testing.T) {
 		line     string
 		expected bool
 	}{
-		// Lines starting with '>' (agent narrative markers)
-		{"narrative marker", "> Processing issue #42", true},
+		// Phase lines: the ">" marker AND a workflow phase keyword.
+		{"narrative marker with phase", "> Reading issue #42", true},
 		{"narrative with spaces", "  > Delegating to architect", true},
 		{"narrative mixed case", "> Reading SPEC file", true},
+		{"pushing phase", "> Pushing changes to remote", true},
+		{"creating pr phase", "> Creating PR with gh cli", true},
+		{"checking quality phase", "> Checking code quality", true},
+		{"qa loop phase", "> Entering QA loop iteration 2", true},
+		{"validating phase", "> Validating implementation", true},
 
-		// Workflow keywords
-		{"delegate lowercase", "Delegating to architect agent", true},
-		{"delegate uppercase", "DELEGATE TO BUILDER", true},
-		{"delegated past tense", "Delegated task to validator", true},
-		{"reading spec", "Reading specification from .howmux/specs/", true},
-		{"read issue", "Read issue #42 from GitHub", true},
-		{"checking quality", "Checking code quality", true},
-		{"qa loop", "Entering QA loop iteration 2", true},
-		{"quality assurance", "Quality assurance phase started", true},
-		{"pushing changes", "Pushing changes to remote", true},
-		{"push branch", "Push branch spec/issue-42 to origin", true},
-		{"create pr", "Create PR for issue #42", true},
-		{"creating pr", "Creating PR with gh cli", true},
-		{"label done", "Label issue as howmux-done", true},
-		{"label failed", "Label issue as howmux-failed", true},
+		// ">" marker WITHOUT a phase keyword — not a phase boundary.
+		{"marker but no phase", "> Processing issue #42", false},
+		{"marker generic", "> Let me think about this", false},
+
+		// Ordinary narrative that CONTAINS the verbs but is NOT a phase marker.
+		// These are the realistic false positives the old heuristic mis-stamped.
+		{"conversational read", "I'll read the config first", false},
+		{"conversational check", "let me check the imports", false},
+		{"conversational create", "create a helper function here", false},
+		{"conversational label", "Label the axis on the chart", false},
+		{"delegate lowercase (no marker)", "Delegating to architect agent", false},
+		{"read issue (no marker)", "Read issue #42 from GitHub", false},
 
 		// Non-phase lines (should NOT trigger)
 		{"regular output", "Building project...", false},
@@ -84,10 +86,10 @@ func TestTimestampCacheStability(t *testing.T) {
 	agentState.Status = agent.StatusRunning
 	agentState.IssueTitle = "Test issue"
 
-	// Capture output with phase transition via Manager
-	manager.CaptureOutputLine(42, "> Starting workflow")
+	// Capture output with phase transitions (">" marker + phase keyword) via Manager
+	manager.CaptureOutputLine(42, "> Reading issue #42")
 	manager.CaptureOutputLine(42, "Regular output line")
-	manager.CaptureOutputLine(42, "Delegating to architect")
+	manager.CaptureOutputLine(42, "> Delegating to architect")
 
 	// Create output view
 	view := NewOutputViewForAgent("agent-42", manager, styles)
@@ -122,6 +124,63 @@ func TestTimestampCacheStability(t *testing.T) {
 			t.Errorf("timestamp drift detected at index %d: %q != %q",
 				i, firstTimestamps[i], secondTimestamps[i])
 		}
+	}
+}
+
+// TestTimestampSurvivesRingBufferWrap is the regression test for the index-keyed
+// cache bug: OutputCapture is a fixed 1000-line ring buffer, so once a session
+// exceeds capacity the slice indices shift as old lines drop off the front.
+// A timestamp cache keyed by index would then show a phase line with a stale
+// timestamp belonging to a line that already scrolled away. Keying by line
+// identity (content hash) must keep a distinctive phase line's timestamp correct
+// after the buffer wraps.
+func TestTimestampSurvivesRingBufferWrap(t *testing.T) {
+	cfg := &config.Config{MaxRetries: 1, LoadedTheme: getTestTheme()}
+	manager := agent.NewManager(cfg)
+	styles := NewStyles(cfg.LoadedTheme)
+
+	manager.RegisterAgent("agent-42", 42)
+	agentState := manager.GetAgent("agent-42")
+	agentState.Status = agent.StatusRunning
+	agentState.IssueTitle = "Wrap test"
+
+	view := NewOutputViewForAgent("agent-42", manager, styles)
+	view.Resize(120, 24)
+
+	// A distinctive phase line we will track across the buffer wrap.
+	const marker = "> Reading the-unique-marker-line"
+	manager.CaptureOutputLine(42, marker)
+
+	// Render once so the marker's timestamp is cached at first sight.
+	view.refreshContent()
+	markerKey := fmt.Sprintf("%d:%08x", 42, hashLine(marker))
+	firstStamp, ok := view.lineTimestamps[markerKey]
+	if !ok {
+		t.Fatal("expected the marker to be timestamped (cached) on first render")
+	}
+
+	time.Sleep(10 * time.Millisecond)
+
+	// Push well past the 1000-line ring-buffer capacity. The marker's INDEX in
+	// the returned window shifts as earlier filler scrolls off — the exact
+	// condition that broke index-based keying.
+	for i := 0; i < 1200; i++ {
+		manager.CaptureOutputLine(42, fmt.Sprintf("filler line %d", i))
+	}
+	// Re-emit the same marker near the end so it's still within the window.
+	manager.CaptureOutputLine(42, marker)
+
+	view.refreshContent()
+
+	// The marker's cache entry (keyed by content identity, not index) must still
+	// hold its ORIGINAL first-seen timestamp — not a stale one, and not a fresh
+	// re-stamp from the wrap.
+	afterStamp, ok := view.lineTimestamps[markerKey]
+	if !ok {
+		t.Fatal("marker timestamp entry disappeared after buffer wrap")
+	}
+	if !afterStamp.Equal(firstStamp) {
+		t.Errorf("marker timestamp changed after ring-buffer wrap: original %v, now %v", firstStamp, afterStamp)
 	}
 }
 
@@ -273,13 +332,13 @@ func TestEdgeCaseMultipleAgents(t *testing.T) {
 	agent42 := manager.GetAgent("agent-42")
 	agent42.Status = agent.StatusRunning
 	agent42.IssueTitle = "Issue 42"
-	manager.CaptureOutputLine(42, "> Starting workflow")
+	manager.CaptureOutputLine(42, "> Reading issue #42")
 
 	manager.RegisterAgent("agent-43", 43)
 	agent43 := manager.GetAgent("agent-43")
 	agent43.Status = agent.StatusRunning
 	agent43.IssueTitle = "Issue 43"
-	manager.CaptureOutputLine(43, "> Starting workflow")
+	manager.CaptureOutputLine(43, "> Reading issue #43")
 
 	// Create separate views for each agent
 	view42 := NewOutputViewForAgent("agent-42", manager, styles)
@@ -370,7 +429,7 @@ func TestRapidOutputPerformance(t *testing.T) {
 	// Add 200 lines with phase transitions scattered throughout
 	for i := 0; i < 200; i++ {
 		if i%20 == 0 {
-			manager.CaptureOutputLine(42, fmt.Sprintf("> Phase transition %d", i))
+			manager.CaptureOutputLine(42, fmt.Sprintf("> Delegating subtask %d", i))
 		} else {
 			manager.CaptureOutputLine(42, fmt.Sprintf("Regular output line %d", i))
 		}
