@@ -847,6 +847,21 @@ func invokeAgentNative(agent, prompt string) (string, CostInfo, *ErrorContext, [
 		return "", CostInfo{}, nil, nil, fmt.Errorf("creating workspace: %w", err)
 	}
 
+	// Expose the project's agent/skill definitions to the isolated workspace so
+	// `kiro-cli --agent <name>` resolves the real agent (configs are read from
+	// .kiro/ relative to the working directory). Without this, kiro-cli silently
+	// falls back to a default client and the eval grades the wrong agent. We
+	// symlink .kiro rather than copy the repo so the workspace stays otherwise
+	// isolated (the agent still can't see or mutate real project files). Failure
+	// to link is non-fatal — the invocation proceeds and, if the agent can't be
+	// resolved, the fallback is detected below.
+	if repoRoot, err := os.Getwd(); err == nil {
+		srcKiro := filepath.Join(repoRoot, ".kiro")
+		if _, statErr := os.Stat(srcKiro); statErr == nil {
+			_ = os.Symlink(srcKiro, filepath.Join(workspaceDir, ".kiro"))
+		}
+	}
+
 	cmd := exec.CommandContext(ctx, "kiro-cli", "chat", "--agent", agent, "--no-interactive", "--trust-all-tools")
 	cmd.Stdin = strings.NewReader(prompt)
 	cmd.Dir = workspaceDir // Isolated working directory
