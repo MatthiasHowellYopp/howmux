@@ -1018,6 +1018,16 @@ func invokeAgentNative(agent, prompt string) (string, CostInfo, *ErrorContext, [
 	// Strip ANSI sequences and estimate cost
 	output := outputBuilder.String()
 	result := stripANSISequences(output)
+
+	// ACP Artifact Collection:
+	// Pre-ACP: actualOutput contained full stdout including artifact content
+	// ACP: actualOutput contains only narration; artifacts arrive as ToolCall events
+	// Solution: Read artifacts from workspace filesystem and append to actualOutput
+	// so rubric grading operates on the real deliverable, not just narration
+	artifactContent := collectArtifacts(agent, workspaceDir)
+	if artifactContent != "" {
+		result += artifactContent
+	}
 	cost := estimateCost(prompt, result)
 
 	return result, cost, errorContext, recordedCalls, nil
