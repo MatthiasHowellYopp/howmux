@@ -2,6 +2,8 @@ package eval
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -187,14 +189,6 @@ func TestACPErrorContextMapping(t *testing.T) {
 			if errorCtx.ExitCode != 1 {
 				t.Error("Exit code should be 1 for errors")
 			}
-
-			// Verify agent fallback detection still works with ACP errors
-			if strings.Contains(tt.acpError, "no agent with name") {
-				isFallback := detectAgentFallback(tt.acpError)
-				if !isFallback {
-					t.Error("Should detect agent fallback from ACP error")
-				}
-			}
 		})
 	}
 }
@@ -277,40 +271,34 @@ func TestACPInvocationPattern(t *testing.T) {
 }
 
 // TestACPAgentFallbackDetection verifies agent fallback still detected
-func TestACPAgentFallbackDetection(t *testing.T) {
-	tests := []struct {
-		name     string
-		acpError string
-		expect   bool
-	}{
-		{
-			name:     "agent not found",
-			acpError: "Error: no agent with name nonexistent found",
-			expect:   true,
-		},
-		{
-			name:     "falling back with agent context",
-			acpError: "Warning: falling back — could not load agent 'architect'",
-			expect:   true,
-		},
-		{
-			name:     "generic error without agent context",
-			acpError: "Error: connection refused",
-			expect:   false,
-		},
-		{
-			name:     "normal operation",
-			acpError: "",
-			expect:   false,
-		},
+// TestACPAgentResolutionPreflight verifies the eval path fails loud up front
+// when the requested agent has no config, instead of letting kiro-cli silently
+// fall back over ACP (the #37 trustworthiness guarantee). It exercises the
+// acp.ValidateAgentResolvable check against a workspace .kiro/agents layout.
+func TestACPAgentResolutionPreflight(t *testing.T) {
+	work := t.TempDir()
+	agentsDir := filepath.Join(work, ".kiro", "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentsDir, "architect.json"), []byte(`{"name":"architect"}`), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
+	tests := []struct {
+		name    string
+		agent   string
+		wantErr bool
+	}{
+		{"resolvable agent", "architect", false},
+		{"unresolvable agent (would silently fall back)", "nonexistent", true},
+		{"empty agent", "", true},
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := detectAgentFallback(tt.acpError)
-			if result != tt.expect {
-				t.Errorf("detectAgentFallback(%q) = %v, want %v",
-					tt.acpError, result, tt.expect)
+			err := acp.ValidateAgentResolvable(work, tt.agent)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateAgentResolvable(%q) err=%v, wantErr=%v", tt.agent, err, tt.wantErr)
 			}
 		})
 	}

@@ -293,6 +293,15 @@ func (m *Manager) Spawn(issueNumber int, repo string) (*Agent, error) {
 		RetryDelay:        1 * time.Second,
 	}
 
+	// Pre-flight: fail loud if the agent config can't be resolved. Over ACP,
+	// kiro-cli silently falls back to a default client for an unknown agent, so
+	// validate up front rather than run a fallback agent against the issue.
+	if err := acp.ValidateAgentResolvable(worktreePath, acpConfig.Agent); err != nil {
+		agentLogFile.Close()
+		log.Printf("[agent] agent resolution failed for issue #%d: %v", issueNumber, err)
+		return nil, fmt.Errorf("agent resolution failed: %w", err)
+	}
+
 	// Create ACP client
 	acpClient := acp.NewClient(acpConfig)
 
@@ -641,6 +650,18 @@ func (m *Manager) retryAgent(agent *Agent) {
 		ConnectionTimeout: 30 * time.Second,
 		MaxRetries:        3,
 		RetryDelay:        1 * time.Second,
+	}
+
+	// Pre-flight: fail loud if the agent config can't be resolved (ACP would
+	// otherwise silently fall back to a default client for an unknown agent).
+	if err := acp.ValidateAgentResolvable(worktreePath, acpConfig.Agent); err != nil {
+		agentLogFile.Close()
+		log.Printf("[agent] retry agent resolution failed for issue #%d: %v", agent.IssueNumber, err)
+		m.mu.Lock()
+		agent.Status = StatusFailed
+		m.statusGen.Add(1)
+		m.mu.Unlock()
+		return
 	}
 
 	// Create ACP client

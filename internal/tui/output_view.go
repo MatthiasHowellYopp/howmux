@@ -208,6 +208,13 @@ func (ov *OutputView) refreshContent() {
 				// across redraws and buffer wraps, and distinct phase lines get
 				// distinct timestamps. Event type is included to prevent collision
 				// between different event types on the same line content.
+				//
+				// Known tradeoff: two distinct phase lines with identical text AND
+				// event type hash to the same key, so a later identical phase shows
+				// the first occurrence's timestamp rather than its own. This is
+				// acceptable for repeated identical phases (the alternative — a
+				// monotonic capture sequence — would defeat the cross-redraw
+				// stability this keying exists to provide).
 				cacheKey := fmt.Sprintf("%d:%s:%08x", agentItem.IssueNumber, eventType, hashLine(line))
 
 				// If no cached timestamp exists for this line, store event timestamp

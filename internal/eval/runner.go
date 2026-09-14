@@ -816,32 +816,6 @@ func invokeAgentInContainer(agent, prompt string, cConfig *ContainerConfig) (str
 	return result, cost, nil, nil
 }
 
-// detectAgentFallback inspects kiro-cli stderr for the specific signal that it
-// could not resolve the requested agent and silently fell back to a default
-// client (which would otherwise be scored as a real result).
-//
-// This is deliberately narrow to avoid false positives: a false positive fails a
-// legitimate eval run, which is the same "untrustworthy score" problem in the
-// other direction. "no agent with name" is the specific, safe signal and matches
-// on its own. The generic phrase "falling back" is NOT matched on its own — it
-// appears in unrelated fallbacks (retries, model/network fallback, or messages
-// from tools the agent invokes) — so it only counts when it co-occurs with an
-// agent-resolution context ("agent"), which is kiro-cli's actual message shape
-// ("... falling back ... agent ..." / "no agent with name <x> found").
-//
-// NOTE: this is coupled to kiro-cli's exact stderr wording. If kiro-cli changes
-// its agent-resolution / fallback messages, update the signals below.
-func detectAgentFallback(stderr string) bool {
-	lowerStderr := strings.ToLower(stderr)
-	if strings.Contains(lowerStderr, "no agent with name") {
-		return true
-	}
-	// Only treat a generic "falling back" as agent-resolution failure when it
-	// co-occurs with agent context, so unrelated fallbacks don't fail the case.
-	return strings.Contains(lowerStderr, "falling back") &&
-		strings.Contains(lowerStderr, "agent")
-}
-
 // invokeAgentNative executes kiro-cli via ACP protocol
 func invokeAgentNative(agent, prompt string) (string, CostInfo, *ErrorContext, []ExternalCall, error) {
 	timeoutStr := os.Getenv("HOWMUX_EVAL_TIMEOUT")
@@ -928,6 +902,21 @@ func invokeAgentNative(agent, prompt string) (string, CostInfo, *ErrorContext, [
 		KiroCLIPath:       "kiro-cli",
 	}
 
+	// Pre-flight: fail loud if the agent can't be resolved. Over ACP, kiro-cli
+	// silently falls back to a default client for an unknown agent with no
+	// detectable signal, which would otherwise score the fallback as a real
+	// result (the trustworthiness bug from #37). Check the config up front.
+	if err := acp.ValidateAgentResolvable(workspaceDir, agent); err != nil {
+		errCtx := &ErrorContext{
+			Command:     fmt.Sprintf("kiro-cli acp --agent %s", agent),
+			WorkingDir:  workspaceDir,
+			Environment: envVars,
+			Stderr:      err.Error(),
+			ExitCode:    1,
+		}
+		return "", CostInfo{}, errCtx, nil, fmt.Errorf("agent resolution failed: %w", err)
+	}
+
 	// Create and connect ACP client
 	client := acp.NewClient(config)
 	defer client.Close()
@@ -940,28 +929,13 @@ func invokeAgentNative(agent, prompt string) (string, CostInfo, *ErrorContext, [
 			fmt.Printf(" (>30s)")
 		}
 
-		// Check if this is an agent resolution failure
-		errStr := err.Error()
-		if strings.Contains(strings.ToLower(errStr), "agent") &&
-			(strings.Contains(strings.ToLower(errStr), "not found") ||
-				strings.Contains(strings.ToLower(errStr), "resolve") ||
-				strings.Contains(strings.ToLower(errStr), "fallback")) {
-			errCtx := &ErrorContext{
-				Command:     fmt.Sprintf("kiro-cli acp --agent %s", agent),
-				WorkingDir:  workspaceDir,
-				Environment: envVars,
-				Stderr:      errStr,
-				ExitCode:    1,
-			}
-			return "", CostInfo{}, errCtx, nil, fmt.Errorf("agent resolution failed: kiro-cli could not resolve agent '%s' and fell back to default client (see stderr for details)", agent)
-		}
-
-		// General connection failure
+		// General connection failure (agent resolvability was already checked
+		// up front via ValidateAgentResolvable).
 		errCtx := &ErrorContext{
 			Command:     fmt.Sprintf("kiro-cli acp --agent %s", agent),
 			WorkingDir:  workspaceDir,
 			Environment: envVars,
-			Stderr:      errStr,
+			Stderr:      err.Error(),
 			ExitCode:    1,
 		}
 		return "", CostInfo{}, errCtx, nil, fmt.Errorf("ACP connection failed: %w", err)
