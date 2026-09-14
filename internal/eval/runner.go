@@ -15,6 +15,7 @@ import (
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
+	"github.com/matthiashowellyopp/howmux/internal/acp"
 	"github.com/matthiashowellyopp/howmux/internal/config"
 	"github.com/matthiashowellyopp/howmux/internal/eval/sandbox"
 	"gopkg.in/yaml.v3"
@@ -841,7 +842,7 @@ func detectAgentFallback(stderr string) bool {
 		strings.Contains(lowerStderr, "agent")
 }
 
-// invokeAgentNative executes kiro-cli natively (original implementation)
+// invokeAgentNative executes kiro-cli via ACP protocol
 func invokeAgentNative(agent, prompt string) (string, CostInfo, *ErrorContext, []ExternalCall, error) {
 	timeoutStr := os.Getenv("HOWMUX_EVAL_TIMEOUT")
 	// Default 5-minute timeout accommodates real agent runs (~2-3.5 min/case observed for architect)
@@ -889,16 +890,6 @@ func invokeAgentNative(agent, prompt string) (string, CostInfo, *ErrorContext, [
 		}
 	}
 
-	cmd := exec.CommandContext(ctx, "kiro-cli", "chat", "--agent", agent, "--no-interactive", "--trust-all-tools")
-	cmd.Stdin = strings.NewReader(prompt)
-	cmd.Dir = workspaceDir // Isolated working directory
-
-	// Build hermetic environment
-	env := os.Environ()
-	env = prependPathEnv(env, toolsDir) // Fake tools first on PATH
-	env = append(env, fmt.Sprintf("HOWMUX_EVAL_CALL_LOG=%s", callLogPath))
-	cmd.Env = env
-
 	// Capture relevant environment variables for error context
 	envVars := make(map[string]string)
 	for _, key := range []string{"HOWMUX_EVAL_TIMEOUT", "HOWMUX_EVAL_CALL_LOG"} {
@@ -908,76 +899,151 @@ func invokeAgentNative(agent, prompt string) (string, CostInfo, *ErrorContext, [
 	}
 	envVars["HOWMUX_EVAL_CALL_LOG"] = callLogPath
 
+	// Set up environment for fake tools
+	currentEnv := os.Environ()
+	updatedEnv := prependPathEnv(currentEnv, toolsDir)
+	for _, envEntry := range updatedEnv {
+		parts := strings.SplitN(envEntry, "=", 2)
+		if len(parts) == 2 {
+			os.Setenv(parts[0], parts[1])
+		}
+	}
+	os.Setenv("HOWMUX_EVAL_CALL_LOG", callLogPath)
+	defer func() {
+		// Restore original environment
+		for _, envEntry := range currentEnv {
+			parts := strings.SplitN(envEntry, "=", 2)
+			if len(parts) == 2 {
+				os.Setenv(parts[0], parts[1])
+			}
+		}
+	}()
+
+	// Create ACP connection config
+	config := &acp.ConnectionConfig{
+		Agent:             agent,
+		Cwd:               workspaceDir,
+		RequestTimeout:    timeout,
+		ConnectionTimeout: 30 * time.Second, // Standard connection timeout
+		KiroCLIPath:       "kiro-cli",
+	}
+
+	// Create and connect ACP client
+	client := acp.NewClient(config)
+	defer client.Close()
+
 	start := time.Now()
-	var stdout, stderr []byte
 
-	// Use CombinedOutput to capture both stdout and stderr
-	output := &strings.Builder{}
-	errOutput := &strings.Builder{}
+	if err := client.Connect(ctx); err != nil {
+		elapsed := time.Since(start)
+		if elapsed > 30*time.Second {
+			fmt.Printf(" (>30s)")
+		}
 
-	cmd.Stdout = output
-	cmd.Stderr = errOutput
+		// Check if this is an agent resolution failure
+		errStr := err.Error()
+		if strings.Contains(strings.ToLower(errStr), "agent") &&
+			(strings.Contains(strings.ToLower(errStr), "not found") ||
+				strings.Contains(strings.ToLower(errStr), "resolve") ||
+				strings.Contains(strings.ToLower(errStr), "fallback")) {
+			errCtx := &ErrorContext{
+				Command:     fmt.Sprintf("kiro-cli acp --agent %s", agent),
+				WorkingDir:  workspaceDir,
+				Environment: envVars,
+				Stderr:      errStr,
+				ExitCode:    1,
+			}
+			return "", CostInfo{}, errCtx, nil, fmt.Errorf("agent resolution failed: kiro-cli could not resolve agent '%s' and fell back to default client (see stderr for details)", agent)
+		}
 
-	err = cmd.Run()
+		// General connection failure
+		errCtx := &ErrorContext{
+			Command:     fmt.Sprintf("kiro-cli acp --agent %s", agent),
+			WorkingDir:  workspaceDir,
+			Environment: envVars,
+			Stderr:      errStr,
+			ExitCode:    1,
+		}
+		return "", CostInfo{}, errCtx, nil, fmt.Errorf("ACP connection failed: %w", err)
+	}
+
+	// Create message request with streaming to collect complete output
+	req := &acp.MessageRequest{
+		Message:        prompt,
+		Streaming:      true,
+		ResponseFormat: "text",
+		Timeout:        timeout,
+	}
+
+	// Send message and get streaming response channel
+	streamChan, err := client.StreamMessage(ctx, req)
+	if err != nil {
+		elapsed := time.Since(start)
+		if elapsed > 30*time.Second {
+			fmt.Printf(" (>30s)")
+		}
+
+		errCtx := &ErrorContext{
+			Command:     fmt.Sprintf("kiro-cli acp --agent %s", agent),
+			WorkingDir:  workspaceDir,
+			Environment: envVars,
+			Stderr:      err.Error(),
+			ExitCode:    1,
+		}
+		return "", CostInfo{}, errCtx, nil, fmt.Errorf("ACP stream failed: %w", err)
+	}
+
+	// Collect all text chunks from the stream
+	var outputBuilder strings.Builder
+	var errorMessages []string
+	var errorContext *ErrorContext
+
+	for response := range streamChan {
+		switch response.Type {
+		case "text":
+			outputBuilder.WriteString(response.Content)
+		case "error":
+			errorMessages = append(errorMessages, response.Error)
+		case "done":
+			// Stream complete
+		}
+	}
+
 	elapsed := time.Since(start)
-
 	if elapsed > 30*time.Second {
 		fmt.Printf(" (>30s)")
 	}
 
-	stdout = []byte(output.String())
-	stderr = []byte(errOutput.String())
-
-	// Detect agent-resolution fallback before checking other errors
-	if detectAgentFallback(string(stderr)) {
-		// Capture the real exit code; kiro-cli typically exits 0 while falling
-		// back, but don't assume it — a fallback coinciding with a non-zero exit
-		// should report the actual code.
-		fallbackExitCode := 0
-		if exitError, ok := err.(*exec.ExitError); ok {
-			fallbackExitCode = exitError.ExitCode()
-		}
+	// Check for timeout
+	if ctx.Err() == context.DeadlineExceeded {
+		stderrMsg := strings.Join(errorMessages, "\n")
 		errCtx := &ErrorContext{
-			Command:     fmt.Sprintf("kiro-cli chat --agent %s --no-interactive --trust-all-tools", agent),
+			Command:     fmt.Sprintf("kiro-cli acp --agent %s", agent),
 			WorkingDir:  workspaceDir,
 			Environment: envVars,
-			Stderr:      string(stderr),
-			ExitCode:    fallbackExitCode,
+			Stderr:      fmt.Sprintf("timeout after %v\n%s", timeout, stderrMsg),
+			ExitCode:    1,
 		}
-		return "", CostInfo{}, errCtx, nil, fmt.Errorf("agent resolution failed: kiro-cli could not resolve agent '%s' and fell back to default client (see stderr for details)", agent)
+		return "", CostInfo{}, errCtx, nil, fmt.Errorf("kiro-cli timeout after %v", timeout)
 	}
 
-	// Create error context for any execution issues
-	var errorContext *ErrorContext
-	if err != nil || len(stderr) > 0 {
-		exitCode := 0
-		if exitError, ok := err.(*exec.ExitError); ok {
-			exitCode = exitError.ExitCode()
-		}
-
+	// Create error context if there were errors
+	if len(errorMessages) > 0 {
 		errorContext = &ErrorContext{
-			Command:     fmt.Sprintf("kiro-cli chat --agent %s --no-interactive --trust-all-tools", agent),
+			Command:     fmt.Sprintf("kiro-cli acp --agent %s", agent),
 			WorkingDir:  workspaceDir,
 			Environment: envVars,
-			Stderr:      string(stderr),
-			ExitCode:    exitCode,
+			Stderr:      strings.Join(errorMessages, "\n"),
+			ExitCode:    0, // ACP may report errors without exit code
 		}
-	}
-
-	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			if errorContext != nil {
-				errorContext.Stderr = fmt.Sprintf("timeout after %v\n%s", timeout, errorContext.Stderr)
-			}
-			return "", CostInfo{}, errorContext, nil, fmt.Errorf("kiro-cli timeout after %v", timeout)
-		}
-		return "", CostInfo{}, errorContext, nil, fmt.Errorf("kiro-cli invocation failed: %w", err)
 	}
 
 	// Read recorded external calls
 	recordedCalls, _ := readCallLog(callLogPath)
 
-	result := stripANSISequences(string(stdout))
+	// Strip ANSI sequences and estimate cost
+	output := outputBuilder.String()
+	result := stripANSISequences(output)
 	cost := estimateCost(prompt, result)
 
 	return result, cost, errorContext, recordedCalls, nil

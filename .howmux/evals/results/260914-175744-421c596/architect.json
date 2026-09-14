@@ -1,0 +1,405 @@
+{
+  "agent": "architect",
+  "git_hash": "421c596",
+  "cases": [
+    {
+      "case_name": "basic-spec-generation",
+      "actual_output": "",
+      "scores": [
+        {
+          "name": "task_decomposition",
+          "score": 0,
+          "max_score": 5,
+          "deterministic": false,
+          "skipped": true,
+          "reasoning": "no output available for LLM judging"
+        },
+        {
+          "name": "acceptance_criteria_testability",
+          "score": 0,
+          "max_score": 5,
+          "deterministic": false,
+          "skipped": true,
+          "reasoning": "no output available for LLM judging"
+        },
+        {
+          "name": "file_reference_accuracy",
+          "score": 0,
+          "max_score": 5,
+          "deterministic": true,
+          "skipped": true,
+          "reasoning": "no output to evaluate"
+        },
+        {
+          "name": "completeness",
+          "score": 0,
+          "max_score": 5,
+          "deterministic": true,
+          "skipped": true,
+          "reasoning": "no output to evaluate"
+        }
+      ],
+      "agent_cost": {
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "estimated_usd": 0
+      },
+      "judge_cost": {
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "estimated_usd": 0
+      },
+      "error_context": {
+        "command": "kiro-cli acp --agent architect",
+        "working_dir": "/var/folders/tk/69_x215j7p9cvfy0mjqzfdhc0000gq/T/howmux-eval-native-865296829/workspace",
+        "environment": {
+          "HOWMUX_EVAL_CALL_LOG": "/var/folders/tk/69_x215j7p9cvfy0mjqzfdhc0000gq/T/howmux-eval-native-865296829/fake-tools-2277462577/call.log"
+        },
+        "stderr": "timeouts must be positive",
+        "exit_code": 1
+      }
+    },
+    {
+      "case_name": "complex-feature-design",
+      "actual_output": "",
+      "scores": [
+        {
+          "name": "task_decomposition",
+          "score": 0,
+          "max_score": 5,
+          "deterministic": false,
+          "skipped": true,
+          "reasoning": "no output available for LLM judging"
+        },
+        {
+          "name": "acceptance_criteria_testability",
+          "score": 0,
+          "max_score": 5,
+          "deterministic": false,
+          "skipped": true,
+          "reasoning": "no output available for LLM judging"
+        },
+        {
+          "name": "file_reference_accuracy",
+          "score": 0,
+          "max_score": 5,
+          "deterministic": true,
+          "skipped": true,
+          "reasoning": "no output to evaluate"
+        },
+        {
+          "name": "completeness",
+          "score": 0,
+          "max_score": 5,
+          "deterministic": true,
+          "skipped": true,
+          "reasoning": "no output to evaluate"
+        }
+      ],
+      "agent_cost": {
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "estimated_usd": 0
+      },
+      "judge_cost": {
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "estimated_usd": 0
+      },
+      "error_context": {
+        "command": "kiro-cli acp --agent architect",
+        "working_dir": "/var/folders/tk/69_x215j7p9cvfy0mjqzfdhc0000gq/T/howmux-eval-native-344630443/workspace",
+        "environment": {
+          "HOWMUX_EVAL_CALL_LOG": "/var/folders/tk/69_x215j7p9cvfy0mjqzfdhc0000gq/T/howmux-eval-native-344630443/fake-tools-2590323545/call.log"
+        },
+        "stderr": "timeouts must be positive",
+        "exit_code": 1
+      }
+    },
+    {
+      "case_name": "configuration-enhancement",
+      "actual_output": "",
+      "scores": [
+        {
+          "name": "task_decomposition",
+          "score": 0,
+          "max_score": 5,
+          "deterministic": false,
+          "skipped": true,
+          "reasoning": "no output available for LLM judging"
+        },
+        {
+          "name": "acceptance_criteria_testability",
+          "score": 0,
+          "max_score": 5,
+          "deterministic": false,
+          "skipped": true,
+          "reasoning": "no output available for LLM judging"
+        },
+        {
+          "name": "file_reference_accuracy",
+          "score": 0,
+          "max_score": 5,
+          "deterministic": true,
+          "skipped": true,
+          "reasoning": "no output to evaluate"
+        },
+        {
+          "name": "completeness",
+          "score": 0,
+          "max_score": 5,
+          "deterministic": true,
+          "skipped": true,
+          "reasoning": "no output to evaluate"
+        }
+      ],
+      "agent_cost": {
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "estimated_usd": 0
+      },
+      "judge_cost": {
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "estimated_usd": 0
+      },
+      "error_context": {
+        "command": "kiro-cli acp --agent architect",
+        "working_dir": "/var/folders/tk/69_x215j7p9cvfy0mjqzfdhc0000gq/T/howmux-eval-native-3272693360/workspace",
+        "environment": {
+          "HOWMUX_EVAL_CALL_LOG": "/var/folders/tk/69_x215j7p9cvfy0mjqzfdhc0000gq/T/howmux-eval-native-3272693360/fake-tools-1019759168/call.log"
+        },
+        "stderr": "timeouts must be positive",
+        "exit_code": 1
+      }
+    },
+    {
+      "case_name": "custom-threshold-test",
+      "actual_output": "",
+      "scores": [
+        {
+          "name": "task_decomposition",
+          "score": 0,
+          "max_score": 5,
+          "deterministic": false,
+          "skipped": true,
+          "reasoning": "no output available for LLM judging"
+        },
+        {
+          "name": "acceptance_criteria_testability",
+          "score": 0,
+          "max_score": 5,
+          "deterministic": false,
+          "skipped": true,
+          "reasoning": "no output available for LLM judging"
+        },
+        {
+          "name": "file_reference_accuracy",
+          "score": 0,
+          "max_score": 5,
+          "deterministic": true,
+          "skipped": true,
+          "reasoning": "no output to evaluate"
+        },
+        {
+          "name": "completeness",
+          "score": 0,
+          "max_score": 5,
+          "deterministic": true,
+          "skipped": true,
+          "reasoning": "no output to evaluate"
+        }
+      ],
+      "agent_cost": {
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "estimated_usd": 0
+      },
+      "judge_cost": {
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "estimated_usd": 0
+      },
+      "error_context": {
+        "command": "kiro-cli acp --agent architect",
+        "working_dir": "/var/folders/tk/69_x215j7p9cvfy0mjqzfdhc0000gq/T/howmux-eval-native-2103329097/workspace",
+        "environment": {
+          "HOWMUX_EVAL_CALL_LOG": "/var/folders/tk/69_x215j7p9cvfy0mjqzfdhc0000gq/T/howmux-eval-native-2103329097/fake-tools-1964826060/call.log"
+        },
+        "stderr": "timeouts must be positive",
+        "exit_code": 1
+      }
+    },
+    {
+      "case_name": "default-threshold-test",
+      "actual_output": "",
+      "scores": [
+        {
+          "name": "task_decomposition",
+          "score": 0,
+          "max_score": 5,
+          "deterministic": false,
+          "skipped": true,
+          "reasoning": "no output available for LLM judging"
+        },
+        {
+          "name": "acceptance_criteria_testability",
+          "score": 0,
+          "max_score": 5,
+          "deterministic": false,
+          "skipped": true,
+          "reasoning": "no output available for LLM judging"
+        },
+        {
+          "name": "file_reference_accuracy",
+          "score": 0,
+          "max_score": 5,
+          "deterministic": true,
+          "skipped": true,
+          "reasoning": "no output to evaluate"
+        },
+        {
+          "name": "completeness",
+          "score": 0,
+          "max_score": 5,
+          "deterministic": true,
+          "skipped": true,
+          "reasoning": "no output to evaluate"
+        }
+      ],
+      "agent_cost": {
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "estimated_usd": 0
+      },
+      "judge_cost": {
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "estimated_usd": 0
+      },
+      "error_context": {
+        "command": "kiro-cli acp --agent architect",
+        "working_dir": "/var/folders/tk/69_x215j7p9cvfy0mjqzfdhc0000gq/T/howmux-eval-native-570423826/workspace",
+        "environment": {
+          "HOWMUX_EVAL_CALL_LOG": "/var/folders/tk/69_x215j7p9cvfy0mjqzfdhc0000gq/T/howmux-eval-native-570423826/fake-tools-14478854/call.log"
+        },
+        "stderr": "timeouts must be positive",
+        "exit_code": 1
+      }
+    },
+    {
+      "case_name": "performance-optimization",
+      "actual_output": "",
+      "scores": [
+        {
+          "name": "task_decomposition",
+          "score": 0,
+          "max_score": 5,
+          "deterministic": false,
+          "skipped": true,
+          "reasoning": "no output available for LLM judging"
+        },
+        {
+          "name": "acceptance_criteria_testability",
+          "score": 0,
+          "max_score": 5,
+          "deterministic": false,
+          "skipped": true,
+          "reasoning": "no output available for LLM judging"
+        },
+        {
+          "name": "file_reference_accuracy",
+          "score": 0,
+          "max_score": 5,
+          "deterministic": true,
+          "skipped": true,
+          "reasoning": "no output to evaluate"
+        },
+        {
+          "name": "completeness",
+          "score": 0,
+          "max_score": 5,
+          "deterministic": true,
+          "skipped": true,
+          "reasoning": "no output to evaluate"
+        }
+      ],
+      "agent_cost": {
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "estimated_usd": 0
+      },
+      "judge_cost": {
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "estimated_usd": 0
+      },
+      "error_context": {
+        "command": "kiro-cli acp --agent architect",
+        "working_dir": "/var/folders/tk/69_x215j7p9cvfy0mjqzfdhc0000gq/T/howmux-eval-native-358100221/workspace",
+        "environment": {
+          "HOWMUX_EVAL_CALL_LOG": "/var/folders/tk/69_x215j7p9cvfy0mjqzfdhc0000gq/T/howmux-eval-native-358100221/fake-tools-1179943429/call.log"
+        },
+        "stderr": "timeouts must be positive",
+        "exit_code": 1
+      }
+    },
+    {
+      "case_name": "refactoring-analysis",
+      "actual_output": "",
+      "scores": [
+        {
+          "name": "task_decomposition",
+          "score": 0,
+          "max_score": 5,
+          "deterministic": false,
+          "skipped": true,
+          "reasoning": "no output available for LLM judging"
+        },
+        {
+          "name": "acceptance_criteria_testability",
+          "score": 0,
+          "max_score": 5,
+          "deterministic": false,
+          "skipped": true,
+          "reasoning": "no output available for LLM judging"
+        },
+        {
+          "name": "file_reference_accuracy",
+          "score": 0,
+          "max_score": 5,
+          "deterministic": true,
+          "skipped": true,
+          "reasoning": "no output to evaluate"
+        },
+        {
+          "name": "completeness",
+          "score": 0,
+          "max_score": 5,
+          "deterministic": true,
+          "skipped": true,
+          "reasoning": "no output to evaluate"
+        }
+      ],
+      "agent_cost": {
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "estimated_usd": 0
+      },
+      "judge_cost": {
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "estimated_usd": 0
+      },
+      "error_context": {
+        "command": "kiro-cli acp --agent architect",
+        "working_dir": "/var/folders/tk/69_x215j7p9cvfy0mjqzfdhc0000gq/T/howmux-eval-native-1372701072/workspace",
+        "environment": {
+          "HOWMUX_EVAL_CALL_LOG": "/var/folders/tk/69_x215j7p9cvfy0mjqzfdhc0000gq/T/howmux-eval-native-1372701072/fake-tools-1215006368/call.log"
+        },
+        "stderr": "timeouts must be positive",
+        "exit_code": 1
+      }
+    }
+  ]
+}

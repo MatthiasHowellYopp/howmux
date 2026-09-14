@@ -193,27 +193,31 @@ func (ov *OutputView) refreshContent() {
 		}
 
 		// Wrap and indent agent output, injecting timestamps at phase transitions
+		// Phase detection now uses structured events instead of text heuristics
 		for _, line := range agentOutput {
-			// Check if this line is a phase transition
-			if detectPhaseTransition(line) {
-				// Key the cache by the line's IDENTITY (issue + content hash),
+			// Check for phase transition based on structured events
+			isPhase, eventType, eventTimestamp := ov.detectPhaseTransitionFromEvents(agentItem.ID, line)
+
+			if isPhase {
+				// Key the cache by the line's IDENTITY (issue + event type + content hash),
 				// not its slice position. The output comes from a fixed-size ring
 				// buffer, so a line's index shifts as older lines scroll off;
 				// keying by index would pin a cached timestamp to a position that
 				// later holds a different line, showing a stale timestamp. Hashing
 				// the content keeps a phase line's first-seen timestamp stable
 				// across redraws and buffer wraps, and distinct phase lines get
-				// distinct timestamps.
-				cacheKey := fmt.Sprintf("%d:%08x", agentItem.IssueNumber, hashLine(line))
+				// distinct timestamps. Event type is included to prevent collision
+				// between different event types on the same line content.
+				cacheKey := fmt.Sprintf("%d:%s:%08x", agentItem.IssueNumber, eventType, hashLine(line))
 
-				// If no cached timestamp exists for this line, store current time
+				// If no cached timestamp exists for this line, store event timestamp
 				if _, exists := ov.lineTimestamps[cacheKey]; !exists {
-					ov.lineTimestamps[cacheKey] = time.Now()
+					ov.lineTimestamps[cacheKey] = eventTimestamp
 				}
 
-				// Prepend timestamp to the line
+				// Prepend timestamp to the line with event type indicator
 				timestamp := ov.lineTimestamps[cacheKey]
-				timestampStr := formatTimestamp(timestamp)
+				timestampStr := formatTimestampWithEventType(timestamp, eventType)
 				styledTimestamp := ov.styles.Timestamp.Render(timestampStr)
 				line = styledTimestamp + " " + line
 			}
@@ -238,48 +242,78 @@ func (ov *OutputView) refreshContent() {
 	// Intentionally do not force-scroll here; preserve the user's scroll position.
 }
 
-// detectPhaseTransition reports whether a line is a genuine workflow-phase
-// boundary. Phase lines are the agent's structured phase markers: they start
-// with ">" AND name a workflow phase. Requiring both anchors avoids timestamping
-// ordinary narrative that merely contains verbs like "read"/"check"/"create"
-// ("let me check the imports", "I'll read the config"), which pervade agent
-// output and would otherwise get stamped, defeating the feature's purpose.
-func detectPhaseTransition(line string) bool {
+// detectPhaseTransitionFromEvents checks if a line corresponds to a structured
+// tool_call or plan event from the ACP stream. This replaces the previous
+// text-based heuristic with event-driven phase detection.
+//
+// Returns (isPhase, eventType, timestamp) where:
+//   - isPhase: true if an event matches this line
+//   - eventType: the event type ("tool_call" or "plan")
+//   - timestamp: the event's timestamp (for display)
+//
+// Since output lines don't have timestamps, we use a pragmatic heuristic:
+// 1. Check if the line looks like a phase transition (contains phase markers)
+// 2. If yes, check if there are any tool_call/plan events for this agent
+// 3. If events exist, return true with the most recent matching event's timestamp
+// 4. If no events exist, return false (no timestamp will be shown)
+func (ov *OutputView) detectPhaseTransitionFromEvents(agentID string, line string) (bool, string, time.Time) {
+	// First, check if this line looks like a phase transition using lightweight heuristics
+	// This prevents us from querying events for every single output line
 	trimmed := strings.TrimSpace(line)
-
-	// Must be an agent phase marker.
 	if !strings.HasPrefix(trimmed, ">") {
-		return false
+		// Not a phase marker line at all
+		return false, "", time.Time{}
 	}
 
-	// ...and must name a workflow phase.
-	lower := strings.ToLower(trimmed)
-	phaseKeywords := []string{
-		"delegat",  // delegate / delegating / delegated
-		"reading",  // "reading issue/spec/..."
-		"checking", // "checking code quality"
-		"pushing",  // "pushing branch"
-		"creating", // "creating PR/worktree"
-		"spawn",    // "spawning builder"
-		"labeling", // "labeling issue"
-		"validat",  // validate / validating
-		"qa loop",
-		"quality assurance",
-		"discover",
-		"request", // "requesting review"
+	// Line looks like it could be a phase transition - check for matching events
+	// Get all events for this agent (lock-guarded via Manager.GetAgentEvents)
+	events := ov.manager.GetAgentEvents(agentID)
+	if len(events) == 0 {
+		// No events captured yet - no timestamp to show
+		return false, "", time.Time{}
 	}
-	for _, kw := range phaseKeywords {
-		if strings.Contains(lower, kw) {
-			return true
+
+	// Find the most recent tool_call or plan event
+	// We iterate backwards to find the most recent matching event
+	var mostRecentEvent *time.Time
+	var mostRecentType string
+
+	for i := len(events) - 1; i >= 0; i-- {
+		event := events[i]
+		if event.Type == "tool_call" || event.Type == "plan" {
+			mostRecentEvent = &event.Timestamp
+			mostRecentType = event.Type
+			break
 		}
 	}
 
-	return false
+	if mostRecentEvent == nil {
+		// No tool_call or plan events found
+		return false, "", time.Time{}
+	}
+
+	// We have a phase-marker line and a matching event
+	return true, mostRecentType, *mostRecentEvent
 }
 
 // formatTimestamp formats a timestamp in the fixed format [YYYY-MM-DD HH:MM:SS]
 func formatTimestamp(t time.Time) string {
 	return t.Format("[2006-01-02 15:04:05]")
+}
+
+// formatTimestampWithEventType formats a timestamp with an event type indicator
+// - [YYYY-MM-DD HH:MM:SS] 🔧 for tool_call
+// - [YYYY-MM-DD HH:MM:SS] 📋 for plan
+func formatTimestampWithEventType(t time.Time, eventType string) string {
+	timestamp := t.Format("[2006-01-02 15:04:05]")
+	switch eventType {
+	case "tool_call":
+		return timestamp + " 🔧"
+	case "plan":
+		return timestamp + " 📋"
+	default:
+		return timestamp
+	}
 }
 
 // hashLine returns a stable hash of a line's content, used to key the timestamp

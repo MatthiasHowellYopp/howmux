@@ -1,0 +1,11 @@
+{
+  "git_hash": "421c596",
+  "total_cost": {
+    "tokens_in": 13107,
+    "tokens_out": 14363,
+    "estimated_usd": 0.254766
+  },
+  "agent_scores": {
+    "architect": 0.6222222222222222
+  }
+}

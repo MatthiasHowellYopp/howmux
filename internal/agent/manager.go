@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -13,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/matthiashowellyopp/howmux/internal/acp"
 	"github.com/matthiashowellyopp/howmux/internal/config"
 	"github.com/matthiashowellyopp/howmux/internal/github"
 )
@@ -59,6 +61,9 @@ type Agent struct {
 	Status      Status
 	RetryCount  int
 	StartTime   time.Time
+	acpClient   *acp.KiroACPClient
+	events      []acp.StreamingResponse
+	eventsMu    sync.RWMutex
 }
 
 type Manager struct {
@@ -165,6 +170,24 @@ func (m *Manager) createCaptureWriter(issueNumber int) io.Writer {
 	return NewCaptureWriter(nil, m.outputCapture, prefix)
 }
 
+// GetEvents returns a copy of all stored events for an agent
+func (a *Agent) GetEvents() []acp.StreamingResponse {
+	a.eventsMu.RLock()
+	defer a.eventsMu.RUnlock()
+
+	// Return a copy to prevent external mutation
+	eventsCopy := make([]acp.StreamingResponse, len(a.events))
+	copy(eventsCopy, a.events)
+	return eventsCopy
+}
+
+// addEvent appends an event to the agent's event log
+func (a *Agent) addEvent(event acp.StreamingResponse) {
+	a.eventsMu.Lock()
+	defer a.eventsMu.Unlock()
+	a.events = append(a.events, event)
+}
+
 // GetOutputLines returns captured agent output lines
 func (m *Manager) GetOutputLines() []string {
 	if m.outputCapture == nil {
@@ -180,6 +203,19 @@ func (m *Manager) GetOutputGeneration() uint64 {
 		return m.statusGen.Load()
 	}
 	return m.outputCapture.Generation() + m.statusGen.Load()
+}
+
+// GetAgentEvents returns a copy of all events for an agent by ID
+func (m *Manager) GetAgentEvents(id string) []acp.StreamingResponse {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	agent, exists := m.agents[id]
+	if !exists {
+		return nil
+	}
+
+	return agent.GetEvents()
 }
 
 // CaptureOutputLine stores a single output line for an issue.
@@ -246,49 +282,73 @@ func (m *Manager) Spawn(issueNumber int, repo string) (*Agent, error) {
 		return nil, fmt.Errorf("failed to create agent log file: %w", err)
 	}
 
-	cmd := exec.Command("kiro-cli", "chat",
-		"--agent", "krew-lead",
-		"--no-interactive",
-		"--trust-all-tools",
-		fmt.Sprintf("Process issue #%d from repo %s. Worktree name: %s. You are already in the worktree directory — all file operations happen here. Skip worktree creation (step 2).", issueNumber, repo, worktreeName))
-	cmd.Dir = worktreePath
-
-	// Always capture output for TUI output view; terminal logging is optional.
-	writers := []io.Writer{agentLogFile, m.createCaptureWriter(issueNumber)}
-	if m.config.ConsoleLogging {
-		writers = append(writers, m.createPrefixedWriter(issueNumber))
+	// Create ACP client configuration
+	acpConfig := &acp.ConnectionConfig{
+		KiroCLIPath:       "kiro-cli",
+		Agent:             "krew-lead",
+		Cwd:               worktreePath,
+		RequestTimeout:    60 * time.Second,
+		ConnectionTimeout: 30 * time.Second,
+		MaxRetries:        3,
+		RetryDelay:        1 * time.Second,
 	}
-	outputWriter := io.MultiWriter(writers...)
-	cmd.Stdout = outputWriter
-	cmd.Stderr = outputWriter
-	cmd.Env = append(os.Environ(),
-		fmt.Sprintf("ISSUE_NUMBER=%d", issueNumber),
-		fmt.Sprintf("REPO=%s", repo),
-		fmt.Sprintf("HOWMUX_WATCHER_PID=%d", os.Getpid()),
-		fmt.Sprintf("WORKTREE_PATH=%s", worktreePath))
 
-	if err := cmd.Start(); err != nil {
+	// Create ACP client
+	acpClient := acp.NewClient(acpConfig)
+
+	// Connect to ACP
+	ctx := context.Background()
+	if err := acpClient.Connect(ctx); err != nil {
 		agentLogFile.Close()
-		log.Printf("[agent] failed to spawn agent %s for issue #%d: %v", id, issueNumber, err)
-		return nil, fmt.Errorf("failed to start agent: %w", err)
+		log.Printf("[agent] failed to connect to ACP for issue #%d: %v", issueNumber, err)
+		return nil, fmt.Errorf("failed to connect to ACP: %w", err)
+	}
+
+	// Build the prompt
+	prompt := fmt.Sprintf("Process issue #%d from repo %s. Worktree name: %s. You are already in the worktree directory — all file operations happen here. Skip worktree creation (step 2).", issueNumber, repo, worktreeName)
+
+	// Create message request
+	req := &acp.MessageRequest{
+		Message:        prompt,
+		Streaming:      true, // Agents produce long-running output
+		ResponseFormat: "text",
+		Timeout:        0, // No timeout (agents can run for hours)
+	}
+
+	// Start streaming
+	streamChan, err := acpClient.StreamMessage(ctx, req)
+	if err != nil {
+		acpClient.Close()
+		agentLogFile.Close()
+		log.Printf("[agent] failed to start streaming for issue #%d: %v", issueNumber, err)
+		return nil, fmt.Errorf("failed to start streaming: %w", err)
 	}
 
 	agent := &Agent{
 		ID:          id,
 		IssueNumber: issueNumber,
 		IssueTitle:  fmt.Sprintf("Issue #%d", issueNumber),
-		Process:     cmd.Process,
+		Process:     nil, // No longer using os.Process
 		LogFile:     agentLogFile,
 		Status:      StatusRunning,
 		RetryCount:  0,
 		StartTime:   time.Now(),
+		acpClient:   acpClient,
+		events:      make([]acp.StreamingResponse, 0),
 	}
 
 	m.agents[id] = agent
 	m.statusGen.Add(1)
 	log.Printf("[agent] spawned for issue #%d (worktree: %s, log: %s)", issueNumber, worktreeName, agentLogPath)
 
-	go m.monitorAgent(agent, cmd)
+	// Create output writers
+	writers := []io.Writer{agentLogFile, m.createCaptureWriter(issueNumber)}
+	if m.config.ConsoleLogging {
+		writers = append(writers, m.createPrefixedWriter(issueNumber))
+	}
+	outputWriter := io.MultiWriter(writers...)
+
+	go m.monitorAgentStream(agent, streamChan, outputWriter)
 
 	return agent, nil
 }
@@ -330,9 +390,17 @@ func (m *Manager) Stop(id string) error {
 	}
 
 	log.Printf("[agent] stopping %s (issue #%d)", id, agent.IssueNumber)
+
+	// Close ACP client if present (preferred method)
+	if agent.acpClient != nil {
+		return agent.acpClient.Close()
+	}
+
+	// Fallback to Process.Signal for backward compatibility
 	if agent.Process != nil {
 		return agent.Process.Signal(syscall.SIGTERM)
 	}
+
 	return nil
 }
 
@@ -347,8 +415,13 @@ func (m *Manager) StopAll() {
 	m.mu.RUnlock()
 
 	for _, agent := range agents {
-		if agent.Process != nil {
-			log.Printf("[agent] stopping %s (issue #%d)", agent.ID, agent.IssueNumber)
+		log.Printf("[agent] stopping %s (issue #%d)", agent.ID, agent.IssueNumber)
+
+		// Close ACP client if present (preferred method)
+		if agent.acpClient != nil {
+			agent.acpClient.Close()
+		} else if agent.Process != nil {
+			// Fallback to Process.Signal for backward compatibility
 			agent.Process.Signal(syscall.SIGTERM)
 		}
 	}
@@ -438,7 +511,7 @@ func (m *Manager) HandleExit(id string, exitCode int) {
 	}
 }
 
-func (m *Manager) monitorAgent(agent *Agent, cmd *exec.Cmd) {
+func (m *Manager) monitorAgentStream(agent *Agent, streamChan <-chan *acp.StreamingResponse, outputWriter io.Writer) {
 	log.Printf("[agent] started working on issue #%d", agent.IssueNumber)
 
 	done := make(chan struct{})
@@ -456,20 +529,39 @@ func (m *Manager) monitorAgent(agent *Agent, cmd *exec.Cmd) {
 		}
 	}()
 
-	err := cmd.Wait()
+	// Consume stream and feed existing sinks
+	exitCode := 1 // Default to error
+	for resp := range streamChan {
+		// Store all structured events for phase detection
+		agent.addEvent(*resp)
+
+		switch resp.Type {
+		case "text":
+			// Write text chunks to all output sinks
+			if len(resp.Content) > 0 {
+				outputWriter.Write([]byte(resp.Content))
+			}
+		case "error":
+			// Write error to output and mark as error exit
+			if len(resp.Error) > 0 {
+				outputWriter.Write([]byte(fmt.Sprintf("ERROR: %s\n", resp.Error)))
+			}
+			exitCode = 1
+		case "done":
+			// Stream completed successfully
+			exitCode = 0
+		}
+	}
+
 	close(done)
 
+	// Close resources
 	if agent.LogFile != nil {
 		agent.LogFile.Close()
 	}
 
-	exitCode := 0
-	if err != nil {
-		if exitError, ok := err.(*exec.ExitError); ok {
-			exitCode = exitError.ExitCode()
-		} else {
-			exitCode = 1
-		}
+	if agent.acpClient != nil {
+		agent.acpClient.Close()
 	}
 
 	elapsed := time.Since(agent.StartTime).Truncate(time.Second)
@@ -540,30 +632,49 @@ func (m *Manager) retryAgent(agent *Agent) {
 		return
 	}
 
-	cmd := exec.Command("kiro-cli", "chat",
-		"--agent", "krew-lead",
-		"--no-interactive",
-		"--trust-all-tools",
-		fmt.Sprintf("Process issue #%d from repo %s. Worktree name: %s. You are already in the worktree directory — all file operations happen here. Skip worktree creation (step 2).", agent.IssueNumber, m.config.Repo, worktreeName))
-	cmd.Dir = worktreePath
-
-	// Always capture output for TUI output view; terminal logging is optional.
-	writers := []io.Writer{agentLogFile, m.createCaptureWriter(agent.IssueNumber)}
-	if m.config.ConsoleLogging {
-		writers = append(writers, m.createPrefixedWriter(agent.IssueNumber))
+	// Create ACP client configuration for retry
+	acpConfig := &acp.ConnectionConfig{
+		KiroCLIPath:       "kiro-cli",
+		Agent:             "krew-lead",
+		Cwd:               worktreePath,
+		RequestTimeout:    60 * time.Second,
+		ConnectionTimeout: 30 * time.Second,
+		MaxRetries:        3,
+		RetryDelay:        1 * time.Second,
 	}
-	outputWriter := io.MultiWriter(writers...)
-	cmd.Stdout = outputWriter
-	cmd.Stderr = outputWriter
-	cmd.Env = append(os.Environ(),
-		fmt.Sprintf("ISSUE_NUMBER=%d", agent.IssueNumber),
-		fmt.Sprintf("REPO=%s", m.config.Repo),
-		fmt.Sprintf("HOWMUX_WATCHER_PID=%d", os.Getpid()),
-		fmt.Sprintf("WORKTREE_PATH=%s", worktreePath))
 
-	if err := cmd.Start(); err != nil {
+	// Create ACP client
+	acpClient := acp.NewClient(acpConfig)
+
+	// Connect to ACP
+	ctx := context.Background()
+	if err := acpClient.Connect(ctx); err != nil {
 		agentLogFile.Close()
-		log.Printf("[agent] retry failed for issue #%d: %v", agent.IssueNumber, err)
+		log.Printf("[agent] retry failed to connect to ACP for issue #%d: %v", agent.IssueNumber, err)
+		m.mu.Lock()
+		agent.Status = StatusFailed
+		m.statusGen.Add(1)
+		m.mu.Unlock()
+		return
+	}
+
+	// Build the prompt
+	prompt := fmt.Sprintf("Process issue #%d from repo %s. Worktree name: %s. You are already in the worktree directory — all file operations happen here. Skip worktree creation (step 2).", agent.IssueNumber, m.config.Repo, worktreeName)
+
+	// Create message request
+	req := &acp.MessageRequest{
+		Message:        prompt,
+		Streaming:      true,
+		ResponseFormat: "text",
+		Timeout:        0,
+	}
+
+	// Start streaming
+	streamChan, err := acpClient.StreamMessage(ctx, req)
+	if err != nil {
+		acpClient.Close()
+		agentLogFile.Close()
+		log.Printf("[agent] retry failed to start streaming for issue #%d: %v", agent.IssueNumber, err)
 		m.mu.Lock()
 		agent.Status = StatusFailed
 		m.statusGen.Add(1)
@@ -572,15 +683,28 @@ func (m *Manager) retryAgent(agent *Agent) {
 	}
 
 	m.mu.Lock()
-	agent.Process = cmd.Process
+	agent.Process = nil
 	agent.LogFile = agentLogFile
 	agent.Status = StatusRunning
 	agent.StartTime = time.Now()
+	agent.acpClient = acpClient
+	// Clear events from previous attempt
+	agent.eventsMu.Lock()
+	agent.events = make([]acp.StreamingResponse, 0)
+	agent.eventsMu.Unlock()
 	m.statusGen.Add(1)
 	m.mu.Unlock()
 
 	log.Printf("[agent] retry started for issue #%d (worktree: %s)", agent.IssueNumber, worktreeName)
-	go m.monitorAgent(agent, cmd)
+
+	// Create output writers
+	writers := []io.Writer{agentLogFile, m.createCaptureWriter(agent.IssueNumber)}
+	if m.config.ConsoleLogging {
+		writers = append(writers, m.createPrefixedWriter(agent.IssueNumber))
+	}
+	outputWriter := io.MultiWriter(writers...)
+
+	go m.monitorAgentStream(agent, streamChan, outputWriter)
 }
 
 // cleanupWorktree removes the worktree directory for the given issue and PID
