@@ -61,6 +61,7 @@ func TestValidateTheme(t *testing.T) {
 			Surface       string `yaml:"surface"`
 			AgentSuccess  string `yaml:"agent_success"`
 			AgentFail     string `yaml:"agent_fail"`
+			Timestamp     string `yaml:"timestamp"`
 		}{
 			Primary:       "#FF0000",
 			Secondary:     "#00FF00",
@@ -77,6 +78,7 @@ func TestValidateTheme(t *testing.T) {
 			Surface:       "#111111",
 			AgentSuccess:  "#00AA00",
 			AgentFail:     "#FF0000",
+			Timestamp:     "#888888",
 		},
 	}
 
@@ -177,5 +179,51 @@ func TestGetAvailableThemes(t *testing.T) {
 	want := []string{"alpha", "zebra"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("GetAvailableThemes() = %v, want %v", got, want)
+	}
+}
+
+func TestValidateThemeBackwardsCompatibility(t *testing.T) {
+	// Theme without optional timestamp field should still be valid
+	themeWithoutTimestamp := &Theme{
+		Name: "Test Theme Without Timestamp",
+		Colors: struct {
+			Primary       string `yaml:"primary"`
+			Secondary     string `yaml:"secondary"`
+			Success       string `yaml:"success"`
+			Warning       string `yaml:"warning"`
+			Error         string `yaml:"error"`
+			TextPrimary   string `yaml:"text_primary"`
+			TextSecondary string `yaml:"text_secondary"`
+			TextMuted     string `yaml:"text_muted"`
+			Prompt        string `yaml:"prompt"`
+			Separator     string `yaml:"separator"`
+			Activity      string `yaml:"activity"`
+			Background    string `yaml:"background"`
+			Surface       string `yaml:"surface"`
+			AgentSuccess  string `yaml:"agent_success"`
+			AgentFail     string `yaml:"agent_fail"`
+			Timestamp     string `yaml:"timestamp"`
+		}{
+			Primary:       "#FF0000",
+			Secondary:     "#00FF00",
+			Success:       "#0000FF",
+			Warning:       "#FFFF00",
+			Error:         "#FF00FF",
+			TextPrimary:   "#FFFFFF",
+			TextSecondary: "#CCCCCC",
+			TextMuted:     "#888888",
+			Prompt:        "#00AAFF",
+			Separator:     "#00AAFF",
+			Activity:      "#FFFFFF",
+			Background:    "#000000",
+			Surface:       "#111111",
+			AgentSuccess:  "#00AA00",
+			AgentFail:     "#FF0000",
+			Timestamp:     "", // Empty timestamp should be valid
+		},
+	}
+
+	if err := validateTheme(themeWithoutTimestamp); err != nil {
+		t.Errorf("validateTheme() should accept theme without timestamp: %v", err)
 	}
 }

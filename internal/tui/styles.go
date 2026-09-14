@@ -26,6 +26,9 @@ type Styles struct {
 	AgentSuccess lipgloss.Style
 	AgentFail    lipgloss.Style
 
+	// Timestamp style
+	Timestamp lipgloss.Style
+
 	// Tab header styles
 	TabActive        lipgloss.Style
 	TabInactive      lipgloss.Style
@@ -67,6 +70,9 @@ func NewStyles(theme *config.Theme) *Styles {
 		// Agent status styles with fallbacks for backwards compatibility
 		AgentSuccess: lipgloss.NewStyle().Foreground(lipgloss.Color(getColorOrFallback(theme.Colors.AgentSuccess, theme.Colors.Success))),
 		AgentFail:    lipgloss.NewStyle().Foreground(lipgloss.Color(getColorOrFallback(theme.Colors.AgentFail, theme.Colors.Error))),
+
+		// Timestamp style with fallback to TextMuted for backwards compatibility
+		Timestamp: lipgloss.NewStyle().Foreground(lipgloss.Color(getColorOrFallback(theme.Colors.Timestamp, theme.Colors.TextMuted))),
 
 		// Tab header styles
 		TabActive: lipgloss.NewStyle().

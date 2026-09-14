@@ -29,6 +29,7 @@ type Theme struct {
 		Surface       string `yaml:"surface"`
 		AgentSuccess  string `yaml:"agent_success"`
 		AgentFail     string `yaml:"agent_fail"`
+		Timestamp     string `yaml:"timestamp"`
 	} `yaml:"colors"`
 }
 
@@ -101,11 +102,12 @@ func validateTheme(theme *Theme) error {
 		"surface":        theme.Colors.Surface,
 		"agent_success":  theme.Colors.AgentSuccess,
 		"agent_fail":     theme.Colors.AgentFail,
+		"timestamp":      theme.Colors.Timestamp,
 	}
 
 	for field, value := range colorFields {
-		// Agent colors are optional for backwards compatibility
-		if (field == "agent_success" || field == "agent_fail") && value == "" {
+		// Agent colors and timestamp are optional for backwards compatibility
+		if (field == "agent_success" || field == "agent_fail" || field == "timestamp") && value == "" {
 			continue
 		}
 		if err := validateColor(value, field); err != nil {
@@ -136,6 +138,7 @@ func getDefaultTheme() *Theme {
 			Surface       string `yaml:"surface"`
 			AgentSuccess  string `yaml:"agent_success"`
 			AgentFail     string `yaml:"agent_fail"`
+			Timestamp     string `yaml:"timestamp"`
 		}{
 			Primary:       "#00AAFF",
 			Secondary:     "#888888",
@@ -152,6 +155,7 @@ func getDefaultTheme() *Theme {
 			Surface:       "#111111",
 			AgentSuccess:  "#00AA00",
 			AgentFail:     "#FF0000",
+			Timestamp:     "#888888",
 		},
 	}
 }
