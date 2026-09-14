@@ -36,7 +36,13 @@ func collectArtifacts(agent, workspaceDir string) string {
 	case "documenter":
 		patterns = []string{filepath.Join(workspaceDir, "app_docs", "feature-*.md")}
 	default:
-		// No artifacts expected for other agents
+		// No single globbable artifact for other agents:
+		//   - builder produces arbitrary source files (its rubric grades
+		//     code_correctness / spec_adherence / test_coverage across changed
+		//     code, so there is no issue-*.md-style path to glob). Builder is
+		//     therefore NOT yet fixed by this collector and still scores on
+		//     narration — tracked as a follow-up to issue #42.
+		//   - validator / krew-lead produce no written deliverable to grade.
 		return ""
 	}
 
