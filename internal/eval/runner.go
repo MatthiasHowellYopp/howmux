@@ -815,10 +815,20 @@ func invokeAgentInContainer(agent, prompt string, cConfig *ContainerConfig) (str
 	return result, cost, nil, nil
 }
 
+// detectAgentFallback inspects kiro-cli stderr for agent-resolution failure signals.
+// Returns true if fallback was detected (agent could not be resolved).
+func detectAgentFallback(stderr string) bool {
+	lowerStderr := strings.ToLower(stderr)
+	// Check for kiro-cli's agent-resolution failure messages
+	return strings.Contains(lowerStderr, "no agent with name") ||
+		strings.Contains(lowerStderr, "falling back")
+}
+
 // invokeAgentNative executes kiro-cli natively (original implementation)
 func invokeAgentNative(agent, prompt string) (string, CostInfo, *ErrorContext, []ExternalCall, error) {
 	timeoutStr := os.Getenv("HOWMUX_EVAL_TIMEOUT")
-	timeout := 2 * time.Minute
+	// Default 5-minute timeout accommodates real agent runs (~2-3.5 min/case observed for architect)
+	timeout := 5 * time.Minute
 	if timeoutStr != "" {
 		if parsedTimeout, err := time.ParseDuration(timeoutStr); err == nil {
 			timeout = parsedTimeout
@@ -900,6 +910,18 @@ func invokeAgentNative(agent, prompt string) (string, CostInfo, *ErrorContext, [
 
 	stdout = []byte(output.String())
 	stderr = []byte(errOutput.String())
+
+	// Detect agent-resolution fallback before checking other errors
+	if detectAgentFallback(string(stderr)) {
+		errCtx := &ErrorContext{
+			Command:     fmt.Sprintf("kiro-cli chat --agent %s --no-interactive --trust-all-tools", agent),
+			WorkingDir:  workspaceDir,
+			Environment: envVars,
+			Stderr:      string(stderr),
+			ExitCode:    0, // kiro-cli exits 0 even when falling back
+		}
+		return "", CostInfo{}, errCtx, nil, fmt.Errorf("agent resolution failed: kiro-cli could not resolve agent '%s' and fell back to default client (see stderr for details)", agent)
+	}
 
 	// Create error context for any execution issues
 	var errorContext *ErrorContext

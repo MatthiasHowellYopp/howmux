@@ -321,3 +321,61 @@ func TestScoreLLMJudge_ANSISequences(t *testing.T) {
 		})
 	}
 }
+
+func TestDetectAgentFallback(t *testing.T) {
+	tests := []struct {
+		name     string
+		stderr   string
+		expected bool
+	}{
+		{
+			name:     "no agent with name pattern",
+			stderr:   "Error: no agent with name foo found\nFalling back to default client",
+			expected: true,
+		},
+		{
+			name:     "falling back pattern only",
+			stderr:   "Warning: Falling back to default client due to configuration error",
+			expected: true,
+		},
+		{
+			name:     "no agent with name case insensitive",
+			stderr:   "ERROR: No Agent With Name bar Found",
+			expected: true,
+		},
+		{
+			name:     "falling back case insensitive",
+			stderr:   "FALLING BACK to default",
+			expected: true,
+		},
+		{
+			name:     "normal agent output",
+			stderr:   "Reading configuration from .kiro/\nAgent initialized successfully",
+			expected: false,
+		},
+		{
+			name:     "empty stderr",
+			stderr:   "",
+			expected: false,
+		},
+		{
+			name:     "stderr with warnings but no fallback",
+			stderr:   "Warning: deprecated option used\nCompleted successfully",
+			expected: false,
+		},
+		{
+			name:     "similar but not matching text",
+			stderr:   "The agent has no name configured",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := detectAgentFallback(tt.stderr)
+			if result != tt.expected {
+				t.Errorf("detectAgentFallback(%q) = %v, want %v", tt.stderr, result, tt.expected)
+			}
+		})
+	}
+}
