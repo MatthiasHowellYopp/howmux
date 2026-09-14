@@ -1018,6 +1018,21 @@ func invokeAgentNative(agent, prompt string) (string, CostInfo, *ErrorContext, [
 	// Strip ANSI sequences and estimate cost
 	output := outputBuilder.String()
 	result := stripANSISequences(output)
+
+	// ACP Artifact Collection:
+	// Pre-ACP: actualOutput contained full stdout including artifact content
+	// ACP: actualOutput contains only narration; artifacts arrive as ToolCall events
+	// Solution: Read artifacts from workspace filesystem and append to actualOutput
+	// so rubric grading operates on the real deliverable, not just narration
+	//
+	// KNOWN GAP: this is wired into the native path only. The sandbox path
+	// (invokeAgentInContainer) writes artifacts inside the container, which is
+	// not host-visible, so sandboxed runs still score narration only. Tracked as
+	// a follow-up to issue #42.
+	artifactContent := collectArtifacts(agent, workspaceDir)
+	if artifactContent != "" {
+		result += artifactContent
+	}
 	cost := estimateCost(prompt, result)
 
 	return result, cost, errorContext, recordedCalls, nil
