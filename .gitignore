@@ -23,3 +23,4 @@ coverage.html
 *_coverage.out
 dist/.kiro-krew/artifacts/
 .kiro-krew/artifacts/
+.howmux/evals/results/

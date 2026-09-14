@@ -1,8 +1,10 @@
 package acp
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
 	"sync"
 	"syscall"
@@ -21,6 +23,32 @@ type KiroACPClient struct {
 	mu        sync.RWMutex
 	client    acp.Client
 	sessionID string
+	stderrBuf *syncBuffer // captures kiro-cli's stderr (fallback/error signals)
+}
+
+// syncBuffer is a minimal concurrency-safe bytes.Buffer: a background goroutine
+// copies the child's stderr into it while callers read it after a turn.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func (b *syncBuffer) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf.Reset()
 }
 
 // KiroClient implements the acp.Client interface for permission handling
@@ -189,6 +217,18 @@ func (c *KiroACPClient) Connect(ctx context.Context) error {
 		return fmt.Errorf("failed to create stdout pipe: %w", err)
 	}
 
+	// Capture stderr: kiro-cli writes agent-resolution / fallback signals here
+	// (e.g. "no agent with name <x> found"). ACP does not surface these over the
+	// protocol, so the eval path inspects this buffer after a turn to fail loud
+	// on a silent fallback (see detectAgentFallback in internal/eval).
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		stdin.Close()
+		stdout.Close()
+		logging.Error("failed to create stderr pipe", "agent", c.config.Agent, "error", err)
+		return fmt.Errorf("failed to create stderr pipe: %w", err)
+	}
+
 	logging.Debug("starting kiro-cli process", "agent", c.config.Agent)
 
 	// Start the command
@@ -198,6 +238,12 @@ func (c *KiroACPClient) Connect(ctx context.Context) error {
 		logging.Error("failed to start kiro-cli", "agent", c.config.Agent, "error", err)
 		return fmt.Errorf("failed to start kiro-cli: %w", err)
 	}
+
+	// Drain stderr into the capture buffer until the pipe closes (process exit).
+	c.stderrBuf = &syncBuffer{}
+	go func() {
+		_, _ = io.Copy(c.stderrBuf, stderrPipe)
+	}()
 
 	logging.Debug("creating ACP connection", "agent", c.config.Agent, "protocol_version", acp.ProtocolVersionNumber)
 
@@ -284,6 +330,18 @@ func (c *KiroACPClient) IsConnected() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.connected
+}
+
+// Stderr returns kiro-cli's captured stderr so far. Used by the eval path to
+// detect a silent agent-resolution fallback that ACP does not surface.
+func (c *KiroACPClient) Stderr() string {
+	c.mu.RLock()
+	buf := c.stderrBuf
+	c.mu.RUnlock()
+	if buf == nil {
+		return ""
+	}
+	return buf.String()
 }
 
 // SendMessage sends a message to an agent and returns the response

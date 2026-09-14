@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -207,6 +208,31 @@ func ValidateConnectionConfig(config *ConnectionConfig) error {
 		return errors.New("timeouts must be positive")
 	}
 
+	return nil
+}
+
+// ValidateAgentResolvable verifies that the named agent actually exists as a
+// config under the working directory's .kiro/agents before a session is
+// started. This is the pre-flight guard for the silent-fallback problem: over
+// ACP, kiro-cli resolves an unknown agent by silently falling back to a default
+// client — Connect and the session both succeed, and no "no agent with name"
+// signal is surfaced over the protocol or on stderr (verified against
+// kiro-cli 2.21.4). So detection after the fact is impossible; we instead fail
+// loud up front by checking the same file kiro-cli resolves the agent from
+// (<cwd>/.kiro/agents/<agent>.json). This restores the trustworthiness
+// guarantee from issue #37 in a way that does not depend on kiro-cli's ACP
+// error reporting.
+func ValidateAgentResolvable(cwd, agent string) error {
+	if agent == "" {
+		return ErrMissingConfigAgent
+	}
+	agentFile := filepath.Join(cwd, ".kiro", "agents", agent+".json")
+	if _, err := os.Stat(agentFile); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("agent %q could not be resolved: no config at %s (kiro-cli would silently fall back to a default client)", agent, agentFile)
+		}
+		return fmt.Errorf("agent %q could not be resolved: %w", agent, err)
+	}
 	return nil
 }
 
