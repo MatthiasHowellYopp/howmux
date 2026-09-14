@@ -69,26 +69,25 @@ type consoleState struct {
 }
 
 type model struct {
-	watcher               *watcher.Watcher
-	manager               *agent.Manager
-	sessionManager        *session.SessionManager
-	config                *config.Config
-	styles                *Styles
-	input                 *AutocompleteInput
-	commandRegistry       *CommandRegistry
-	consoleViewport       viewport.Model
-	activityLines         []string
-	maxActivityLines      int
-	width                 int
-	height                int
-	confirmingExit        bool
-	logFile               *os.File
-	logReader             *os.File
-	lastLogPos            int64
-	quitting              bool
-	currentMode           session.SessionType
-	consoleState          *consoleState
-	activePlanningSession *session.PlanningSession
+	watcher          *watcher.Watcher
+	manager          *agent.Manager
+	sessionManager   *session.SessionManager
+	config           *config.Config
+	styles           *Styles
+	input            *AutocompleteInput
+	commandRegistry  *CommandRegistry
+	consoleViewport  viewport.Model
+	activityLines    []string
+	maxActivityLines int
+	width            int
+	height           int
+	confirmingExit   bool
+	logFile          *os.File
+	logReader        *os.File
+	lastLogPos       int64
+	quitting         bool
+	currentMode      session.SessionType
+	consoleState     *consoleState
 
 	// Overlay system
 	activeOverlay  overlayType
@@ -260,23 +259,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			log.Printf("Planning session error: %v", msg.err)
 		} else {
 			m = m.appendActivity(m.styles.Success.Render("Planning session completed successfully."))
-		}
-
-		// Clean up planning session tracking with comprehensive error handling
-		if m.activePlanningSession != nil {
-			// Attempt to properly save session state before cleanup
-			if saveErr := m.activePlanningSession.SaveState(); saveErr != nil {
-				m = m.appendActivity(m.styles.Warning.Render(fmt.Sprintf("Warning: Failed to save planning session state: %v", saveErr)))
-				log.Printf("Planning session save error: %v", saveErr)
-			}
-
-			// Cleanup the session resources
-			if cleanupErr := m.activePlanningSession.Cleanup(); cleanupErr != nil {
-				m = m.appendActivity(m.styles.Warning.Render(fmt.Sprintf("Warning: Planning session cleanup had issues: %v", cleanupErr)))
-				log.Printf("Planning session cleanup error: %v", cleanupErr)
-			}
-
-			m.activePlanningSession = nil
 		}
 
 		// Stop context tracking when exiting planning mode
