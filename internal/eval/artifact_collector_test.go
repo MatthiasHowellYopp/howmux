@@ -397,3 +397,90 @@ func commitAll(dir, message string) error {
 	commit.Dir = dir
 	return commit.Run()
 }
+
+// TestCollectBuilderDiff_NonGitWorkspace documents the environment mismatch the
+// baseline init exists to prevent: run against a bare (non-git) directory —
+// exactly what the eval workspace was before initWorkspaceGitBaseline — and the
+// collector produces nothing. This is the silent no-op the reviewer flagged; the
+// test locks in the behavior so a regression to a non-repo workspace is visible.
+func TestCollectBuilderDiff_NonGitWorkspace(t *testing.T) {
+	dir, err := os.MkdirTemp("", "artifact_nongit_*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	// A file exists, but there is no git repo, so git diff HEAD cannot run.
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := collectArtifacts("builder", dir); got != "" {
+		t.Fatalf("expected empty artifact from non-git workspace, got: %q", got)
+	}
+}
+
+// TestCollectBuilderDiff_WithBaseline exercises the real production path: the
+// workspace is initialized as a git repo with a committed baseline (as runner.go
+// now does before the agent runs), then the "agent" makes a change. The
+// collector must capture that change via git diff HEAD — proving the builder's
+// code reaches the scorer, not just its narration.
+func TestCollectBuilderDiff_WithBaseline(t *testing.T) {
+	dir, err := os.MkdirTemp("", "artifact_baseline_*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	// Seed a pre-agent file, then establish the baseline the way runner.go does.
+	if err := os.WriteFile(filepath.Join(dir, "existing.go"), []byte("package main\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := initWorkspaceGitBaseline(dir); err != nil {
+		t.Fatalf("initWorkspaceGitBaseline failed: %v", err)
+	}
+
+	// The "agent" produces new code after the baseline commit.
+	if err := os.WriteFile(filepath.Join(dir, "feature.go"), []byte("package main\n\nfunc Added() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := collectArtifacts("builder", dir)
+	if got == "" {
+		t.Fatal("expected builder diff to capture the agent's change, got empty")
+	}
+	if !strings.Contains(got, "--- PRODUCED ARTIFACT ---") {
+		t.Errorf("missing artifact header in: %q", got)
+	}
+	if !strings.Contains(got, "feature.go") || !strings.Contains(got, "func Added()") {
+		t.Errorf("diff did not include the agent's change, got: %q", got)
+	}
+}
+
+// TestInitWorkspaceGitBaseline_IgnoresKiro verifies the .kiro symlink is excluded
+// from the baseline (and therefore from the diff), so only the agent's real
+// changes are scored.
+func TestInitWorkspaceGitBaseline_IgnoresKiro(t *testing.T) {
+	dir, err := os.MkdirTemp("", "artifact_kiro_*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	// Simulate the .kiro presence the eval setup links in.
+	if err := os.MkdirAll(filepath.Join(dir, ".kiro", "agents"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".kiro", "agents", "builder.json"), []byte("{}"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := initWorkspaceGitBaseline(dir); err != nil {
+		t.Fatalf("initWorkspaceGitBaseline failed: %v", err)
+	}
+
+	// No agent change yet: diff must be empty (the .kiro content is ignored, not
+	// reported as a builder deliverable).
+	if got := collectArtifacts("builder", dir); got != "" {
+		t.Fatalf("expected empty diff when only .kiro exists, got: %q", got)
+	}
+}

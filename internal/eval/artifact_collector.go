@@ -71,6 +71,41 @@ func collectArtifacts(agent, workspaceDir string) string {
 	return "\n--- PRODUCED ARTIFACT ---\n" + strings.Join(artifacts, "\n---\n")
 }
 
+// initWorkspaceGitBaseline initializes workspaceDir as a git repository with a
+// committed baseline of its current contents. The builder artifact collector
+// captures the agent's work with `git diff HEAD`; that only works if the
+// workspace is a repo whose HEAD reflects the pre-agent state. Without this the
+// diff command fails, the collector returns nothing, and the builder is scored
+// on ACP narration instead of the code it produced.
+//
+// The .kiro symlink (agent/skill definitions linked in during setup) is
+// git-ignored so it never appears in the diff — only the agent's real changes
+// do. Uses a local git identity so the commit succeeds without relying on the
+// host's global git config.
+func initWorkspaceGitBaseline(workspaceDir string) error {
+	// Ignore the .kiro symlink so it stays out of the baseline and the diff.
+	gitignore := filepath.Join(workspaceDir, ".gitignore")
+	if err := os.WriteFile(gitignore, []byte(".kiro\n"), 0644); err != nil {
+		return fmt.Errorf("writing .gitignore: %w", err)
+	}
+
+	steps := [][]string{
+		{"init"},
+		{"config", "user.email", "eval@howmux.local"},
+		{"config", "user.name", "howmux-eval"},
+		{"add", "-A"},
+		{"commit", "--no-gpg-sign", "-m", "eval workspace baseline"},
+	}
+	for _, args := range steps {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = workspaceDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		}
+	}
+	return nil
+}
+
 // collectBuilderDiff captures builder changes via git diff, filtering out harness paths.
 //
 // WHY THIS APPROACH:
@@ -85,6 +120,20 @@ func collectArtifacts(agent, workspaceDir string) string {
 //
 // Fail-safe: Returns empty string rather than crashing on git errors or missing repo.
 func collectBuilderDiff(workspaceDir string) string {
+	// Mark new files as intent-to-add so they appear in `git diff HEAD`. Builders
+	// commonly create new source/test files; without this, `git diff HEAD` shows
+	// only modifications to already-tracked files and brand-new files would be
+	// silently omitted from what the scorer sees. (.kiro is git-ignored, so it is
+	// not picked up here.)
+	addN := exec.Command("git", "add", "-N", ".")
+	addN.Dir = workspaceDir
+	if _, err := addN.CombinedOutput(); err != nil {
+		// Not a repo / no HEAD yet — nothing to diff against. Return empty; the
+		// workspace-setup baseline (runner.go) is responsible for making this a
+		// repo, and a failure there is surfaced separately.
+		return ""
+	}
+
 	cmd := exec.Command("git", "diff", "HEAD", "--unified=3")
 	cmd.Dir = workspaceDir
 
