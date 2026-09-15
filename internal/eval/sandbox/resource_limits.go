@@ -45,10 +45,14 @@ func NewHostConfigWithLimits(limits ResourceLimits) *container.HostConfig {
 		},
 		NetworkMode: "none", // Disable network access for security
 		// Configure writable workspace directory with tmpfs.
+		// mode=1777 (sticky, world-writable, like /tmp) is required because the
+		// container runs as the non-root `sandbox` user but a runtime tmpfs mount
+		// is owned by root; without this the sandbox user cannot create files in
+		// /workspace (agent output, copied-in .kiro, GitHub mock skill).
 		// Note: tmpfs shadows any files placed at /workspace during image build;
 		// project files must be copied in after container start (e.g., via CopyTo).
 		Tmpfs: map[string]string{
-			"/workspace": "rw,nosuid,size=512m",
+			"/workspace": "rw,nosuid,size=512m,mode=1777",
 		},
 	}
 	return hostConfig

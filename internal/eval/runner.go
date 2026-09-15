@@ -661,6 +661,55 @@ func createContainerConfig(sandboxCfg *config.SandboxConfig, resourceLimits map[
 func invokeAgentInContainer(agent, prompt string, cConfig *ContainerConfig) (string, CostInfo, *ErrorContext, error) {
 	ctx := context.Background()
 
+	// Host directory that produced artifacts are copied OUT to after the turn.
+	// The container itself writes to its own tmpfs /workspace (owned by the
+	// sandbox user); we stream artifacts out to this host path so the existing
+	// collectArtifacts (which reads a host filesystem) can score the real
+	// deliverable — the sandbox-parity goal of issue #50. A host bind-mount was
+	// rejected: it collides with the tmpfs at /workspace and, being host-owned,
+	// is unwritable by the container's non-root sandbox user.
+	hostArtifactDir, err := os.MkdirTemp("", "howmux-eval-sandbox-*")
+	if err != nil {
+		return "", CostInfo{}, nil, fmt.Errorf("creating host artifact dir: %w", err)
+	}
+	defer os.RemoveAll(hostArtifactDir)
+
+	// Resolve the project's .kiro so it can be provisioned into the container
+	// after start. Without .kiro/agents/ in the container's cwd, kiro-cli
+	// silently falls back to a default client and grades the wrong agent (the
+	// silent-fallback failure eliminated for the native path in #37/#39/#41).
+	srcKiro := ""
+	if repoRoot, wdErr := os.Getwd(); wdErr == nil {
+		candidate := filepath.Join(repoRoot, ".kiro")
+		if _, statErr := os.Stat(candidate); statErr == nil {
+			srcKiro = candidate
+		}
+	}
+
+	// Pre-flight guard, mirroring the native path's ValidateAgentResolvable:
+	// fail loud up front if the agent can't be resolved from the .kiro we're
+	// about to provision, rather than building a container and silently scoring
+	// a fallback client. Validating the source tree here is equivalent to
+	// validating the container's cwd, since that cwd is populated from srcKiro.
+	if srcKiro == "" {
+		errCtx := &ErrorContext{
+			Command:    fmt.Sprintf("kiro-cli chat --agent %s", agent),
+			WorkingDir: cConfig.WorkspaceDir,
+			Stderr:     "no .kiro found in working directory to provision into the sandbox",
+			ExitCode:   1,
+		}
+		return "", CostInfo{}, errCtx, fmt.Errorf("agent resolution failed: no .kiro to provision into sandbox for agent %q", agent)
+	}
+	if err := acp.ValidateAgentResolvable(filepath.Dir(srcKiro), agent); err != nil {
+		errCtx := &ErrorContext{
+			Command:    fmt.Sprintf("kiro-cli chat --agent %s", agent),
+			WorkingDir: cConfig.WorkspaceDir,
+			Stderr:     err.Error(),
+			ExitCode:   1,
+		}
+		return "", CostInfo{}, errCtx, fmt.Errorf("agent resolution failed: %w", err)
+	}
+
 	c, err := sandbox.NewContainerWithDebug("", cConfig.Debug)
 	if err != nil {
 		return "", CostInfo{}, nil, fmt.Errorf("creating container: %w", err)
@@ -750,6 +799,16 @@ func invokeAgentInContainer(agent, prompt string, cConfig *ContainerConfig) (str
 		return "", CostInfo{}, nil, fmt.Errorf("validating kiro-cli: %w", err)
 	}
 
+	// Provision the project's .kiro into the container workspace so
+	// `kiro-cli --agent <name>` resolves the real agent (agents/skills live under
+	// <cwd>/.kiro). We copy AFTER start into the container-owned tmpfs /workspace
+	// (writable by the sandbox user) rather than bind-mounting a host dir, which
+	// would collide with that tmpfs and be unwritable by the non-root user. This
+	// must run before SetupGitHubMocking, which overwrites .kiro/skills/github-cli.
+	if err := c.CopyTreeTo(ctx, srcKiro, cConfig.WorkspaceDir, ".kiro"); err != nil {
+		return "", CostInfo{}, nil, fmt.Errorf("provisioning .kiro into container: %w", err)
+	}
+
 	// Setup GitHub mocking if enabled
 	if cConfig.MockGitHub {
 		if err := c.SetupGitHubMocking(ctx, cConfig.WorkspaceDir); err != nil {
@@ -811,6 +870,23 @@ func invokeAgentInContainer(agent, prompt string, cConfig *ContainerConfig) (str
 	fmt.Printf("  Execution time: %v\n", executionDuration)
 
 	result := stripANSISequences(output)
+
+	// Copy the produced artifacts OUT of the container onto a host path, then run
+	// collectArtifacts against that host copy — matching what the native path
+	// scores. The agent wrote to the container's /workspace; CopyFromContainer
+	// streams that tree out to hostArtifactDir/<basename>, which we then hand to
+	// the same per-agent collector the native path uses. A missing path is not an
+	// error (the agent may have produced nothing), yielding empty artifact output.
+	if err := c.CopyFromContainer(ctx, cConfig.WorkspaceDir, hostArtifactDir); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Warning: failed to copy artifacts out of sandbox (artifact will be empty): %v\n", err)
+	} else {
+		collectedRoot := filepath.Join(hostArtifactDir, filepath.Base(cConfig.WorkspaceDir))
+		artifactContent := collectArtifacts(agent, collectedRoot)
+		if artifactContent != "" {
+			result += artifactContent
+		}
+	}
+
 	cost := estimateCost(prompt, result)
 
 	return result, cost, nil, nil
