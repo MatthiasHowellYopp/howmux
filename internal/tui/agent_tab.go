@@ -32,6 +32,11 @@ func (at *AgentTab) Type() TabType {
 	return TabTypeAgent
 }
 
+// CopyableContent returns the agent's full underlying output as plain text.
+func (at *AgentTab) CopyableContent() string {
+	return at.outputView.PlainContent()
+}
+
 // Title returns the tab title
 func (at *AgentTab) Title() string {
 	if agent := at.outputView.manager.GetAgent(at.agentID); agent != nil {

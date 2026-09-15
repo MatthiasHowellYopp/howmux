@@ -29,6 +29,12 @@ func (mt *MainTab) Type() TabType {
 	return TabTypeMain
 }
 
+// CopyableContent returns "" — the main console has no single plain-text buffer
+// to copy via Ctrl+Y.
+func (mt *MainTab) CopyableContent() string {
+	return ""
+}
+
 // Title returns the tab title
 func (mt *MainTab) Title() string {
 	return "Main TUI"

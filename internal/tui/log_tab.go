@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -76,6 +77,66 @@ func (lt *LogTab) ID() string {
 // Type returns the tab type
 func (lt *LogTab) Type() TabType {
 	return TabTypeLog
+}
+
+// CopyableContent returns all buffered log entries as plain, unstyled text
+// (timestamp, level, message, metadata) for clipboard copy — the same structure
+// as the rendered view but without ANSI color.
+func (lt *LogTab) CopyableContent() string {
+	if lt.ringBuffer == nil {
+		return ""
+	}
+	var b strings.Builder
+	for i, entry := range lt.ringBuffer.Get() {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(entry.Timestamp.Format("15:04:05.000"))
+		b.WriteString(" ")
+		b.WriteString(plainLevelName(entry.Level))
+		b.WriteString(" ")
+		b.WriteString(entry.Message)
+		if len(entry.Metadata) > 0 {
+			b.WriteString(" ")
+			b.WriteString(plainMetadata(entry.Metadata))
+		}
+	}
+	return b.String()
+}
+
+// plainMetadata formats key-value metadata as unstyled "[k=v k=v]" with keys
+// sorted, matching the rendered view's structure without ANSI color.
+func plainMetadata(metadata map[string]interface{}) string {
+	if len(metadata) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(metadata))
+	for k := range metadata {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	pairs := make([]string, 0, len(keys))
+	for _, k := range keys {
+		pairs = append(pairs, fmt.Sprintf("%s=%v", k, metadata[k]))
+	}
+	return fmt.Sprintf("[%s]", strings.Join(pairs, " "))
+}
+
+// plainLevelName returns the uppercase level label without styling, matching
+// the labels used in the colorized view.
+func plainLevelName(level log.Level) string {
+	switch level {
+	case log.DebugLevel:
+		return "DEBUG"
+	case log.InfoLevel:
+		return "INFO "
+	case log.WarnLevel:
+		return "WARN "
+	case log.ErrorLevel:
+		return "ERROR"
+	default:
+		return "UNKNOWN"
+	}
 }
 
 // Title returns the tab title
