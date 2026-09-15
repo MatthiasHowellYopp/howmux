@@ -1,5 +1,5 @@
 {
-  "description": "Committed eval baseline for prompt-change regression detection. Raw per-run results under .howmux/evals/results/ are gitignored; this curated summary is the reference to diff against. Covers agents whose artifact scoring is fixed (architect, documenter per #42). builder/sandbox scoring are known follow-ups.",
+  "description": "Committed eval baseline for prompt-change regression detection. Averages use the runner's pooled, skip-aware formula (sum(score)/sum(max) across non-skipped criteria) \u2014 taken from each run's summary.json so `howmux eval baseline` compares like-for-like. Raw per-run results under .howmux/evals/results/ are gitignored; this curated summary is the reference. Covers architect + documenter (artifact scoring per #42); builder/sandbox/planner are known follow-ups.",
   "git_hash": "e72345a",
   "recorded": "2026-09-14",
   "transport": "acp",
@@ -39,15 +39,15 @@
       }
     },
     "documenter": {
-      "average": 0.76,
+      "average": 0.844,
       "cases": {
         "api-documentation": {
           "score": 0.85,
           "raw": "17/20"
         },
         "architecture-documentation": {
-          "score": 0.5,
-          "raw": "10/20"
+          "score": 1.0,
+          "raw": "10/10"
         },
         "configuration-reference": {
           "score": 0.8,
