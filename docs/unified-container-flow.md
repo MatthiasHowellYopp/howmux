@@ -61,25 +61,49 @@ The eval system now uses a unified **generate → build → create → verify** 
 
 **Performance:** ~100-500ms (Binary verification)
 
-### Phase 5: Workspace Bind-Mount (Artifact Collection)
+### Phase 5: Agent Provisioning & Artifact Copy-Out
 **Location:** `internal/eval/runner.go` - `invokeAgentInContainer()`
-**Purpose:** Make agent-produced artifacts host-visible for scoring
+**Purpose:** Resolve the real agent inside the container and make agent-produced artifacts host-visible for scoring
+
+The container's `/workspace` is a container-owned `tmpfs` (see `NewHostConfigWithLimits`),
+so the agent's files are not host-visible by default. Rather than bind-mounting a
+host directory (which collides with that tmpfs and, being host-owned, is
+unwritable by the container's non-root `sandbox` user), the flow copies the
+agent's definitions **in** after start and copies produced artifacts **out**
+after the turn.
 
 **Steps:**
-1. Create host temp directory: `os.MkdirTemp("", "howmux-eval-sandbox-*")`
-2. Bind-mount to container workspace: `hostConfig.Binds = []string{"{host}:{container}"}`
-3. Agent writes artifacts to container workspace (e.g., `/workspace/.howmux/specs/issue-*.md`)
-4. Artifacts land on mounted host directory via bind-mount
-5. After agent turn, `collectArtifacts(agent, hostWorkspaceDir)` reads from host directory
-6. Artifact content appended to scored output under `--- PRODUCED ARTIFACT ---`
-7. Host temp directory cleaned up via `defer os.RemoveAll(hostWorkspaceDir)`
+1. Create a host temp directory for copy-out: `os.MkdirTemp("", "howmux-eval-sandbox-*")`
+2. Resolve the project `.kiro` from the working directory and guard with
+   `acp.ValidateAgentResolvable` **before** building the container — if the agent
+   can't be resolved, fail loud (kiro-cli would otherwise silently fall back to a
+   default client and score the wrong agent).
+3. After container start, copy `.kiro` into the container workspace via
+   `Container.CopyTreeTo(srcKiro, "/workspace", ".kiro")`. This runs before
+   `SetupGitHubMocking`, which overwrites `.kiro/skills/github-cli`.
+4. Agent writes artifacts inside the container (e.g., `/workspace/.howmux/specs/issue-*.md`).
+5. After the turn, copy the workspace out with
+   `Container.CopyFromContainer("/workspace", hostArtifactDir)`.
+6. Run `collectArtifacts(agent, hostArtifactDir/workspace)` — the same per-agent
+   collector the native path uses — and append its output under
+   `--- PRODUCED ARTIFACT ---`.
+7. Host temp directory cleaned up via `defer os.RemoveAll(hostArtifactDir)`.
 
-**Why This Approach:**
-- **Parity:** Native and sandbox paths both read artifacts from a real filesystem after the agent turn
-- **Simplicity:** No extraction logic needed; `collectArtifacts` works unchanged
-- **Standard Practice:** Bind-mounting workspaces is the common Docker eval pattern
+**Why copy-out (not bind-mount):**
+- **Ownership:** the container runs as the non-root `sandbox` user; a host bind
+  mount keeps host ownership and is unwritable. The tmpfs is mounted `mode=1777`
+  so the sandbox user can write it (agent output, copied-in `.kiro`).
+- **No mount collision:** a bind at `/workspace` duplicates the existing tmpfs
+  mount point and is rejected by Docker.
+- **Parity:** both paths ultimately run the same `collectArtifacts` against a real
+  host filesystem after the turn, so scored output matches.
 
-**Performance:** ~negligible (bind-mount setup <1ms, temp dir cleanup <10ms)
+**Note on `CopyToContainer`:** Docker's copy API writes reliably into the tmpfs
+mount *root* (`/workspace`); some local runtimes (e.g. Colima) reject copies into
+tmpfs subdirectories. `CopyTreeTo` therefore targets `/workspace` with a
+`.kiro/`-prefixed tar rather than copying into `/workspace/.kiro` directly.
+
+**Performance:** ~negligible (copy-in/out of the small `.kiro` and artifact trees).
 
 ## Flow Consistency Verification
 

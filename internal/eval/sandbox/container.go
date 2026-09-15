@@ -254,6 +254,197 @@ func (c *Container) CopyTo(ctx context.Context, destPath string, srcPath string)
 	return c.client.CopyToContainer(ctx, c.containerID, filepath.Dir(destPath), &buf, container.CopyToContainerOptions{})
 }
 
+// CopyTreeTo recursively copies a host directory tree into the container under
+// destParent/prefix. destParent must already exist in the container and be
+// writable by the container user (e.g. the tmpfs /workspace). The tree is
+// streamed as a single tar whose entries are rooted at prefix, so a call with
+// destParent="/workspace", prefix=".kiro" reproduces the host tree at
+// /workspace/.kiro/... Directory entries are written explicitly so the whole
+// structure is created. Symlinked source entries are resolved to real content.
+func (c *Container) CopyTreeTo(ctx context.Context, hostSrcDir, destParent, prefix string) error {
+	if c.containerID == "" {
+		return fmt.Errorf("container not created - call Create() before CopyTreeTo")
+	}
+
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+
+	// Emit the prefix directory itself first.
+	if prefix != "" {
+		if err := tw.WriteHeader(&tar.Header{
+			Name:     filepath.ToSlash(prefix) + "/",
+			Mode:     0777,
+			Typeflag: tar.TypeDir,
+		}); err != nil {
+			return err
+		}
+	}
+
+	walkErr := filepath.Walk(hostSrcDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(hostSrcDir, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+
+		// Resolve symlinks to real content (a linked .kiro entry lands as real
+		// files in the container).
+		if info.Mode()&os.ModeSymlink != 0 {
+			resolved, statErr := os.Stat(path)
+			if statErr != nil {
+				return statErr
+			}
+			if resolved.IsDir() {
+				return c.tarTree(tw, path, filepath.Join(prefix, rel))
+			}
+			info = resolved
+		}
+
+		name := filepath.ToSlash(filepath.Join(prefix, rel))
+		hdr, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return err
+		}
+		hdr.Name = name
+		if info.IsDir() {
+			hdr.Name += "/"
+			hdr.Mode = 0777
+			return tw.WriteHeader(hdr)
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return err
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		_, err = io.Copy(tw, f)
+		return err
+	})
+	if walkErr != nil {
+		return walkErr
+	}
+	if err := tw.Close(); err != nil {
+		return err
+	}
+
+	return c.client.CopyToContainer(ctx, c.containerID, destParent, &buf, container.CopyToContainerOptions{})
+}
+
+// tarTree writes the contents of realDir into the tar rooted at relBase,
+// resolving nested entries to real content.
+func (c *Container) tarTree(tw *tar.Writer, realDir, relBase string) error {
+	return filepath.Walk(realDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(realDir, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		name := filepath.ToSlash(filepath.Join(relBase, rel))
+		hdr, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return err
+		}
+		hdr.Name = name
+		if info.IsDir() {
+			hdr.Name += "/"
+			hdr.Mode = 0777
+			return tw.WriteHeader(hdr)
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return err
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		_, err = io.Copy(tw, f)
+		return err
+	})
+}
+
+// CopyFromContainer copies the container path srcPath out to the host directory
+// hostDestDir, extracting the tar Docker returns. It is the copy-out half of
+// artifact collection: after the agent turn, produced files are streamed out of
+// the container onto a host path that collectArtifacts can read. A missing
+// srcPath is not an error — the agent may not have produced that artifact — in
+// which case nothing is written.
+func (c *Container) CopyFromContainer(ctx context.Context, srcPath, hostDestDir string) error {
+	if c.containerID == "" {
+		return fmt.Errorf("container not created - call Create() before CopyFromContainer")
+	}
+
+	reader, _, err := c.client.CopyFromContainer(ctx, c.containerID, srcPath)
+	if err != nil {
+		// Path not present in container (agent produced nothing there): treat as
+		// no artifact rather than a hard failure.
+		if strings.Contains(err.Error(), "No such container:path") ||
+			strings.Contains(err.Error(), "no such file or directory") ||
+			strings.Contains(err.Error(), "Could not find the file") {
+			return nil
+		}
+		return err
+	}
+	defer reader.Close()
+
+	if err := os.MkdirAll(hostDestDir, 0755); err != nil {
+		return err
+	}
+
+	tr := tar.NewReader(reader)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+
+		// Guard against path traversal from crafted tar entries.
+		cleanName := filepath.Clean(hdr.Name)
+		if strings.HasPrefix(cleanName, ".."+string(os.PathSeparator)) || strings.Contains(cleanName, string(os.PathSeparator)+".."+string(os.PathSeparator)) {
+			continue
+		}
+		target := filepath.Join(hostDestDir, cleanName)
+
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, os.FileMode(hdr.Mode)|0700); err != nil {
+				return err
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+				return err
+			}
+			out, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.FileMode(hdr.Mode)|0600)
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(out, tr); err != nil {
+				out.Close()
+				return err
+			}
+			out.Close()
+		default:
+			// Skip symlinks/other types coming out of the container.
+		}
+	}
+	return nil
+}
+
 // Exec executes a command in the container
 func (c *Container) Exec(ctx context.Context, cmd []string) error {
 	execConfig := container.ExecOptions{
