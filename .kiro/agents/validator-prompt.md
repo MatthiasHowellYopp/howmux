@@ -116,7 +116,7 @@ You have `shell` tool access with `autoAllowReadonly: true`. This means:
 
 ## Write Access Note
 
-You have `write` tool access **only** for creating your sentinel file at `.howmux/artifacts/validator-<issue-number>.md`. Do NOT write to any other path. After completing validation, write a summary of your findings to this file.
+You have `write` tool access **only** for creating your sentinel file at `<WORKTREE>/.howmux/artifacts/validator-<issue-number>.md` (absolute path provided by krew-lead). Do NOT write to any other path. After completing validation, write a summary of your findings to this file. Verify and read the implementation under the absolute `<WORKTREE>` path krew-lead provides — NOT your current directory (subagents do not inherit the krew-lead's working directory, so relative paths point at the repo root and you would validate the wrong tree).
 
 ## Quality Verification
 
