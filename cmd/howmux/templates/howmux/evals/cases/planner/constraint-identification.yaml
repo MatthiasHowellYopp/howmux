@@ -1,0 +1,39 @@
+name: constraint-identification
+description: "Evaluate planner's ability to identify technical constraints, dependencies, and blockers"
+agent: planner
+input: |
+  Add a web dashboard for monitoring agents. Users should be able to view agent status from their browser instead of using the terminal.
+setup:
+  - type: text
+    label: "Project Context"
+    content: "Howmux is a CLI/TUI tool built with BubbleTea (terminal UI framework). No web server infrastructure exists."
+context:
+  - "Planner should identify major architectural dependencies this requires"
+  - "Should surface technical constraints: needs HTTP server, WebSocket for real-time updates, authentication, CORS"
+  - "Should identify dependency on existing agent manager state"
+  - "Should flag potential blockers: port conflicts, security model, deployment complexity"
+  - "Should note this may require architectural changes beyond single-PR scope"
+  - "Demonstrates constraint_identification rubric dimension"
+expected_output: |
+  A draft issue that identifies constraints:
+  
+  **Technical Dependencies:**
+  - HTTP server framework (net/http or similar)
+  - WebSocket library for real-time status updates
+  - Template engine or static file serving for dashboard UI
+  - Integration with existing agent manager state
+  
+  **Security Constraints:**
+  - Authentication mechanism (howmux runs locally, how to secure dashboard?)
+  - CORS policy for browser access
+  - Port binding strategy (avoid conflicts with other local services)
+  
+  **Architectural Constraints:**
+  - May require refactoring agent manager to expose state via API
+  - Adds web server lifecycle to CLI tool (startup, shutdown, error handling)
+  - Increases deployment complexity (static assets, build pipeline)
+  
+  **Potential Blockers:**
+  - Scope may exceed single PR (consider phased approach)
+  - Security model unclear for local-only web access
+  - Browser compatibility and testing requirements

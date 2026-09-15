@@ -1,0 +1,22 @@
+name: root-cause-analysis
+description: "Evaluate planner's ability to perform root cause analysis on symptom-level bug reports"
+agent: planner
+input: |
+  The status command doesn't show elapsed time for running agents. When I run 'status' I just see "Agent X: running" but no indication of how long it's been running. This makes it hard to know if something is stuck.
+setup:
+  - type: text
+    label: "User Context"
+    content: "User is running howmux TUI and notices the status display lacks temporal information for debugging stuck agents"
+context:
+  - "Planner should trace the issue from symptom (missing display) to root cause (data collection or formatting)"
+  - "Should identify which layer the problem exists in: data model, formatting logic, or display rendering"
+  - "Should follow code-tracing methodology from planner-conventions"
+  - "Should propose clear root cause vs symptom fix if they differ"
+  - "Requirements should be specific about what data needs to be tracked and where"
+expected_output: |
+  A draft issue that:
+  - Identifies root cause: missing elapsed time tracking in agent state model vs display formatting issue
+  - Clearly states whether the problem is data collection, calculation, or presentation
+  - Includes specific acceptance criteria for time tracking implementation
+  - References relevant code locations (agent manager, status handler, display formatter)
+  - Avoids vague requirements like "make status better"

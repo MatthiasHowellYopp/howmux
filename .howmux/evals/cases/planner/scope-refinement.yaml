@@ -1,0 +1,28 @@
+name: scope-refinement
+description: "Evaluate planner's ability to refine vague feature requests into single-PR scope through focused questions"
+agent: planner
+input: |
+  The TUI needs better agent monitoring. Right now it's hard to see what's going on with agents. Can you make it more informative?
+setup:
+  - type: text
+    label: "User Request"
+    content: "User wants improved agent monitoring but hasn't specified what information they need or what 'better' means"
+context:
+  - "Planner should ask ONE clarifying question to narrow scope"
+  - "Should demonstrate single_question_adherence - no bulleted question lists"
+  - "Should use option presentation format (a, b, c, d) when appropriate"
+  - "Should refine vague 'better' into specific achievable improvements"
+  - "Final scope must be achievable in a single PR"
+expected_output: |
+  Planner asks a single focused question like:
+  "What specific information about agents do you need to see?
+  a) Real-time progress updates on current task
+  b) Historical logs of completed work
+  c) Resource usage metrics (CPU, memory)
+  d) Error notifications and warnings
+  e) Other information (please specify)"
+  
+  After receiving answer, drafts an issue with:
+  - Clearly bounded scope (one specific monitoring feature)
+  - Testable acceptance criteria for that feature
+  - No scope creep into other monitoring aspects
