@@ -61,7 +61,7 @@ tasks:
         go run scripts/compare-templates.go --agents-only >/dev/null || error=1
         diff -rq .howmux/scripts/ cmd/howmux/templates/howmux/scripts/ || error=1
         diff -rq .howmux/themes/ cmd/howmux/templates/howmux/themes/ || error=1
-        diff -rq --exclude=results --exclude=.DS_Store --exclude=tmp .howmux/evals/ cmd/howmux/templates/howmux/evals/ || error=1
+        diff -rq --exclude=results --exclude=baseline.json --exclude=.DS_Store --exclude=tmp .howmux/evals/ cmd/howmux/templates/howmux/evals/ || error=1
 
         if [ $error -eq 0 ]; then
           echo "✅ All template-synchronized files match"

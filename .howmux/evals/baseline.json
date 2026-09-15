@@ -1,0 +1,67 @@
+{
+  "description": "Committed eval baseline for prompt-change regression detection. Raw per-run results under .howmux/evals/results/ are gitignored; this curated summary is the reference to diff against. Covers agents whose artifact scoring is fixed (architect, documenter per #42). builder/sandbox scoring are known follow-ups.",
+  "git_hash": "e72345a",
+  "recorded": "2026-09-14",
+  "transport": "acp",
+  "timeout": "5m",
+  "agents": {
+    "architect": {
+      "average": 0.757,
+      "cases": {
+        "basic-spec-generation": {
+          "score": 1.0,
+          "raw": "20/20"
+        },
+        "complex-feature-design": {
+          "score": 0.25,
+          "raw": "5/20"
+        },
+        "configuration-enhancement": {
+          "score": 0.8,
+          "raw": "16/20"
+        },
+        "custom-threshold-test": {
+          "score": 0.8,
+          "raw": "16/20"
+        },
+        "default-threshold-test": {
+          "score": 0.8,
+          "raw": "16/20"
+        },
+        "performance-optimization": {
+          "score": 0.85,
+          "raw": "17/20"
+        },
+        "refactoring-analysis": {
+          "score": 0.8,
+          "raw": "16/20"
+        }
+      }
+    },
+    "documenter": {
+      "average": 0.76,
+      "cases": {
+        "api-documentation": {
+          "score": 0.85,
+          "raw": "17/20"
+        },
+        "architecture-documentation": {
+          "score": 0.5,
+          "raw": "10/20"
+        },
+        "configuration-reference": {
+          "score": 0.8,
+          "raw": "16/20"
+        },
+        "feature-documentation": {
+          "score": 0.8,
+          "raw": "16/20"
+        },
+        "troubleshooting-guide": {
+          "score": 0.85,
+          "raw": "17/20"
+        }
+      }
+    }
+  }
+}
