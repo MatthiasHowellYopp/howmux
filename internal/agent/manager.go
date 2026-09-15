@@ -413,6 +413,15 @@ func (m *Manager) Stop(id string) error {
 	return nil
 }
 
+// stopAllTimeout caps how long StopAll waits for agent ACP clients to close.
+// Each acpClient.Close() sends SIGTERM and waits up to ~3s for the process, so
+// closing sequentially and unbounded made exit (and Ctrl+C, which routes through
+// the same cleanup) hang for ~3s per running agent — or indefinitely if a
+// kiro-cli process was wedged. Closing concurrently under one overall deadline
+// keeps exit a reliable escape hatch: we ask every client to close, then return
+// once they're done or the deadline elapses, whichever comes first.
+const stopAllTimeout = 5 * time.Second
+
 func (m *Manager) StopAll() {
 	m.mu.RLock()
 	agents := make([]*Agent, 0, len(m.agents))
@@ -423,16 +432,40 @@ func (m *Manager) StopAll() {
 	}
 	m.mu.RUnlock()
 
-	for _, agent := range agents {
-		log.Printf("[agent] stopping %s (issue #%d)", agent.ID, agent.IssueNumber)
+	if len(agents) == 0 {
+		return
+	}
 
-		// Close ACP client if present (preferred method)
-		if agent.acpClient != nil {
-			agent.acpClient.Close()
-		} else if agent.Process != nil {
-			// Fallback to Process.Signal for backward compatibility
-			agent.Process.Signal(syscall.SIGTERM)
-		}
+	// Close each agent's ACP client (or signal its process) concurrently. A
+	// single blocked Close() can no longer stall the others or the caller.
+	var wg sync.WaitGroup
+	for _, agent := range agents {
+		wg.Add(1)
+		go func(agent *Agent) {
+			defer wg.Done()
+			log.Printf("[agent] stopping %s (issue #%d)", agent.ID, agent.IssueNumber)
+
+			// Close ACP client if present (preferred method)
+			if agent.acpClient != nil {
+				agent.acpClient.Close()
+			} else if agent.Process != nil {
+				// Fallback to Process.Signal for backward compatibility
+				agent.Process.Signal(syscall.SIGTERM)
+			}
+		}(agent)
+	}
+
+	// Wait for all closes, but never longer than the overall deadline — exit
+	// must not block on a slow or wedged kiro-cli process.
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(stopAllTimeout):
+		log.Printf("[agent] StopAll exceeded %s; exiting without waiting for remaining closes", stopAllTimeout)
 	}
 }
 
