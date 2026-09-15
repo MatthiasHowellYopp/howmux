@@ -76,6 +76,35 @@ var diffCmd = &cobra.Command{
 	},
 }
 
+var baselineCompareOnly bool
+
+var baselineCmd = &cobra.Command{
+	Use:   "baseline [agent]",
+	Short: "Run evals and compare against the committed baseline (.howmux/evals/baseline.json)",
+	Long: `Run evaluations and compare the result against the committed baseline,
+printing per-agent and per-case deltas. Exits non-zero if any baseline agent
+regressed beyond tolerance — use it to gate a prompt-change workflow.
+
+With --compare-only, skips running and compares the latest existing run instead.`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		var agent string
+		if len(args) > 0 {
+			agent = args[0]
+		}
+		if !baselineCompareOnly {
+			if err := eval.RunWithOptions(agent, "", eval.RunOptions{NoSandbox: true}); err != nil {
+				return err
+			}
+		}
+		return eval.CompareToBaselineLatest()
+	},
+}
+
+func init() {
+	baselineCmd.Flags().BoolVar(&baselineCompareOnly, "compare-only", false, "Skip running; compare the latest existing run against the baseline")
+}
+
 func init() {
 	evalCmd.Flags().BoolVar(&evalList, "list", false, "List available test cases for the agent")
 	evalCmd.Flags().BoolVar(&evalResume, "resume", false, "Resume interrupted evaluation from last completed test")
@@ -88,5 +117,6 @@ func init() {
 	evalCmd.Flags().BoolVar(&evalCleanup, "cleanup", false, "Stop and remove all tracked debug containers and clean artifacts")
 
 	evalCmd.AddCommand(diffCmd)
+	evalCmd.AddCommand(baselineCmd)
 	rootCmd.AddCommand(evalCmd)
 }
