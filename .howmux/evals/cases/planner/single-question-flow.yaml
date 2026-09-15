@@ -1,0 +1,31 @@
+name: single-question-flow
+description: "Evaluate planner's adherence to single-question-at-a-time rule and avoidance of question lists"
+agent: planner
+input: |
+  I want to add analytics to howmux so we can understand how people are using it.
+setup:
+  - type: text
+    label: "Ambiguous Request"
+    content: "Request requires multiple clarifications: what to track, where to send data, privacy implications, opt-in/out"
+context:
+  - "Planner MUST ask only ONE question, not a bulleted list"
+  - "Demonstrates single_question_adherence rubric dimension (critical planner rule)"
+  - "Should use option format when presenting alternatives"
+  - "After first answer, ask next question (sequential, not parallel)"
+  - "Must avoid prohibited pattern: 'What should we track? Where should it go? Should it be opt-in?'"
+  - "Prohibited anti-example (agent must NOT produce this): asking multiple questions at once, e.g. 'To implement analytics, I need to know: What data should we collect? Where should it be sent? Should it be opt-in or opt-out? How should we handle privacy?' — this violates the single-question rule and must score low on single_question_adherence"
+expected_output: |
+  First response asks ONE question:
+  "What type of analytics data should howmux collect?
+  a) Usage metrics (commands run, features used, session duration)
+  b) Performance metrics (agent execution time, memory usage, errors)
+  c) Diagnostic data (crash reports, error logs, system info)
+  d) Minimal telemetry (version, OS, daily active status only)
+  e) Other (please specify)"
+
+  After the user answers, the second response asks ONE more question:
+  "Where should analytics data be sent?
+  a) Local log files only (no network transmission)
+  b) Self-hosted analytics server
+  c) Third-party analytics service (Posthog, Mixpanel, etc.)
+  d) Other destination (please specify)"

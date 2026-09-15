@@ -1,0 +1,29 @@
+name: acceptance-criteria-definition
+description: "Evaluate planner's ability to define comprehensive, testable acceptance criteria"
+agent: planner
+input: |
+  Add an export command so users can save their agent output. It should export to a file.
+setup:
+  - type: text
+    label: "Feature Request"
+    content: "User wants export functionality but hasn't specified format, scope, or success criteria"
+context:
+  - "Planner should create comprehensive acceptance criteria with clear completion indicators"
+  - "Criteria should be testable (not subjective)"
+  - "Should cover: what gets exported, format, location, error cases, user feedback"
+  - "Should avoid vague criteria like 'works correctly' or 'user is satisfied'"
+  - "Demonstrates acceptance_criteria_quality rubric dimension"
+expected_output: |
+  A draft issue with acceptance criteria like:
+  - ✅ Running 'export <agent-id>' creates output file at ~/.howmux/exports/<agent-id>-<timestamp>.txt
+  - ✅ Export includes full agent stdout/stderr captured during execution
+  - ✅ Export command shows confirmation message with file path on success
+  - ✅ Export command shows clear error if agent ID doesn't exist
+  - ✅ Export command shows clear error if write permissions denied
+  - ✅ Exported file is UTF-8 encoded plain text
+  
+  Criteria are:
+  - Testable (each can be verified with a command or assertion)
+  - Specific (exact paths, formats, messages)
+  - Comprehensive (covers happy path and error cases)
+  - Observable (clear completion indicators)
