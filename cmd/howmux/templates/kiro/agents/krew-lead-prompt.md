@@ -14,12 +14,14 @@ Extract the issue number, repo, and worktree name from this message and use them
 
 1. **Read Issue**: Run `gh issue view <number> --repo <repo> --json title,body,labels` to get issue details.
 2. **Worktree Ready**: The worktree has already been created and you are running inside it. Your current directory IS the worktree. All file operations are relative to this directory. Do NOT run worktree-create.sh.
-3. **Delegate to Architect**: Spawn the `architect` agent to analyze issue and create design specification. Pass the issue details including number, title, and body.
-4. **Read Architect's Spec**: Read the spec file at `.howmux/specs/issue-<number>-*.md`
-5. **Execute Tasks**: Delegate implementation tasks to the `builder` agent. Pass the spec content and specific tasks.
+
+   **Capture the absolute worktree path first**: run `pwd` and save the result as `WORKTREE` (an absolute path). You MUST pass this absolute path to every subagent you delegate to. Subagents do NOT inherit your working directory — if you tell them to write "in the current directory" they will write to the wrong place (the repo root) and you will not find their files. Always give subagents the absolute `WORKTREE` path and tell them to write under it.
+3. **Delegate to Architect**: Spawn the `architect` agent to analyze the issue and create the design specification. Pass the issue details (number, title, body) AND the absolute worktree path. State explicitly: "Write the design spec to `<WORKTREE>/.howmux/specs/issue-<number>-<slug>.md` and the sentinel to `<WORKTREE>/.howmux/artifacts/architect-<number>.md` using these absolute paths — do not use relative paths."
+4. **Read Architect's Spec**: Read the spec file at `<WORKTREE>/.howmux/specs/issue-<number>-*.md` (the absolute path). If it is missing there, the architect wrote to the wrong location — treat as a failed attempt.
+5. **Execute Tasks**: Delegate implementation tasks to the `builder` agent. Pass the spec content, the specific tasks, AND the absolute `<WORKTREE>` path with the instruction to make all file changes under it.
 6. **Quality Assurance Loop**: Enforce quality gates before PR creation:
    1. **Discover QA Tools**: Use the `@discover-qa-tools` skill to identify project QA commands. Check if `.howmux/artifacts/qa-tools.md` exists and is less than 24 hours old — if so, reuse it; otherwise regenerate.
-   2. **Validate Implementation**: Delegate to `validator` agent with QA commands from discovery output
+   2. **Validate Implementation**: Delegate to `validator` agent with QA commands from discovery output and the absolute `<WORKTREE>` path (the validator must read/verify files under `<WORKTREE>`, not the repo root)
    3. **Check QA Status**: Read validator sentinel file for QA verification results
    4. **QA Feedback Loop**: If validator reports QA failures:
       - Parse validator feedback for specific failing checks and fixes

@@ -38,7 +38,11 @@ If no discovery results are provided, examine CI configuration and build tool fi
 
 ## Sentinel File
 
-After completing your task, write a sentinel file at `.howmux/artifacts/builder-<issue-number>.md` (replacing `<issue-number>` with the issue number). Include QA discovery and results. This signals successful completion to krew-lead.
+After completing your task, write a sentinel file at `<WORKTREE>/.howmux/artifacts/builder-<issue-number>.md` (absolute path provided by krew-lead; replace `<issue-number>` with the issue number). Include QA discovery and results. This signals successful completion to krew-lead.
+
+## Working Directory
+
+The krew-lead delegates with an absolute `<WORKTREE>` path. Make ALL file changes (code, sentinel, everything) under that absolute path. Do NOT rely on your current directory being the worktree — subagents do not inherit the krew-lead's working directory, so relative paths land in the wrong place (the repo root) and the krew-lead will not find your work. Read the spec and validator feedback from `<WORKTREE>/.howmux/...` as well.
 
 ## Report Format
 
