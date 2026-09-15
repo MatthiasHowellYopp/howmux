@@ -864,6 +864,19 @@ func invokeAgentNative(agent, prompt string) (string, CostInfo, *ErrorContext, [
 		}
 	}
 
+	// Initialize the workspace as a git repo with a committed baseline so the
+	// builder artifact collector can capture exactly the agent's changes via
+	// `git diff HEAD`. Without a repo here, the collector's git command fails
+	// and silently returns nothing, and the builder would still be scored on
+	// ACP narration instead of the code it produced. The .kiro symlink is
+	// git-ignored so it never appears in the diff.
+	if err := initWorkspaceGitBaseline(workspaceDir); err != nil {
+		// Non-fatal: the agent can still run and other artifact types (spec,
+		// docs) don't depend on git. Builder collection will produce nothing,
+		// but that is surfaced by the empty artifact rather than masked here.
+		fmt.Fprintf(os.Stderr, "⚠️  Warning: eval workspace git baseline init failed (builder diff will be empty): %v\n", err)
+	}
+
 	// Capture relevant environment variables for error context
 	envVars := make(map[string]string)
 	for _, key := range []string{"HOWMUX_EVAL_TIMEOUT", "HOWMUX_EVAL_CALL_LOG"} {
