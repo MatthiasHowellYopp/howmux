@@ -13,27 +13,19 @@ context:
   - "Should use option format when presenting alternatives"
   - "After first answer, ask next question (sequential, not parallel)"
   - "Must avoid prohibited pattern: 'What should we track? Where should it go? Should it be opt-in?'"
+  - "Prohibited anti-example (agent must NOT produce this): asking multiple questions at once, e.g. 'To implement analytics, I need to know: What data should we collect? Where should it be sent? Should it be opt-in or opt-out? How should we handle privacy?' — this violates the single-question rule and must score low on single_question_adherence"
 expected_output: |
-  **✅ CORRECT BEHAVIOR - First response asks ONE question:**
+  First response asks ONE question:
   "What type of analytics data should howmux collect?
   a) Usage metrics (commands run, features used, session duration)
   b) Performance metrics (agent execution time, memory usage, errors)
   c) Diagnostic data (crash reports, error logs, system info)
   d) Minimal telemetry (version, OS, daily active status only)
   e) Other (please specify)"
-  
-  **After user answers, second response asks ONE more question:**
+
+  After the user answers, the second response asks ONE more question:
   "Where should analytics data be sent?
   a) Local log files only (no network transmission)
   b) Self-hosted analytics server
   c) Third-party analytics service (Posthog, Mixpanel, etc.)
   d) Other destination (please specify)"
-  
-  **❌ INCORRECT BEHAVIOR - Multiple questions at once:**
-  "To implement analytics, I need to know:
-  - What data should we collect?
-  - Where should it be sent?
-  - Should it be opt-in or opt-out?
-  - How should we handle privacy?"
-  
-  This violates the single-question rule and should score low on single_question_adherence.
