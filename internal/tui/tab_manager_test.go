@@ -164,6 +164,7 @@ func (m *mockAgentTab) Type() TabType                                { return Ta
 func (m *mockAgentTab) Title() string                                { return "Agent " + m.agentID }
 func (m *mockAgentTab) IsClosable() bool                             { return true }
 func (m *mockAgentTab) View() string                                 { return "" }
+func (m *mockAgentTab) CopyableContent() string                      { return "" }
 func (m *mockAgentTab) Update(msg tea.Msg) (Tab, tea.Cmd)            { return m, nil }
 func (m *mockAgentTab) Resize(width, height int)                     {}
 func (m *mockAgentTab) CaptureFocusState() FocusTarget               { return FocusTargetFooter }

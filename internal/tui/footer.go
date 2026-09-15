@@ -19,6 +19,16 @@ type FooterManager struct {
 	tabManager        *TabManager
 	width             int
 	height            int
+
+	// transientMessage, when non-empty, is shown in the status row in place of
+	// the usual contextual info (e.g. the Ctrl+Y "Copied N lines" feedback).
+	transientMessage string
+}
+
+// SetTransientMessage sets (or clears, with "") a short-lived status-row message
+// that takes priority over the normal contextual info.
+func (fm *FooterManager) SetTransientMessage(msg string) {
+	fm.transientMessage = msg
 }
 
 // FooterContent represents the structured content for the footer
@@ -82,6 +92,12 @@ func (fm *FooterManager) renderInputRow() string {
 
 // renderStatusRow creates the contextual information row based on tab type
 func (fm *FooterManager) renderStatusRow(activeTabType TabType) string {
+	// A transient message (e.g. Ctrl+Y copy feedback) takes priority over the
+	// normal contextual info while it is set.
+	if fm.transientMessage != "" {
+		return fm.transientMessage
+	}
+
 	// Prefer tab manager as source of truth for active tab type when available
 	if fm.tabManager != nil {
 		if activeTab := fm.tabManager.GetActiveTab(); activeTab != nil {

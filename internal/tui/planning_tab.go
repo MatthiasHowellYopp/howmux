@@ -256,6 +256,11 @@ func (pt *PlanningTab) Type() TabType {
 	return TabTypePlanning
 }
 
+// CopyableContent returns the full conversation as plain, unstyled text.
+func (pt *PlanningTab) CopyableContent() string {
+	return pt.plainTextContent()
+}
+
 // Title returns the tab title with state indicator
 func (pt *PlanningTab) Title() string {
 	switch pt.state {
@@ -828,14 +833,6 @@ func (pt *PlanningTab) Update(msg tea.Msg) (Tab, tea.Cmd) {
 			pt.viewport.GotoBottom()
 			pt.focusTarget = FocusTargetFooter
 			pt.textinput.Blur()
-		case "ctrl+y":
-			// Copy the underlying conversation text (not the rendered viewport,
-			// which is padded/styled/visible-only) so the clipboard gets the
-			// real, complete, unstyled text.
-			content := pt.plainTextContent()
-			if content != "" {
-				CopyToClipboard(content)
-			}
 		case "ctrl+v":
 			// Paste from clipboard into message input (only when message input has focus)
 			if pt.focusTarget == FocusTargetMessage {

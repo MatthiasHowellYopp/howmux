@@ -14,6 +14,7 @@ func (m *mockTab) Type() TabType                                { return TabType
 func (m *mockTab) Title() string                                { return "Mock" }
 func (m *mockTab) IsClosable() bool                             { return false }
 func (m *mockTab) View() string                                 { return "" }
+func (m *mockTab) CopyableContent() string                      { return "" }
 func (m *mockTab) Update(tea.Msg) (Tab, tea.Cmd)                { return m, nil }
 func (m *mockTab) Resize(width, height int)                     {}
 func (m *mockTab) CaptureFocusState() FocusTarget               { return FocusTargetFooter }

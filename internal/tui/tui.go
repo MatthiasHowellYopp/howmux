@@ -116,6 +116,12 @@ type model struct {
 
 	// Focus state tracking per tab
 	tabFocusStates map[string]FocusTarget
+
+	// Transient copy feedback (Ctrl+Y). copyStatus is shown in the footer until
+	// copyStatusExpires; a tea.Tick clears it. copyStatusSeq guards against a
+	// stale timer clearing a newer message.
+	copyStatus    string
+	copyStatusSeq int
 }
 
 func newModel(w *watcher.Watcher, m *agent.Manager, cfg *config.Config, logFile *os.File, logReader *os.File) model {
@@ -171,6 +177,52 @@ func (m model) Init() tea.Cmd {
 func (m model) tickCmd() tea.Cmd {
 	return tea.Tick(200*time.Millisecond, func(time.Time) tea.Msg {
 		return tickMsg{}
+	})
+}
+
+// clearCopyStatusMsg clears a transient Ctrl+Y copy status after a delay. seq
+// ties the timer to the message it was scheduled for, so a later copy's message
+// isn't cleared early by an earlier timer.
+type clearCopyStatusMsg struct{ seq int }
+
+// copyStatusDuration is how long the Ctrl+Y feedback stays in the footer.
+const copyStatusDuration = 2500 * time.Millisecond
+
+// handleCopy copies the active tab's plain-text content to the clipboard and
+// sets transient footer feedback describing the result.
+func (m model) handleCopy() (tea.Model, tea.Cmd) {
+	activeTab := m.tabManager.GetActiveTab()
+	if activeTab == nil {
+		return m, nil
+	}
+
+	content := activeTab.CopyableContent()
+	if content == "" {
+		return m.setCopyStatus("Nothing to copy")
+	}
+
+	if err := CopyToClipboard(content); err != nil {
+		return m.setCopyStatus(fmt.Sprintf("Copy failed: %v", err))
+	}
+
+	lines := strings.Count(content, "\n") + 1
+	plural := "s"
+	if lines == 1 {
+		plural = ""
+	}
+	return m.setCopyStatus(fmt.Sprintf("Copied %d line%s to clipboard", lines, plural))
+}
+
+// setCopyStatus records a transient status message and schedules its clearing.
+func (m model) setCopyStatus(status string) (tea.Model, tea.Cmd) {
+	m.copyStatus = status
+	m.copyStatusSeq++
+	seq := m.copyStatusSeq
+	if m.footerManager != nil {
+		m.footerManager.SetTransientMessage(status)
+	}
+	return m, tea.Tick(copyStatusDuration, func(time.Time) tea.Msg {
+		return clearCopyStatusMsg{seq: seq}
 	})
 }
 
@@ -393,6 +445,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		return m, m.tickCmd()
 
+	case clearCopyStatusMsg:
+		// Only clear if no newer copy status has replaced this one.
+		if msg.seq == m.copyStatusSeq {
+			m.copyStatus = ""
+			if m.footerManager != nil {
+				m.footerManager.SetTransientMessage("")
+			}
+		}
+		return m, nil
+
 	case planningHotkeyMsg:
 		if m.currentMode == session.Planning {
 			return m.switchToConsoleMode()
@@ -502,17 +564,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 
-		// Ctrl+Y: forward to the active tab for clipboard copy. Tabs that support
-		// copy (planning, agent output) handle it in their Update methods; others
-		// ignore it.
+		// Ctrl+Y: copy the active tab's underlying text to the clipboard and show
+		// transient feedback in the footer. Copy is handled here (not in the tab)
+		// so success/failure is reported uniformly — a silent copy left users
+		// unsure whether anything happened.
 		if msg.String() == "ctrl+y" {
-			activeTab := m.tabManager.GetActiveTab()
-			if activeTab != nil {
-				if cmd := m.tabManager.Update(msg); cmd != nil {
-					return m, cmd
-				}
-			}
-			return m, nil
+			return m.handleCopy()
 		}
 
 		// Priority handling for overlay dismissal

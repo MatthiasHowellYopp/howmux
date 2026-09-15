@@ -38,6 +38,11 @@ type Tab interface {
 	Update(tea.Msg) (Tab, tea.Cmd)
 	Resize(width, height int)
 
+	// CopyableContent returns the tab's underlying plain, unstyled text for
+	// clipboard copy (Ctrl+Y), or "" if the tab has nothing to copy. This is the
+	// real buffer content, not the rendered/visible viewport.
+	CopyableContent() string
+
 	// Focus state management
 	CaptureFocusState() FocusTarget
 	RestoreFocusState(target FocusTarget) tea.Cmd
