@@ -61,6 +61,26 @@ The eval system now uses a unified **generate → build → create → verify** 
 
 **Performance:** ~100-500ms (Binary verification)
 
+### Phase 5: Workspace Bind-Mount (Artifact Collection)
+**Location:** `internal/eval/runner.go` - `invokeAgentInContainer()`
+**Purpose:** Make agent-produced artifacts host-visible for scoring
+
+**Steps:**
+1. Create host temp directory: `os.MkdirTemp("", "howmux-eval-sandbox-*")`
+2. Bind-mount to container workspace: `hostConfig.Binds = []string{"{host}:{container}"}`
+3. Agent writes artifacts to container workspace (e.g., `/workspace/.howmux/specs/issue-*.md`)
+4. Artifacts land on mounted host directory via bind-mount
+5. After agent turn, `collectArtifacts(agent, hostWorkspaceDir)` reads from host directory
+6. Artifact content appended to scored output under `--- PRODUCED ARTIFACT ---`
+7. Host temp directory cleaned up via `defer os.RemoveAll(hostWorkspaceDir)`
+
+**Why This Approach:**
+- **Parity:** Native and sandbox paths both read artifacts from a real filesystem after the agent turn
+- **Simplicity:** No extraction logic needed; `collectArtifacts` works unchanged
+- **Standard Practice:** Bind-mounting workspaces is the common Docker eval pattern
+
+**Performance:** ~negligible (bind-mount setup <1ms, temp dir cleanup <10ms)
+
 ## Flow Consistency Verification
 
 ### Test Environment

@@ -661,6 +661,13 @@ func createContainerConfig(sandboxCfg *config.SandboxConfig, resourceLimits map[
 func invokeAgentInContainer(agent, prompt string, cConfig *ContainerConfig) (string, CostInfo, *ErrorContext, error) {
 	ctx := context.Background()
 
+	// Create a host temp directory for the workspace so container writes land on host filesystem
+	hostWorkspaceDir, err := os.MkdirTemp("", "howmux-eval-sandbox-*")
+	if err != nil {
+		return "", CostInfo{}, nil, fmt.Errorf("creating host workspace: %w", err)
+	}
+	defer os.RemoveAll(hostWorkspaceDir)
+
 	c, err := sandbox.NewContainerWithDebug("", cConfig.Debug)
 	if err != nil {
 		return "", CostInfo{}, nil, fmt.Errorf("creating container: %w", err)
@@ -702,6 +709,11 @@ func invokeAgentInContainer(agent, prompt string, cConfig *ContainerConfig) (str
 	createStart := time.Now()
 
 	hostConfig := sandbox.NewHostConfigWithLimits(cConfig.ResourceLimits)
+
+	// Add workspace bind-mount so container writes land on host filesystem
+	hostConfig.Binds = []string{
+		fmt.Sprintf("%s:%s", hostWorkspaceDir, cConfig.WorkspaceDir),
+	}
 
 	// Configure environment variables from host system and container config
 	envVars := []string{
@@ -811,6 +823,13 @@ func invokeAgentInContainer(agent, prompt string, cConfig *ContainerConfig) (str
 	fmt.Printf("  Execution time: %v\n", executionDuration)
 
 	result := stripANSISequences(output)
+
+	// Collect artifacts from the mounted workspace (same as native path)
+	artifactContent := collectArtifacts(agent, hostWorkspaceDir)
+	if artifactContent != "" {
+		result += artifactContent
+	}
+
 	cost := estimateCost(prompt, result)
 
 	return result, cost, nil, nil
