@@ -35,6 +35,20 @@ tasks:
     cmds:
       - go build -o {{.BINARY_NAME}} ./cmd/howmux
 
+  eval:baseline:
+    desc: "Run evals and compare against the committed baseline (prompt-change gate). Optional: AGENT=architect"
+    deps: [dev]
+    cmds:
+      - ./{{.BINARY_NAME}} eval baseline {{.AGENT}}
+    env:
+      HOWMUX_EVAL_TIMEOUT: 5m
+
+  eval:baseline:check:
+    desc: Compare the latest existing eval run against the baseline (no re-run)
+    deps: [dev]
+    cmds:
+      - ./{{.BINARY_NAME}} eval baseline --compare-only
+
   lint:
     desc: Run linters and static analysis
     cmds:

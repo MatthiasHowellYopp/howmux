@@ -87,7 +87,18 @@ howmux eval architect
 
 # Compare two runs
 howmux eval diff abc1234 def5678
+
+# Run and compare against the committed baseline (prompt-change gate).
+# Exits non-zero if any baseline agent regressed beyond tolerance.
+howmux eval baseline              # or: task eval:baseline
+howmux eval baseline architect    # single agent
+howmux eval baseline --compare-only   # compare the latest run, no re-run
 ```
+
+The committed baseline lives at `.howmux/evals/baseline.json` (tracked; raw runs
+under `results/` are gitignored). It records per-agent and per-case scores using
+the runner's pooled, skip-aware formula, and is the reference `eval baseline`
+diffs against.
 
 ## Adding Test Cases
 
@@ -139,26 +150,31 @@ The evaluation framework serves as unit testing for prompt engineering. Follow t
 
 ### Before Making Changes (Baseline)
 
-**Required**: Run `howmux eval` before making any prompt changes to establish a baseline:
+The committed baseline at `.howmux/evals/baseline.json` is the reference. You
+don't need to capture a hash by hand — it's already recorded on `main`. If you
+want to confirm the current tree still matches it before you start:
 
 ```bash
-# Capture current performance
-howmux eval
+task eval:baseline        # run + compare against the committed baseline
+# or, without re-running, compare the most recent run:
+task eval:baseline:check
 ```
-
-This creates a results snapshot at `.howmux/evals/results/<git-hash>/` for comparison.
 
 ### After Making Changes (Verification)
 
-**Required**: Run `howmux eval` after prompt changes to verify improvements:
+**Required**: after a prompt/config change, run the baseline gate. It prints
+per-agent and per-case deltas and **exits non-zero if any agent regressed**
+beyond tolerance, so it works as a pass/fail check in a script or pre-merge:
 
 ```bash
-# Test modified behavior
-howmux eval
-
-# Compare with baseline
-howmux eval diff <baseline-hash> <current-hash>
+task eval:baseline                 # all covered agents
+AGENT=architect task eval:baseline # just the one you changed
 ```
+
+Read the deltas: `↑` improved, `↓` regressed, `→` unchanged. Investigate any
+`↓`. If a change is a deliberate, accepted improvement, re-record the baseline
+(regenerate `.howmux/evals/baseline.json` from the new run and commit it) so it
+becomes the new reference.
 
 ### Creating Test Cases for Behavioral Changes
 
@@ -171,8 +187,8 @@ When making specific behavioral changes, create targeted test cases:
 
 Example workflow for improving architect task decomposition:
 ```bash
-# 1. Baseline
-howmux eval architect
+# 1. Confirm the current tree matches the committed baseline
+AGENT=architect task eval:baseline
 
 # 2. Add test case for complex decomposition scenario
 # Edit .howmux/evals/cases/architect/complex-decomposition.yaml
@@ -180,9 +196,8 @@ howmux eval architect
 # 3. Modify architect prompt
 # Edit .kiro/agents/architect-prompt.md
 
-# 4. Verify improvement
-howmux eval architect
-howmux eval diff <baseline> <current>
+# 4. Verify improvement (deltas vs baseline; non-zero exit on regression)
+AGENT=architect task eval:baseline
 ```
 
 ### Evaluation as Unit Testing
