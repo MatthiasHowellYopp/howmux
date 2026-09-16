@@ -12,7 +12,8 @@ type Status string
 const (
 	StatusWatching  Status = "watching"  // Enrolled, waiting for review trigger
 	StatusReviewing Status = "reviewing" // Review in progress
-	StatusDone      Status = "done"      // Review complete, PR merged/closed
+	StatusReviewed  Status = "reviewed"  // Reviewed at a SHA, awaiting the next push (non-terminal)
+	StatusDone      Status = "done"      // Terminal: PR merged/closed
 )
 
 // Record represents the persisted state for a single PR review
@@ -42,7 +43,7 @@ func (r *Record) Validate() error {
 	if r.Status == "" {
 		return fmt.Errorf("status is required")
 	}
-	if r.Status != StatusWatching && r.Status != StatusReviewing && r.Status != StatusDone {
+	if r.Status != StatusWatching && r.Status != StatusReviewing && r.Status != StatusReviewed && r.Status != StatusDone {
 		return fmt.Errorf("invalid status: %s", r.Status)
 	}
 	if r.EnrolledAt == "" {

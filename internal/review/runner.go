@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -53,7 +54,14 @@ func loadPriorReviews(baseDir, owner, repo string, pr int) ([]string, error) {
 		return nil, fmt.Errorf("failed to read reviews directory: %w", err)
 	}
 
-	var reviews []string
+	// Collect .md files with their modification time so we can feed prior
+	// reviews to the agent in chronological order. os.ReadDir returns
+	// filename (SHA-lexical) order, which is arbitrary w.r.t. review time.
+	type reviewFile struct {
+		content string
+		modTime time.Time
+	}
+	var files []reviewFile
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
 			continue
@@ -66,7 +74,22 @@ func loadPriorReviews(baseDir, owner, repo string, pr int) ([]string, error) {
 			continue
 		}
 
-		reviews = append(reviews, string(content))
+		info, err := entry.Info()
+		if err != nil {
+			logging.Warn("failed to stat review file", "file", filePath, "error", err)
+			continue
+		}
+
+		files = append(files, reviewFile{content: string(content), modTime: info.ModTime()})
+	}
+
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].modTime.Before(files[j].modTime)
+	})
+
+	reviews := make([]string, 0, len(files))
+	for _, f := range files {
+		reviews = append(reviews, f.content)
 	}
 
 	return reviews, nil
@@ -128,12 +151,29 @@ func saveReviewArtifact(baseDir, owner, repo string, pr int, sha string, content
 	return nil
 }
 
+// reviewAgent is the ACP agent howmux prompts to run a review.
+//
+// TODO(#73): this is a placeholder. "krew-lead" is howmux's issue-implementation
+// orchestrator, not a review orchestrator, and it does not post a PR review.
+// The review-orchestrator boundary — which agent runs the review, whether it
+// posts to GitHub itself or returns a review for howmux to post, and therefore
+// whether howmux posts at all — is an open design question tracked in #73.
+// Until that is resolved this runner prompts a placeholder and only persists
+// the returned artifact; it does not post.
+const reviewAgent = "krew-lead"
+
 // Injectable seams for testing
 var (
 	loadPriorReviewsFunc   = loadPriorReviews
 	saveReviewArtifactFunc = saveReviewArtifact
 	timeNow                = time.Now
+	// validateAgentFunc is a seam over acp.ValidateAgentResolvable so the
+	// unresolvable-agent branch is testable without a real kiro-cli.
+	validateAgentFunc = acp.ValidateAgentResolvable
 )
+
+// reviewTimeout is the single authoritative time budget for a review request.
+const reviewTimeout = 10 * time.Minute
 
 // ACPClientFactory creates an ACP client for a given agent
 type ACPClientFactory func(agent string, cwd string) (acp.Client, error)
@@ -147,7 +187,7 @@ var defaultACPClientFactory ACPClientFactory = func(agent string, cwd string) (a
 		MaxRetries:        3,
 		RetryDelay:        1 * time.Second,
 		ConnectionTimeout: 30 * time.Second,
-		RequestTimeout:    10 * time.Minute, // 10 min timeout for review
+		RequestTimeout:    reviewTimeout,
 	}
 
 	if err := acp.ValidateConnectionConfig(config); err != nil {
@@ -186,8 +226,18 @@ func RunReviewWithFactory(ctx context.Context, rec Record, baseDir, currentSHA s
 	prompt := reviewPromptContext(owner, repo, rec.PR, currentSHA, priorReviews)
 	logging.Debug("assembled review prompt", "length", len(prompt))
 
-	// Create ACP client with krew-lead agent
-	client, err := factory("krew-lead", rec.ReviewDir)
+	// Pre-flight: fail loud if the agent can't be resolved from the checkout
+	// dir. Over ACP, kiro-cli silently falls back to a default agent for an
+	// unknown agent and still returns success, so without this we could persist
+	// a "review" produced by the wrong agent. The review dir is a third-party
+	// PR checkout and won't contain howmux's agent configs, so this is the
+	// likely failure — surface it rather than spend a session on it.
+	if err := validateAgentFunc(rec.ReviewDir, reviewAgent); err != nil {
+		return fmt.Errorf("agent %q not resolvable from %s: %w", reviewAgent, rec.ReviewDir, err)
+	}
+
+	// Create ACP client with the review agent
+	client, err := factory(reviewAgent, rec.ReviewDir)
 	if err != nil {
 		return fmt.Errorf("failed to create ACP client: %w", err)
 	}
@@ -198,18 +248,18 @@ func RunReviewWithFactory(ctx context.Context, rec Record, baseDir, currentSHA s
 	}
 	defer client.Close()
 
-	logging.Info("ACP connection established", "agent", "krew-lead")
+	logging.Info("ACP connection established", "agent", reviewAgent)
 
-	// Send review request with 10min timeout
-	reviewCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	// Send review request under the single authoritative timeout.
+	reviewCtx, cancel := context.WithTimeout(ctx, reviewTimeout)
 	defer cancel()
 
 	req := &acp.MessageRequest{
-		Agent:          "krew-lead",
+		Agent:          reviewAgent,
 		Message:        prompt,
 		Streaming:      false,
 		ResponseFormat: "text",
-		Timeout:        10 * time.Minute,
+		Timeout:        reviewTimeout,
 	}
 
 	resp, err := client.SendMessage(reviewCtx, req)
@@ -229,8 +279,11 @@ func RunReviewWithFactory(ctx context.Context, rec Record, baseDir, currentSHA s
 	}
 	logging.Debug("review artifact saved", "sha", currentSHA)
 
-	// Update record
-	rec.Status = StatusDone
+	// Update record. Use the non-terminal StatusReviewed: the PR has been
+	// reviewed at this SHA but is still open, so the watch loop (#64) can
+	// re-fire on the next push/re-request. StatusDone is reserved for the
+	// terminal merged/closed case, set by the loop when it prunes.
+	rec.Status = StatusReviewed
 	rec.LastReviewedSHA = currentSHA
 	rec.LastReviewedAt = timeNow().Format(time.RFC3339)
 

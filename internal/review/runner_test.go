@@ -385,11 +385,16 @@ func TestRunReview(t *testing.T) {
 	origTimeNow := timeNow
 	origLoadFunc := loadPriorReviewsFunc
 	origSaveFunc := saveReviewArtifactFunc
+	origValidate := validateAgentFunc
 	defer func() {
 		timeNow = origTimeNow
 		loadPriorReviewsFunc = origLoadFunc
 		saveReviewArtifactFunc = origSaveFunc
+		validateAgentFunc = origValidate
 	}()
+	// Default: agent resolves. Individual subtests override to exercise the
+	// unresolvable-agent branch.
+	validateAgentFunc = func(cwd, agent string) error { return nil }
 
 	// Fixed time for testing
 	fixedTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
@@ -431,8 +436,8 @@ func TestRunReview(t *testing.T) {
 		}
 
 		factory := func(agent string, cwd string) (acp.Client, error) {
-			if agent != "krew-lead" {
-				t.Errorf("expected agent 'krew-lead', got %q", agent)
+			if agent != reviewAgent {
+				t.Errorf("expected agent %q, got %q", reviewAgent, agent)
 			}
 			if cwd != rec.ReviewDir {
 				t.Errorf("expected cwd %q, got %q", rec.ReviewDir, cwd)
@@ -467,8 +472,8 @@ func TestRunReview(t *testing.T) {
 		if !found {
 			t.Fatal("record not found")
 		}
-		if updated.Status != StatusDone {
-			t.Errorf("expected status %q, got %q", StatusDone, updated.Status)
+		if updated.Status != StatusReviewed {
+			t.Errorf("expected status %q, got %q", StatusReviewed, updated.Status)
 		}
 		if updated.LastReviewedSHA != "abc123" {
 			t.Errorf("expected SHA 'abc123', got %q", updated.LastReviewedSHA)
@@ -530,6 +535,44 @@ func TestRunReview(t *testing.T) {
 		if updated.LastReviewedSHA != "def456" {
 			t.Errorf("expected SHA 'def456', got %q", updated.LastReviewedSHA)
 		}
+	})
+
+	t.Run("agent not resolvable", func(t *testing.T) {
+		baseDir := t.TempDir()
+		store := NewStore(baseDir)
+
+		rec := Record{
+			Repo:       "owner/repo",
+			PR:         7,
+			URL:        "https://github.com/owner/repo/pull/7",
+			Status:     StatusWatching,
+			EnrolledAt: time.Now().Format(time.RFC3339),
+			ReviewDir:  "/tmp/review-7",
+		}
+
+		loadPriorReviewsFunc = func(baseDir, owner, repo string, pr int) ([]string, error) {
+			return []string{}, nil
+		}
+		// Simulate the agent not being resolvable from the checkout dir.
+		validateAgentFunc = func(cwd, agent string) error {
+			return fmt.Errorf("no agent with name %q", agent)
+		}
+
+		factory := func(agent string, cwd string) (acp.Client, error) {
+			t.Fatal("factory should not be called when agent is unresolvable")
+			return nil, nil
+		}
+
+		ctx := context.Background()
+		err := RunReviewWithFactory(ctx, rec, baseDir, "sha", store, factory)
+		if err == nil {
+			t.Fatal("expected error for unresolvable agent")
+		}
+		if !strings.Contains(err.Error(), "not resolvable") {
+			t.Errorf("unexpected error message: %v", err)
+		}
+		// Restore the resolving default for subsequent subtests.
+		validateAgentFunc = func(cwd, agent string) error { return nil }
 	})
 
 	t.Run("invalid repo format", func(t *testing.T) {
@@ -835,11 +878,16 @@ func TestRunReviewRace(t *testing.T) {
 	origTimeNow := timeNow
 	origLoadFunc := loadPriorReviewsFunc
 	origSaveFunc := saveReviewArtifactFunc
+	origValidate := validateAgentFunc
 	defer func() {
 		timeNow = origTimeNow
 		loadPriorReviewsFunc = origLoadFunc
 		saveReviewArtifactFunc = origSaveFunc
+		validateAgentFunc = origValidate
 	}()
+	// Default: agent resolves. Individual subtests override to exercise the
+	// unresolvable-agent branch.
+	validateAgentFunc = func(cwd, agent string) error { return nil }
 
 	fixedTime := time.Now()
 	timeNow = func() time.Time { return fixedTime }
@@ -898,12 +946,15 @@ func TestRunReviewWrapper(t *testing.T) {
 	origLoadFunc := loadPriorReviewsFunc
 	origSaveFunc := saveReviewArtifactFunc
 	origFactory := defaultACPClientFactory
+	origValidate := validateAgentFunc
 	defer func() {
 		timeNow = origTimeNow
 		loadPriorReviewsFunc = origLoadFunc
 		saveReviewArtifactFunc = origSaveFunc
 		defaultACPClientFactory = origFactory
+		validateAgentFunc = origValidate
 	}()
+	validateAgentFunc = func(cwd, agent string) error { return nil }
 
 	fixedTime := time.Now()
 	timeNow = func() time.Time { return fixedTime }
