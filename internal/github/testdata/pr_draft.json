@@ -1,0 +1,11 @@
+{
+  "state": "OPEN",
+  "isDraft": true,
+  "mergedAt": null,
+  "closedAt": null,
+  "headRefOid": "012345678901234567890abcdef123456789abc",
+  "headRefName": "wip/experimental-feature",
+  "reviewRequests": [],
+  "url": "https://github.com/owner/repo/pull/999",
+  "number": 999
+}

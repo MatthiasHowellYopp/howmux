@@ -1,0 +1,18 @@
+{
+  "state": "OPEN",
+  "isDraft": false,
+  "mergedAt": null,
+  "closedAt": null,
+  "headRefOid": "345678901234567890abcdef123456789abc012",
+  "headRefName": "feature/needs-review",
+  "reviewRequests": [
+    {
+      "login": "testuser"
+    },
+    {
+      "login": "reviewer2"
+    }
+  ],
+  "url": "https://github.com/owner/repo/pull/234",
+  "number": 234
+}
