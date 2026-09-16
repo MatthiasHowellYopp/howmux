@@ -373,6 +373,136 @@ grep -rn "KIRO_KREW" --include="*.go" .
 # Expected: 0 (all should be HOWMUX_*)
 ```
 
+## I/O Seam + Test the Wiring
+
+**Rule**: When code performs I/O operations — subprocess execution via `exec.Command`, filesystem mutation, or network calls — route the execution through a small **injectable seam**. This can be a package-level function variable or an interface parameter, allowing tests to substitute a fake implementation.
+
+**Rationale**: The wiring logic contains real complexity: which commands to run, in what order, with what arguments, in which working directory; conditional branches (clone vs. refresh, force-push vs. fast-forward); and cleanup/failure paths. This logic **must** be unit-tested against a fake implementation that records the command sequence, arguments, and working directory — without invoking real subprocesses or touching the network.
+
+**"Thin wiring is not an exemption from testing."** If a layer contains branching, ordering decisions, or cleanup logic, it must be tested. The bugs surface in the wiring — not the pure functions.
+
+**Pattern**: Keep the seam minimal and unexported where possible. Production code keeps the real implementation as the default value. Tests swap in a fake for the duration of the test and restore the original in a cleanup hook.
+
+**Go Example** (injectable subprocess runner):
+
+```go
+package review
+
+import (
+    "fmt"
+    "os/exec"
+)
+
+// command describes a subprocess invocation: argv and working directory.
+type command struct {
+    argv []string
+    dir  string
+}
+
+// runCommand executes a single command in its working directory. It is a
+// package var so tests can substitute a fake runner and assert the command
+// sequence and cwd choices without invoking real git/gh.
+var runCommand = func(c command) error {
+    cmd := exec.Command(c.argv[0], c.argv[1:]...)
+    cmd.Dir = c.dir
+    output, err := cmd.CombinedOutput()
+    if err != nil {
+        return fmt.Errorf("command %v (dir=%q) failed: %w\nOutput: %s", 
+            c.argv, c.dir, err, string(output))
+    }
+    return nil
+}
+
+// EnsureCheckout ensures the PR code is checked out on disk, using runCommand
+// for all subprocess invocations. The command sequence (clone vs refresh, force
+// flag) is determined by pure function checkoutCommands, then executed here.
+func EnsureCheckout(owner, repo, repoURL string, pr int, dir string) error {
+    dirExists := dirIsGitRepo(dir)
+    cmds := checkoutCommands(owner, repo, repoURL, pr, dir, dirExists)
+    for _, c := range cmds {
+        if err := runCommand(c); err != nil {
+            return err
+        }
+    }
+    return nil
+}
+```
+
+**Test Example** (fake runner records command sequence):
+
+```go
+package review
+
+import (
+    "fmt"
+    "reflect"
+    "testing"
+)
+
+// withFakeRunner swaps runCommand for a recorder for the duration of the test.
+// Returns a pointer to the recorded command slice, which tests can assert against.
+func withFakeRunner(t *testing.T) *[]command {
+    t.Helper()
+    orig := runCommand
+    var recorded []command
+    runCommand = func(c command) error {
+        recorded = append(recorded, c)
+        return nil
+    }
+    t.Cleanup(func() { runCommand = orig })
+    return &recorded
+}
+
+func TestEnsureCheckout_FreshClone(t *testing.T) {
+    recorded := withFakeRunner(t)
+
+    // Ensure checkout for a fresh clone (directory doesn't exist)
+    err := EnsureCheckout("owner", "repo", "https://github.com/owner/repo.git", 123, ".worktrees/review-owner-repo-123")
+    if err != nil {
+        t.Fatalf("EnsureCheckout failed: %v", err)
+    }
+
+    want := []command{
+        {argv: []string{"git", "clone", "https://github.com/owner/repo.git", ".worktrees/review-owner-repo-123"}, dir: ""},
+        {argv: []string{"gh", "pr", "checkout", "123", "--repo", "owner/repo"}, dir: ".worktrees/review-owner-repo-123"},
+    }
+
+    if !reflect.DeepEqual(*recorded, want) {
+        t.Errorf("command sequence mismatch:\ngot:  %v\nwant: %v", *recorded, want)
+    }
+}
+
+func TestEnsureCheckout_RefreshExisting(t *testing.T) {
+    recorded := withFakeRunner(t)
+
+    // Simulate existing directory (refresh path with --force)
+    // In real test, you'd mock dirIsGitRepo to return true
+    err := EnsureCheckout("owner", "repo", "https://github.com/owner/repo.git", 456, ".worktrees/review-owner-repo-456")
+    if err != nil {
+        t.Fatalf("EnsureCheckout failed: %v", err)
+    }
+
+    // Assert that refresh uses git fetch + gh pr checkout --force
+    want := []command{
+        {argv: []string{"git", "fetch"}, dir: ".worktrees/review-owner-repo-456"},
+        {argv: []string{"gh", "pr", "checkout", "456", "--repo", "owner/repo", "--force"}, dir: ".worktrees/review-owner-repo-456"},
+    }
+
+    if !reflect.DeepEqual(*recorded, want) {
+        t.Errorf("command sequence mismatch:\ngot:  %v\nwant: %v", *recorded, want)
+    }
+}
+```
+
+**What Must Be Tested**:
+- Command sequence (clone vs refresh, order of operations)
+- Command arguments (repo URL, PR number, flags like `--force`)
+- Working directory for each command (`cmd.Dir`)
+- Branching logic (fresh clone vs existing repo, error handling)
+- Cleanup paths (partial failure scenarios)
+
+Tests must assert **all of the above** via the fake recorder — not by running real subprocesses.
+
 ## Go Concurrency Rules
 
 ### Mutex-Guarded Fields
