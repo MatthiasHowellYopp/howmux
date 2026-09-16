@@ -286,6 +286,7 @@ func RunReviewWithFactory(ctx context.Context, rec Record, baseDir, currentSHA s
 	rec.Status = StatusReviewed
 	rec.LastReviewedSHA = currentSHA
 	rec.LastReviewedAt = timeNow().Format(time.RFC3339)
+	rec.LastServicedRequest = currentSHA // Mark this request as serviced to avoid duplicate reviews
 
 	if err := storeImpl.Save(rec); err != nil {
 		return fmt.Errorf("failed to update record: %w", err)

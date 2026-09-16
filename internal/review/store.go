@@ -36,10 +36,21 @@ import (
 	"path/filepath"
 )
 
+// StoreInterface defines the operations needed for PR review persistence
+type StoreInterface interface {
+	Save(rec Record) error
+	Get(repo string, pr int) (Record, bool, error)
+	List() ([]Record, error)
+	Remove(repo string, pr int) error
+}
+
 // Store manages PR review records on the filesystem
 type Store struct {
 	baseDir string // Base directory (e.g., ".howmux/reviews")
 }
+
+// Verify Store implements StoreInterface at compile time
+var _ StoreInterface = (*Store)(nil)
 
 // NewStore creates a new Store with the given base directory
 func NewStore(baseDir string) *Store {
