@@ -1,0 +1,11 @@
+{
+  "state": "CLOSED",
+  "isDraft": false,
+  "mergedAt": null,
+  "closedAt": "2024-09-15T08:22:10Z",
+  "headRefOid": "789abc012345678901234567890abcdef123456",
+  "headRefName": "feature/abandoned",
+  "reviewRequests": [],
+  "url": "https://github.com/owner/repo/pull/789",
+  "number": 789
+}

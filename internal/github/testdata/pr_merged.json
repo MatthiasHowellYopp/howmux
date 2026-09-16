@@ -1,0 +1,11 @@
+{
+  "state": "MERGED",
+  "isDraft": false,
+  "mergedAt": "2024-09-16T12:34:56Z",
+  "closedAt": "2024-09-16T12:34:56Z",
+  "headRefOid": "def456abc789012345678901234567890abcdef1",
+  "headRefName": "fix/some-bug",
+  "reviewRequests": [],
+  "url": "https://github.com/owner/repo/pull/456",
+  "number": 456
+}

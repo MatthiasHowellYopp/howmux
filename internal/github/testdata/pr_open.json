@@ -1,0 +1,11 @@
+{
+  "state": "OPEN",
+  "isDraft": false,
+  "mergedAt": null,
+  "closedAt": null,
+  "headRefOid": "abc123def456789012345678901234567890abcd",
+  "headRefName": "feature/add-pr-queries",
+  "reviewRequests": [],
+  "url": "https://github.com/owner/repo/pull/123",
+  "number": 123
+}
