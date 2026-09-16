@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -405,6 +406,147 @@ func TestWatcherGracefulStop(t *testing.T) {
 	watcher.Stop()
 	if watcher.Running() {
 		t.Error("watcher should still be stopped after second Stop()")
+	}
+}
+
+// TestWatcherSamePRNotDoubleDispatched verifies the per-PR guard: while a
+// review for a PR is in flight, a subsequent poll round that re-decides
+// ActionReview for the same PR must not dispatch a second concurrent review.
+func TestWatcherSamePRNotDoubleDispatched(t *testing.T) {
+	store := &fakeStore{
+		records: []Record{
+			{Repo: "owner/repo", PR: 1, URL: "url1", Status: StatusWatching, EnrolledAt: time.Now().Format(time.RFC3339)},
+		},
+	}
+
+	origFetch := fetchPRFunc
+	origDispatch := dispatchReviewFunc
+	origRemove := removeRecordFunc
+	defer func() {
+		fetchPRFunc = origFetch
+		dispatchReviewFunc = origDispatch
+		removeRecordFunc = origRemove
+	}()
+
+	fetchPRFunc = func(repo string, pr int) (github.PR, error) {
+		return github.PR{
+			State:          "OPEN",
+			HeadRefOid:     "sha-1",
+			ReviewRequests: []github.ReviewRequest{{Login: "test-reviewer"}},
+		}, nil
+	}
+
+	// A slow review that stays in flight across multiple poll rounds.
+	release := make(chan struct{})
+	var dispatchCount int32
+	dispatchReviewFunc = func(ctx context.Context, rec Record, headSHA string, store StoreInterface) error {
+		atomic.AddInt32(&dispatchCount, 1)
+		<-release // block until the test allows completion
+		return nil
+	}
+	removeRecordFunc = func(store StoreInterface, repo string, pr int) error { return store.Remove(repo, pr) }
+
+	watcher := NewWatcher(store, 1*time.Second, 5, "test-reviewer")
+
+	// Three poll rounds while the first review is still in flight.
+	watcher.pollOnce()
+	watcher.pollOnce()
+	watcher.pollOnce()
+
+	time.Sleep(50 * time.Millisecond)
+
+	if got := atomic.LoadInt32(&dispatchCount); got != 1 {
+		t.Errorf("expected exactly 1 dispatch for the same in-flight PR, got %d", got)
+	}
+
+	close(release) // let the review finish
+	time.Sleep(50 * time.Millisecond)
+}
+
+// TestWatcherStopWaitsForInFlight verifies Stop() blocks until in-flight
+// review goroutines have drained (not just that Running() flips false).
+func TestWatcherStopWaitsForInFlight(t *testing.T) {
+	store := &fakeStore{
+		records: []Record{
+			{Repo: "owner/repo", PR: 1, URL: "url1", Status: StatusWatching, EnrolledAt: time.Now().Format(time.RFC3339)},
+		},
+	}
+
+	origFetch := fetchPRFunc
+	origDispatch := dispatchReviewFunc
+	origRemove := removeRecordFunc
+	defer func() {
+		fetchPRFunc = origFetch
+		dispatchReviewFunc = origDispatch
+		removeRecordFunc = origRemove
+	}()
+
+	fetchPRFunc = func(repo string, pr int) (github.PR, error) {
+		return github.PR{
+			State:          "OPEN",
+			HeadRefOid:     "sha-1",
+			ReviewRequests: []github.ReviewRequest{{Login: "test-reviewer"}},
+		}, nil
+	}
+
+	var finished int32
+	dispatchReviewFunc = func(ctx context.Context, rec Record, headSHA string, store StoreInterface) error {
+		// Simulate a review that respects context cancellation.
+		select {
+		case <-ctx.Done():
+		case <-time.After(200 * time.Millisecond):
+		}
+		atomic.StoreInt32(&finished, 1)
+		return nil
+	}
+	removeRecordFunc = func(store StoreInterface, repo string, pr int) error { return store.Remove(repo, pr) }
+
+	watcher := NewWatcher(store, 1*time.Hour, 5, "test-reviewer")
+	watcher.Start()
+
+	// Give the immediate poll time to dispatch the review.
+	time.Sleep(50 * time.Millisecond)
+
+	// Stop must block until the in-flight review goroutine has returned.
+	watcher.Stop()
+
+	if atomic.LoadInt32(&finished) != 1 {
+		t.Error("Stop() returned before the in-flight review finished draining")
+	}
+	if watcher.Running() {
+		t.Error("watcher should not be running after Stop()")
+	}
+}
+
+// TestWatcherConcurrentStop verifies two concurrent Stop() calls don't panic
+// (double-close guarded by sync.Once).
+func TestWatcherConcurrentStop(t *testing.T) {
+	store := &fakeStore{records: []Record{}}
+
+	origFetch := fetchPRFunc
+	origDispatch := dispatchReviewFunc
+	defer func() {
+		fetchPRFunc = origFetch
+		dispatchReviewFunc = origDispatch
+	}()
+	fetchPRFunc = func(repo string, pr int) (github.PR, error) {
+		return github.PR{State: "OPEN", HeadRefOid: "sha"}, nil
+	}
+	dispatchReviewFunc = func(ctx context.Context, rec Record, headSHA string, store StoreInterface) error { return nil }
+
+	watcher := NewWatcher(store, 50*time.Millisecond, 5, "test-reviewer")
+	watcher.Start()
+	time.Sleep(20 * time.Millisecond)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); watcher.Stop() }()
+	}
+	wg.Wait() // must not panic
+
+	if watcher.Running() {
+		t.Error("watcher should be stopped")
 	}
 }
 

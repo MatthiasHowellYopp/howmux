@@ -20,12 +20,7 @@ var (
 		return store.Remove(repo, pr)
 	}
 	dispatchReviewFunc = func(ctx context.Context, rec Record, headSHA string, store StoreInterface) error {
-		// Cast to concrete Store for RunReview which expects *Store
-		concreteStore, ok := store.(*Store)
-		if !ok {
-			return fmt.Errorf("store must be *Store for RunReview")
-		}
-		return RunReview(ctx, rec, ".howmux/reviews", headSHA, concreteStore)
+		return RunReview(ctx, rec, ".howmux/reviews", headSHA, store)
 	}
 )
 
@@ -35,20 +30,29 @@ type Watcher struct {
 	pollInterval  time.Duration
 	maxConcurrent int
 	reviewer      string // GitHub username or team for IsReviewRequestedFor
-	stop          chan struct{}
-	started       bool
+
+	stop     chan struct{}
+	stopOnce sync.Once
+	started  bool
+	wg       sync.WaitGroup // tracks the poll loop and all in-flight reviews
+	cancel   context.CancelFunc
+	ctx      context.Context // watcher-scoped; cancelled on Stop
+
 	activeReviews map[string]bool // "owner/repo#pr" → in-progress
 	mu            sync.RWMutex
 }
 
 // NewWatcher creates a new PR review watcher
 func NewWatcher(store StoreInterface, pollInterval time.Duration, maxConcurrent int, reviewer string) *Watcher {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Watcher{
 		store:         store,
 		pollInterval:  pollInterval,
 		maxConcurrent: maxConcurrent,
 		reviewer:      reviewer,
 		stop:          make(chan struct{}),
+		ctx:           ctx,
+		cancel:        cancel,
 		activeReviews: make(map[string]bool),
 	}
 }
@@ -65,21 +69,30 @@ func (w *Watcher) Start() {
 
 	logging.Info("PR review watcher started", "poll_interval", w.pollInterval, "max_concurrent", w.maxConcurrent, "reviewer", w.reviewer)
 
+	w.wg.Add(1)
 	go w.pollLoop()
 }
 
-// Stop signals the poll loop to exit and waits for it to finish
+// Stop signals the poll loop to exit, cancels in-flight reviews, and waits for
+// the poll loop and all dispatched review goroutines to finish before
+// returning. Safe to call multiple times and from concurrent goroutines.
 func (w *Watcher) Stop() {
-	w.mu.Lock()
-	if !w.started {
-		w.mu.Unlock()
+	w.mu.RLock()
+	started := w.started
+	w.mu.RUnlock()
+	if !started {
 		return
 	}
-	w.mu.Unlock()
 
-	close(w.stop)
+	// sync.Once guards against a double-close panic if Stop races with itself.
+	w.stopOnce.Do(func() {
+		close(w.stop)
+		w.cancel() // cancel in-flight review contexts
+	})
 
-	// Wait for poll loop to acknowledge stop
+	// Wait for the poll loop and all in-flight reviews to drain.
+	w.wg.Wait()
+
 	w.mu.Lock()
 	w.started = false
 	w.mu.Unlock()
@@ -96,6 +109,8 @@ func (w *Watcher) Running() bool {
 
 // pollLoop runs immediately, then on every pollInterval
 func (w *Watcher) pollLoop() {
+	defer w.wg.Done()
+
 	ticker := time.NewTicker(w.pollInterval)
 	defer ticker.Stop()
 
@@ -158,38 +173,7 @@ func (w *Watcher) pollOnce() {
 			}
 
 		case ActionReview:
-			// Check concurrency cap
-			prKey := fmt.Sprintf("%s#%d", rec.Repo, rec.PR)
-
-			w.mu.Lock()
-			if len(w.activeReviews) >= w.maxConcurrent {
-				logging.Debug("concurrency cap reached, skipping review", "repo", rec.Repo, "pr", rec.PR, "active", len(w.activeReviews), "max", w.maxConcurrent)
-				w.mu.Unlock()
-				continue
-			}
-
-			// Mark as active
-			w.activeReviews[prKey] = true
-			w.mu.Unlock()
-
-			logging.Info("dispatching review", "repo", rec.Repo, "pr", rec.PR, "sha", pr.HeadSHA())
-
-			// Dispatch review in separate goroutine
-			go func(r Record, headSHA string, key string) {
-				defer func() {
-					w.mu.Lock()
-					delete(w.activeReviews, key)
-					w.mu.Unlock()
-					logging.Debug("review completed, slot freed", "repo", r.Repo, "pr", r.PR)
-				}()
-
-				ctx := context.Background()
-				if err := dispatchReviewFunc(ctx, r, headSHA, w.store); err != nil {
-					logging.Error("review dispatch failed", "repo", r.Repo, "pr", r.PR, "error", err)
-				} else {
-					logging.Info("review dispatch succeeded", "repo", r.Repo, "pr", r.PR)
-				}
-			}(rec, pr.HeadSHA(), prKey)
+			w.dispatch(rec, pr.HeadSHA())
 
 		case ActionSkip:
 			logging.Debug("skipping PR", "repo", rec.Repo, "pr", rec.PR)
@@ -197,4 +181,52 @@ func (w *Watcher) pollOnce() {
 	}
 
 	logging.Debug("poll round complete")
+}
+
+// dispatch admits a review for the given record if the same PR is not already
+// in flight and the global concurrency cap has room, then runs it in a
+// tracked goroutine. The admission decision (per-PR guard + cap + mark) happens
+// atomically under one lock.
+func (w *Watcher) dispatch(rec Record, headSHA string) {
+	prKey := fmt.Sprintf("%s#%d", rec.Repo, rec.PR)
+
+	w.mu.Lock()
+	// Per-PR guard: a review that outlasts a poll interval leaves the store
+	// record stale (LastReviewedSHA is only persisted on completion), so the
+	// next poll would re-decide ActionReview. Without this guard that would
+	// dispatch a SECOND concurrent review of the same PR — duplicate work and
+	// two goroutines racing the same artifact/record.
+	if w.activeReviews[prKey] {
+		w.mu.Unlock()
+		logging.Debug("review already in flight for PR, skipping", "repo", rec.Repo, "pr", rec.PR)
+		return
+	}
+	if len(w.activeReviews) >= w.maxConcurrent {
+		w.mu.Unlock()
+		logging.Debug("concurrency cap reached, skipping review", "repo", rec.Repo, "pr", rec.PR, "active", len(w.activeReviews), "max", w.maxConcurrent)
+		return
+	}
+	w.activeReviews[prKey] = true
+	w.mu.Unlock()
+
+	logging.Info("dispatching review", "repo", rec.Repo, "pr", rec.PR, "sha", headSHA)
+
+	w.wg.Add(1)
+	go func(r Record, sha, key string) {
+		defer w.wg.Done()
+		defer func() {
+			w.mu.Lock()
+			delete(w.activeReviews, key)
+			w.mu.Unlock()
+			logging.Debug("review completed, slot freed", "repo", r.Repo, "pr", r.PR)
+		}()
+
+		// Use the watcher-scoped context so Stop() cancels in-flight reviews
+		// rather than letting them run their full ACP timeout.
+		if err := dispatchReviewFunc(w.ctx, r, sha, w.store); err != nil {
+			logging.Error("review dispatch failed", "repo", r.Repo, "pr", r.PR, "error", err)
+		} else {
+			logging.Info("review dispatch succeeded", "repo", r.Repo, "pr", r.PR)
+		}
+	}(rec, headSHA, prKey)
 }

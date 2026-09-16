@@ -200,12 +200,12 @@ var defaultACPClientFactory ACPClientFactory = func(agent string, cwd string) (a
 
 // RunReview orchestrates a complete PR review via ACP
 // Loads prior reviews → assembles prompt → runs ACP session → writes artifact → updates record
-func RunReview(ctx context.Context, rec Record, baseDir, currentSHA string, storeImpl *Store) error {
+func RunReview(ctx context.Context, rec Record, baseDir, currentSHA string, storeImpl StoreInterface) error {
 	return RunReviewWithFactory(ctx, rec, baseDir, currentSHA, storeImpl, defaultACPClientFactory)
 }
 
 // RunReviewWithFactory is the injectable version for testing
-func RunReviewWithFactory(ctx context.Context, rec Record, baseDir, currentSHA string, storeImpl *Store, factory ACPClientFactory) error {
+func RunReviewWithFactory(ctx context.Context, rec Record, baseDir, currentSHA string, storeImpl StoreInterface, factory ACPClientFactory) error {
 	// Parse repo into owner/name
 	parts := strings.Split(rec.Repo, "/")
 	if len(parts) != 2 {
