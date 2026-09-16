@@ -1,979 +1,202 @@
 package review
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/matthiashowellyopp/howmux/internal/acp"
 )
 
-// TestReviewPromptContext tests the pure prompt assembly function
-func TestReviewPromptContext(t *testing.T) {
-	tests := []struct {
-		name           string
-		owner          string
-		repo           string
-		pr             int
-		currentSHA     string
-		priorReviews   []string
-		wantContains   []string
-		wantNotContain []string
-	}{
-		{
-			name:         "first review - no prior reviews",
-			owner:        "testowner",
-			repo:         "testrepo",
-			pr:           42,
-			currentSHA:   "abc123",
-			priorReviews: []string{},
-			wantContains: []string{
-				"Review PR #42 from testowner/testrepo",
-				"Current SHA: abc123",
-				"This is the first review of this PR",
-			},
-			wantNotContain: []string{"Prior Review"},
-		},
-		{
-			name:       "with one prior review",
-			owner:      "org",
-			repo:       "project",
-			pr:         100,
-			currentSHA: "def456",
-			priorReviews: []string{
-				"Previous review content",
-			},
-			wantContains: []string{
-				"Review PR #100 from org/project",
-				"Current SHA: def456",
-				"This PR has 1 prior review(s)",
-				"--- Prior Review 1 ---",
-				"Previous review content",
-			},
-		},
-		{
-			name:       "with multiple prior reviews",
-			owner:      "owner",
-			repo:       "name",
-			pr:         5,
-			currentSHA: "sha999",
-			priorReviews: []string{
-				"First review",
-				"Second review",
-				"Third review",
-			},
-			wantContains: []string{
-				"Review PR #5 from owner/name",
-				"Current SHA: sha999",
-				"This PR has 3 prior review(s)",
-				"--- Prior Review 1 ---",
-				"First review",
-				"--- Prior Review 2 ---",
-				"Second review",
-				"--- Prior Review 3 ---",
-				"Third review",
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := reviewPromptContext(tt.owner, tt.repo, tt.pr, tt.currentSHA, tt.priorReviews)
-
-			for _, want := range tt.wantContains {
-				if !strings.Contains(got, want) {
-					t.Errorf("prompt missing expected content: %q\nGot:\n%s", want, got)
-				}
-			}
-
-			for _, notWant := range tt.wantNotContain {
-				if strings.Contains(got, notWant) {
-					t.Errorf("prompt contains unexpected content: %q\nGot:\n%s", notWant, got)
-				}
-			}
-		})
-	}
-}
-
-// TestLoadPriorReviews tests the artifact loading function
-func TestLoadPriorReviews(t *testing.T) {
-	t.Run("directory does not exist", func(t *testing.T) {
-		baseDir := t.TempDir()
-
-		reviews, err := loadPriorReviews(baseDir, "owner", "repo", 42)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if len(reviews) != 0 {
-			t.Errorf("expected empty slice, got %d reviews", len(reviews))
-		}
-	})
-
-	t.Run("empty directory", func(t *testing.T) {
-		baseDir := t.TempDir()
-		reviewsDir := filepath.Join(baseDir, "owner-repo-42", "reviews")
-		if err := os.MkdirAll(reviewsDir, 0755); err != nil {
-			t.Fatal(err)
-		}
-
-		reviews, err := loadPriorReviews(baseDir, "owner", "repo", 42)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if len(reviews) != 0 {
-			t.Errorf("expected empty slice, got %d reviews", len(reviews))
-		}
-	})
-
-	t.Run("loads md files only", func(t *testing.T) {
-		baseDir := t.TempDir()
-		reviewsDir := filepath.Join(baseDir, "owner-repo-42", "reviews")
-		if err := os.MkdirAll(reviewsDir, 0755); err != nil {
-			t.Fatal(err)
-		}
-
-		// Create test files
-		files := map[string]string{
-			"abc123.md":  "First review",
-			"def456.md":  "Second review",
-			"ghi789.txt": "Not a markdown file",
-			"jkl012.md":  "Third review",
-		}
-
-		for name, content := range files {
-			path := filepath.Join(reviewsDir, name)
-			if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-				t.Fatal(err)
-			}
-		}
-
-		reviews, err := loadPriorReviews(baseDir, "owner", "repo", 42)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-
-		// Should load only .md files
-		if len(reviews) != 3 {
-			t.Errorf("expected 3 reviews, got %d", len(reviews))
-		}
-
-		// Check content
-		expected := map[string]bool{
-			"First review":  false,
-			"Second review": false,
-			"Third review":  false,
-		}
-		for _, review := range reviews {
-			if _, ok := expected[review]; ok {
-				expected[review] = true
-			}
-		}
-		for content, found := range expected {
-			if !found {
-				t.Errorf("expected review content not found: %q", content)
-			}
-		}
-	})
-
-	t.Run("skips subdirectories", func(t *testing.T) {
-		baseDir := t.TempDir()
-		reviewsDir := filepath.Join(baseDir, "owner-repo-42", "reviews")
-		if err := os.MkdirAll(reviewsDir, 0755); err != nil {
-			t.Fatal(err)
-		}
-
-		// Create a subdirectory
-		subDir := filepath.Join(reviewsDir, "subdir")
-		if err := os.MkdirAll(subDir, 0755); err != nil {
-			t.Fatal(err)
-		}
-
-		// Create a file in the subdirectory
-		if err := os.WriteFile(filepath.Join(subDir, "nested.md"), []byte("nested"), 0644); err != nil {
-			t.Fatal(err)
-		}
-
-		// Create a file in the reviews directory
-		if err := os.WriteFile(filepath.Join(reviewsDir, "abc.md"), []byte("top-level"), 0644); err != nil {
-			t.Fatal(err)
-		}
-
-		reviews, err := loadPriorReviews(baseDir, "owner", "repo", 42)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-
-		if len(reviews) != 1 {
-			t.Errorf("expected 1 review, got %d", len(reviews))
-		}
-		if len(reviews) > 0 && reviews[0] != "top-level" {
-			t.Errorf("expected 'top-level', got %q", reviews[0])
-		}
-	})
-
-	t.Run("handles unreadable file gracefully", func(t *testing.T) {
-		baseDir := t.TempDir()
-		reviewsDir := filepath.Join(baseDir, "owner-repo-42", "reviews")
-		if err := os.MkdirAll(reviewsDir, 0755); err != nil {
-			t.Fatal(err)
-		}
-
-		// Create a readable file
-		if err := os.WriteFile(filepath.Join(reviewsDir, "good.md"), []byte("readable"), 0644); err != nil {
-			t.Fatal(err)
-		}
-
-		// Create an unreadable file (permissions don't work well in tests, so we'll skip this)
-		// The function should skip unreadable files and continue
-		// This is covered by the continue on error in the actual implementation
-
-		reviews, err := loadPriorReviews(baseDir, "owner", "repo", 42)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-
-		if len(reviews) < 1 {
-			t.Errorf("expected at least 1 review, got %d", len(reviews))
-		}
-	})
-}
-
-// TestSaveReviewArtifact tests the artifact persistence function
-func TestSaveReviewArtifact(t *testing.T) {
-	t.Run("creates directory and saves file", func(t *testing.T) {
-		baseDir := t.TempDir()
-		content := "Review content for sha abc123"
-
-		err := saveReviewArtifact(baseDir, "owner", "repo", 42, "abc123", content)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-
-		// Verify file exists and has correct content
-		expectedPath := filepath.Join(baseDir, "owner-repo-42", "reviews", "abc123.md")
-		gotContent, err := os.ReadFile(expectedPath)
-		if err != nil {
-			t.Fatalf("failed to read saved file: %v", err)
-		}
-		if string(gotContent) != content {
-			t.Errorf("content mismatch:\nwant: %q\ngot:  %q", content, string(gotContent))
-		}
-	})
-
-	t.Run("overwrites existing file atomically", func(t *testing.T) {
-		baseDir := t.TempDir()
-		reviewsDir := filepath.Join(baseDir, "owner-repo-42", "reviews")
-		if err := os.MkdirAll(reviewsDir, 0755); err != nil {
-			t.Fatal(err)
-		}
-
-		targetFile := filepath.Join(reviewsDir, "abc123.md")
-
-		// Create initial file
-		if err := os.WriteFile(targetFile, []byte("old content"), 0644); err != nil {
-			t.Fatal(err)
-		}
-
-		// Overwrite with new content
-		newContent := "new content"
-		err := saveReviewArtifact(baseDir, "owner", "repo", 42, "abc123", newContent)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-
-		// Verify new content
-		gotContent, err := os.ReadFile(targetFile)
-		if err != nil {
-			t.Fatalf("failed to read file: %v", err)
-		}
-		if string(gotContent) != newContent {
-			t.Errorf("expected %q, got %q", newContent, string(gotContent))
-		}
-	})
-
-	t.Run("multiple artifacts for same PR", func(t *testing.T) {
-		baseDir := t.TempDir()
-
-		artifacts := map[string]string{
-			"sha1": "First review",
-			"sha2": "Second review",
-			"sha3": "Third review",
-		}
-
-		for sha, content := range artifacts {
-			if err := saveReviewArtifact(baseDir, "owner", "repo", 42, sha, content); err != nil {
-				t.Fatalf("failed to save artifact %s: %v", sha, err)
-			}
-		}
-
-		// Verify all artifacts exist
-		reviewsDir := filepath.Join(baseDir, "owner-repo-42", "reviews")
-		entries, err := os.ReadDir(reviewsDir)
-		if err != nil {
-			t.Fatalf("failed to read reviews dir: %v", err)
-		}
-
-		if len(entries) != 3 {
-			t.Errorf("expected 3 artifacts, got %d", len(entries))
-		}
-
-		// Verify content
-		for sha, expectedContent := range artifacts {
-			path := filepath.Join(reviewsDir, fmt.Sprintf("%s.md", sha))
-			gotContent, err := os.ReadFile(path)
-			if err != nil {
-				t.Errorf("failed to read %s: %v", sha, err)
-				continue
-			}
-			if string(gotContent) != expectedContent {
-				t.Errorf("content mismatch for %s: want %q, got %q", sha, expectedContent, string(gotContent))
-			}
-		}
-	})
-}
-
-// fakeACPClient implements acp.Client for testing
-type fakeACPClient struct {
-	connectErr      error
-	sendMessageResp *acp.MessageResponse
-	sendMessageErr  error
-	connected       bool
-	closeCalled     bool
-}
-
-func (f *fakeACPClient) Connect(ctx context.Context) error {
-	if f.connectErr != nil {
-		return f.connectErr
-	}
-	f.connected = true
-	return nil
-}
-
-func (f *fakeACPClient) Disconnect() error {
-	f.connected = false
-	return nil
-}
-
-func (f *fakeACPClient) IsConnected() bool {
-	return f.connected
-}
-
-func (f *fakeACPClient) SendMessage(ctx context.Context, req *acp.MessageRequest) (*acp.MessageResponse, error) {
-	if f.sendMessageErr != nil {
-		return nil, f.sendMessageErr
-	}
-	return f.sendMessageResp, nil
-}
-
-func (f *fakeACPClient) StreamMessage(ctx context.Context, req *acp.MessageRequest) (<-chan *acp.StreamingResponse, error) {
-	return nil, fmt.Errorf("streaming not implemented in fake")
-}
-
-func (f *fakeACPClient) Close() error {
-	f.closeCalled = true
-	f.connected = false
-	return nil
-}
-
-// TestRunReview tests the orchestration function
-func TestRunReview(t *testing.T) {
-	// Save and restore original time function
+// TestRunReview_DiffFetch_Argv verifies fetchDiffFunc is called with correct arguments
+func TestRunReview_DiffFetch_Argv(t *testing.T) {
+	// Save and restore original seams
+	origFetchDiff := fetchDiffFunc
+	origRunReviewTool := runReviewToolFunc
 	origTimeNow := timeNow
-	origLoadFunc := loadPriorReviewsFunc
-	origSaveFunc := saveReviewArtifactFunc
-	origValidate := validateAgentFunc
 	defer func() {
+		fetchDiffFunc = origFetchDiff
+		runReviewToolFunc = origRunReviewTool
 		timeNow = origTimeNow
-		loadPriorReviewsFunc = origLoadFunc
-		saveReviewArtifactFunc = origSaveFunc
-		validateAgentFunc = origValidate
 	}()
-	// Default: agent resolves. Individual subtests override to exercise the
-	// unresolvable-agent branch.
-	validateAgentFunc = func(cwd, agent string) error { return nil }
 
 	// Fixed time for testing
 	fixedTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
 	timeNow = func() time.Time { return fixedTime }
 
-	t.Run("successful review with no prior reviews", func(t *testing.T) {
-		baseDir := t.TempDir()
-		store := NewStore(baseDir)
-
-		rec := Record{
-			Repo:       "owner/repo",
-			PR:         42,
-			URL:        "https://github.com/owner/repo/pull/42",
-			Status:     StatusWatching,
-			EnrolledAt: time.Now().Format(time.RFC3339),
-			ReviewDir:  "/tmp/review-42",
-		}
-
-		// Mock loadPriorReviews to return empty
-		loadPriorReviewsFunc = func(baseDir, owner, repo string, pr int) ([]string, error) {
-			return []string{}, nil
-		}
-
-		// Mock saveReviewArtifact
-		var savedSHA, savedContent string
-		saveReviewArtifactFunc = func(baseDir, owner, repo string, pr int, sha, content string) error {
-			savedSHA = sha
-			savedContent = content
-			return nil
-		}
-
-		// Create fake ACP client
-		fakeClient := &fakeACPClient{
-			sendMessageResp: &acp.MessageResponse{
-				Success:   true,
-				Message:   "Review completed successfully",
-				Timestamp: time.Now(),
-			},
-		}
-
-		factory := func(agent string, cwd string) (acp.Client, error) {
-			if agent != reviewAgent {
-				t.Errorf("expected agent %q, got %q", reviewAgent, agent)
-			}
-			if cwd != rec.ReviewDir {
-				t.Errorf("expected cwd %q, got %q", rec.ReviewDir, cwd)
-			}
-			return fakeClient, nil
-		}
-
-		ctx := context.Background()
-		err := RunReviewWithFactory(ctx, rec, baseDir, "abc123", store, factory)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-
-		// Verify client was used correctly
-		if !fakeClient.closeCalled {
-			t.Error("expected Close to be called")
-		}
-
-		// Verify artifact was saved
-		if savedSHA != "abc123" {
-			t.Errorf("expected SHA 'abc123', got %q", savedSHA)
-		}
-		if savedContent != "Review completed successfully" {
-			t.Errorf("unexpected saved content: %q", savedContent)
-		}
-
-		// Verify record was updated
-		updated, found, err := store.Get("owner/repo", 42)
-		if err != nil {
-			t.Fatalf("failed to get record: %v", err)
-		}
-		if !found {
-			t.Fatal("record not found")
-		}
-		if updated.Status != StatusReviewed {
-			t.Errorf("expected status %q, got %q", StatusReviewed, updated.Status)
-		}
-		if updated.LastReviewedSHA != "abc123" {
-			t.Errorf("expected SHA 'abc123', got %q", updated.LastReviewedSHA)
-		}
-		if updated.LastReviewedAt != fixedTime.Format(time.RFC3339) {
-			t.Errorf("expected time %q, got %q", fixedTime.Format(time.RFC3339), updated.LastReviewedAt)
-		}
-	})
-
-	t.Run("successful review with prior reviews", func(t *testing.T) {
-		baseDir := t.TempDir()
-		store := NewStore(baseDir)
-
-		rec := Record{
-			Repo:       "owner/repo",
-			PR:         100,
-			URL:        "https://github.com/owner/repo/pull/100",
-			Status:     StatusWatching,
-			EnrolledAt: time.Now().Format(time.RFC3339),
-			ReviewDir:  "/tmp/review-100",
-		}
-
-		// Mock loadPriorReviews to return multiple reviews
-		loadPriorReviewsFunc = func(baseDir, owner, repo string, pr int) ([]string, error) {
-			return []string{"Review 1", "Review 2"}, nil
-		}
-
-		// Mock saveReviewArtifact
-		saveReviewArtifactFunc = func(baseDir, owner, repo string, pr int, sha, content string) error {
-			return nil
-		}
-
-		fakeClient := &fakeACPClient{
-			sendMessageResp: &acp.MessageResponse{
-				Success:   true,
-				Message:   "Updated review",
-				Timestamp: time.Now(),
-			},
-		}
-
-		factory := func(agent string, cwd string) (acp.Client, error) {
-			return fakeClient, nil
-		}
-
-		ctx := context.Background()
-		err := RunReviewWithFactory(ctx, rec, baseDir, "def456", store, factory)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-
-		// Verify record updated correctly
-		updated, found, err := store.Get("owner/repo", 100)
-		if err != nil {
-			t.Fatalf("failed to get record: %v", err)
-		}
-		if !found {
-			t.Fatal("record not found")
-		}
-		if updated.LastReviewedSHA != "def456" {
-			t.Errorf("expected SHA 'def456', got %q", updated.LastReviewedSHA)
-		}
-	})
-
-	t.Run("agent not resolvable", func(t *testing.T) {
-		baseDir := t.TempDir()
-		store := NewStore(baseDir)
-
-		rec := Record{
-			Repo:       "owner/repo",
-			PR:         7,
-			URL:        "https://github.com/owner/repo/pull/7",
-			Status:     StatusWatching,
-			EnrolledAt: time.Now().Format(time.RFC3339),
-			ReviewDir:  "/tmp/review-7",
-		}
-
-		loadPriorReviewsFunc = func(baseDir, owner, repo string, pr int) ([]string, error) {
-			return []string{}, nil
-		}
-		// Simulate the agent not being resolvable from the checkout dir.
-		validateAgentFunc = func(cwd, agent string) error {
-			return fmt.Errorf("no agent with name %q", agent)
-		}
-
-		factory := func(agent string, cwd string) (acp.Client, error) {
-			t.Fatal("factory should not be called when agent is unresolvable")
-			return nil, nil
-		}
-
-		ctx := context.Background()
-		err := RunReviewWithFactory(ctx, rec, baseDir, "sha", store, factory)
-		if err == nil {
-			t.Fatal("expected error for unresolvable agent")
-		}
-		if !strings.Contains(err.Error(), "not resolvable") {
-			t.Errorf("unexpected error message: %v", err)
-		}
-		// Restore the resolving default for subsequent subtests.
-		validateAgentFunc = func(cwd, agent string) error { return nil }
-	})
-
-	t.Run("invalid repo format", func(t *testing.T) {
-		baseDir := t.TempDir()
-		store := NewStore(baseDir)
-
-		rec := Record{
-			Repo:       "invalid-repo-format",
-			PR:         1,
-			URL:        "https://example.com",
-			Status:     StatusWatching,
-			EnrolledAt: time.Now().Format(time.RFC3339),
-			ReviewDir:  "/tmp/review",
-		}
-
-		factory := func(agent string, cwd string) (acp.Client, error) {
-			t.Fatal("factory should not be called")
-			return nil, nil
-		}
-
-		ctx := context.Background()
-		err := RunReviewWithFactory(ctx, rec, baseDir, "sha", store, factory)
-		if err == nil {
-			t.Fatal("expected error for invalid repo format")
-		}
-		if !strings.Contains(err.Error(), "invalid repo format") {
-			t.Errorf("unexpected error message: %v", err)
-		}
-	})
-
-	t.Run("loadPriorReviews fails", func(t *testing.T) {
-		baseDir := t.TempDir()
-		store := NewStore(baseDir)
-
-		rec := Record{
-			Repo:       "owner/repo",
-			PR:         1,
-			URL:        "https://example.com",
-			Status:     StatusWatching,
-			EnrolledAt: time.Now().Format(time.RFC3339),
-			ReviewDir:  "/tmp/review",
-		}
-
-		loadPriorReviewsFunc = func(baseDir, owner, repo string, pr int) ([]string, error) {
-			return nil, fmt.Errorf("load failed")
-		}
-
-		factory := func(agent string, cwd string) (acp.Client, error) {
-			t.Fatal("factory should not be called")
-			return nil, nil
-		}
-
-		ctx := context.Background()
-		err := RunReviewWithFactory(ctx, rec, baseDir, "sha", store, factory)
-		if err == nil {
-			t.Fatal("expected error")
-		}
-		if !strings.Contains(err.Error(), "failed to load prior reviews") {
-			t.Errorf("unexpected error message: %v", err)
-		}
-	})
-
-	t.Run("factory fails", func(t *testing.T) {
-		baseDir := t.TempDir()
-		store := NewStore(baseDir)
-
-		rec := Record{
-			Repo:       "owner/repo",
-			PR:         1,
-			URL:        "https://example.com",
-			Status:     StatusWatching,
-			EnrolledAt: time.Now().Format(time.RFC3339),
-			ReviewDir:  "/tmp/review",
-		}
-
-		loadPriorReviewsFunc = func(baseDir, owner, repo string, pr int) ([]string, error) {
-			return []string{}, nil
-		}
-
-		factory := func(agent string, cwd string) (acp.Client, error) {
-			return nil, fmt.Errorf("factory error")
-		}
-
-		ctx := context.Background()
-		err := RunReviewWithFactory(ctx, rec, baseDir, "sha", store, factory)
-		if err == nil {
-			t.Fatal("expected error")
-		}
-		if !strings.Contains(err.Error(), "failed to create ACP client") {
-			t.Errorf("unexpected error message: %v", err)
-		}
-	})
-
-	t.Run("connect fails", func(t *testing.T) {
-		baseDir := t.TempDir()
-		store := NewStore(baseDir)
-
-		rec := Record{
-			Repo:       "owner/repo",
-			PR:         1,
-			URL:        "https://example.com",
-			Status:     StatusWatching,
-			EnrolledAt: time.Now().Format(time.RFC3339),
-			ReviewDir:  "/tmp/review",
-		}
-
-		loadPriorReviewsFunc = func(baseDir, owner, repo string, pr int) ([]string, error) {
-			return []string{}, nil
-		}
-
-		fakeClient := &fakeACPClient{
-			connectErr: fmt.Errorf("connection failed"),
-		}
-
-		factory := func(agent string, cwd string) (acp.Client, error) {
-			return fakeClient, nil
-		}
-
-		ctx := context.Background()
-		err := RunReviewWithFactory(ctx, rec, baseDir, "sha", store, factory)
-		if err == nil {
-			t.Fatal("expected error")
-		}
-		if !strings.Contains(err.Error(), "failed to connect to ACP") {
-			t.Errorf("unexpected error message: %v", err)
-		}
-	})
-
-	t.Run("sendMessage fails", func(t *testing.T) {
-		baseDir := t.TempDir()
-		store := NewStore(baseDir)
-
-		rec := Record{
-			Repo:       "owner/repo",
-			PR:         1,
-			URL:        "https://example.com",
-			Status:     StatusWatching,
-			EnrolledAt: time.Now().Format(time.RFC3339),
-			ReviewDir:  "/tmp/review",
-		}
-
-		loadPriorReviewsFunc = func(baseDir, owner, repo string, pr int) ([]string, error) {
-			return []string{}, nil
-		}
-
-		saveReviewArtifactFunc = func(baseDir, owner, repo string, pr int, sha, content string) error {
-			return nil
-		}
-
-		fakeClient := &fakeACPClient{
-			sendMessageErr: fmt.Errorf("send failed"),
-		}
-
-		factory := func(agent string, cwd string) (acp.Client, error) {
-			return fakeClient, nil
-		}
-
-		ctx := context.Background()
-		err := RunReviewWithFactory(ctx, rec, baseDir, "sha", store, factory)
-		if err == nil {
-			t.Fatal("expected error")
-		}
-		if !strings.Contains(err.Error(), "ACP review request failed") {
-			t.Errorf("unexpected error message: %v", err)
-		}
-		if !fakeClient.closeCalled {
-			t.Error("expected Close to be called even on failure")
-		}
-	})
-
-	t.Run("review returns failure", func(t *testing.T) {
-		baseDir := t.TempDir()
-		store := NewStore(baseDir)
-
-		rec := Record{
-			Repo:       "owner/repo",
-			PR:         1,
-			URL:        "https://example.com",
-			Status:     StatusWatching,
-			EnrolledAt: time.Now().Format(time.RFC3339),
-			ReviewDir:  "/tmp/review",
-		}
-
-		loadPriorReviewsFunc = func(baseDir, owner, repo string, pr int) ([]string, error) {
-			return []string{}, nil
-		}
-
-		fakeClient := &fakeACPClient{
-			sendMessageResp: &acp.MessageResponse{
-				Success: false,
-				Error:   "review encountered an error",
-			},
-		}
-
-		factory := func(agent string, cwd string) (acp.Client, error) {
-			return fakeClient, nil
-		}
-
-		ctx := context.Background()
-		err := RunReviewWithFactory(ctx, rec, baseDir, "sha", store, factory)
-		if err == nil {
-			t.Fatal("expected error")
-		}
-		if !strings.Contains(err.Error(), "review failed") {
-			t.Errorf("unexpected error message: %v", err)
-		}
-	})
-
-	t.Run("saveArtifact fails", func(t *testing.T) {
-		baseDir := t.TempDir()
-		store := NewStore(baseDir)
-
-		rec := Record{
-			Repo:       "owner/repo",
-			PR:         1,
-			URL:        "https://example.com",
-			Status:     StatusWatching,
-			EnrolledAt: time.Now().Format(time.RFC3339),
-			ReviewDir:  "/tmp/review",
-		}
-
-		loadPriorReviewsFunc = func(baseDir, owner, repo string, pr int) ([]string, error) {
-			return []string{}, nil
-		}
-
-		saveReviewArtifactFunc = func(baseDir, owner, repo string, pr int, sha, content string) error {
-			return fmt.Errorf("save failed")
-		}
-
-		fakeClient := &fakeACPClient{
-			sendMessageResp: &acp.MessageResponse{
-				Success: true,
-				Message: "review ok",
-			},
-		}
-
-		factory := func(agent string, cwd string) (acp.Client, error) {
-			return fakeClient, nil
-		}
-
-		ctx := context.Background()
-		err := RunReviewWithFactory(ctx, rec, baseDir, "sha", store, factory)
-		if err == nil {
-			t.Fatal("expected error")
-		}
-		if !strings.Contains(err.Error(), "failed to save review artifact") {
-			t.Errorf("unexpected error message: %v", err)
-		}
-	})
-
-	t.Run("store.Save fails", func(t *testing.T) {
-		baseDir := t.TempDir()
-		store := NewStore(baseDir)
-
-		rec := Record{
-			Repo:       "owner/repo",
-			PR:         1,
-			URL:        "https://example.com",
-			Status:     StatusWatching,
-			EnrolledAt: time.Now().Format(time.RFC3339),
-			ReviewDir:  "/tmp/review",
-		}
-
-		loadPriorReviewsFunc = func(baseDir, owner, repo string, pr int) ([]string, error) {
-			return []string{}, nil
-		}
-
-		saveReviewArtifactFunc = func(baseDir, owner, repo string, pr int, sha, content string) error {
-			return nil
-		}
-
-		fakeClient := &fakeACPClient{
-			sendMessageResp: &acp.MessageResponse{
-				Success: true,
-				Message: "review ok",
-			},
-		}
-
-		factory := func(agent string, cwd string) (acp.Client, error) {
-			return fakeClient, nil
-		}
-
-		// Make baseDir readonly to cause Save to fail
-		if err := os.Chmod(baseDir, 0444); err != nil {
-			t.Fatal(err)
-		}
-		defer os.Chmod(baseDir, 0755)
-
-		ctx := context.Background()
-		err := RunReviewWithFactory(ctx, rec, baseDir, "sha", store, factory)
-		if err == nil {
-			t.Fatal("expected error")
-		}
-		if !strings.Contains(err.Error(), "failed to update record") {
-			t.Errorf("unexpected error message: %v", err)
-		}
-	})
-}
-
-// TestRunReviewRace verifies thread safety using -race detector
-func TestRunReviewRace(t *testing.T) {
-	// Save and restore
-	origTimeNow := timeNow
-	origLoadFunc := loadPriorReviewsFunc
-	origSaveFunc := saveReviewArtifactFunc
-	origValidate := validateAgentFunc
-	defer func() {
-		timeNow = origTimeNow
-		loadPriorReviewsFunc = origLoadFunc
-		saveReviewArtifactFunc = origSaveFunc
-		validateAgentFunc = origValidate
-	}()
-	// Default: agent resolves. Individual subtests override to exercise the
-	// unresolvable-agent branch.
-	validateAgentFunc = func(cwd, agent string) error { return nil }
-
-	fixedTime := time.Now()
-	timeNow = func() time.Time { return fixedTime }
-	loadPriorReviewsFunc = func(baseDir, owner, repo string, pr int) ([]string, error) {
-		return []string{}, nil
+	// Install fake seams
+	var capturedOwner, capturedRepo, capturedOutputFile string
+	var capturedPR int
+	fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+		capturedOwner = owner
+		capturedRepo = repo
+		capturedPR = pr
+		capturedOutputFile = outputFile
+		return os.WriteFile(outputFile, []byte("fake diff"), 0644)
 	}
-	saveReviewArtifactFunc = func(baseDir, owner, repo string, pr int, sha, content string) error {
-		return nil
+
+	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+		return []string{"/Users/test/PR-Review/pending/pr-review-owner-repo.md"}, nil
 	}
 
 	baseDir := t.TempDir()
 	store := NewStore(baseDir)
 
-	// Run two reviews concurrently on different PRs
-	done := make(chan error, 2)
-
-	runReview := func(pr int) {
-		rec := Record{
-			Repo:       "owner/repo",
-			PR:         pr,
-			URL:        fmt.Sprintf("https://github.com/owner/repo/pull/%d", pr),
-			Status:     StatusWatching,
-			EnrolledAt: time.Now().Format(time.RFC3339),
-			ReviewDir:  fmt.Sprintf("/tmp/review-%d", pr),
-		}
-
-		fakeClient := &fakeACPClient{
-			sendMessageResp: &acp.MessageResponse{
-				Success: true,
-				Message: "review ok",
-			},
-		}
-
-		factory := func(agent string, cwd string) (acp.Client, error) {
-			return fakeClient, nil
-		}
-
-		ctx := context.Background()
-		done <- RunReviewWithFactory(ctx, rec, baseDir, fmt.Sprintf("sha%d", pr), store, factory)
+	rec := Record{
+		Repo:       "testowner/testrepo",
+		PR:         42,
+		URL:        "https://github.com/testowner/testrepo/pull/42",
+		Status:     StatusWatching,
+		EnrolledAt: time.Now().Format(time.RFC3339),
+		ReviewDir:  "/tmp/review-42",
 	}
 
-	go runReview(1)
-	go runReview(2)
+	ctx := context.Background()
+	err := RunReview(ctx, rec, "abc123", store, io.Discard)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
-	for i := 0; i < 2; i++ {
-		if err := <-done; err != nil {
-			t.Errorf("concurrent review failed: %v", err)
-		}
+	// Verify arguments
+	if capturedOwner != "testowner" {
+		t.Errorf("expected owner 'testowner', got %q", capturedOwner)
+	}
+	if capturedRepo != "testrepo" {
+		t.Errorf("expected repo 'testrepo', got %q", capturedRepo)
+	}
+	if capturedPR != 42 {
+		t.Errorf("expected PR 42, got %d", capturedPR)
+	}
+	if capturedOutputFile == "" {
+		t.Error("expected outputFile to be set")
+	}
+	if !strings.Contains(capturedOutputFile, "pr-42-") || !strings.HasSuffix(capturedOutputFile, ".diff") {
+		t.Errorf("expected temp file pattern 'pr-42-*.diff', got %q", capturedOutputFile)
 	}
 }
 
-// TestRunReviewWrapper tests the wrapper function that uses defaultACPClientFactory
-func TestRunReviewWrapper(t *testing.T) {
-	// Save and restore
+// TestRunReview_ReviewTool_Argv verifies runReviewToolFunc is called with correct argv
+func TestRunReview_ReviewTool_Argv(t *testing.T) {
+	// Save and restore original seams
+	origFetchDiff := fetchDiffFunc
+	origRunReviewTool := runReviewToolFunc
 	origTimeNow := timeNow
-	origLoadFunc := loadPriorReviewsFunc
-	origSaveFunc := saveReviewArtifactFunc
-	origFactory := defaultACPClientFactory
-	origValidate := validateAgentFunc
 	defer func() {
+		fetchDiffFunc = origFetchDiff
+		runReviewToolFunc = origRunReviewTool
 		timeNow = origTimeNow
-		loadPriorReviewsFunc = origLoadFunc
-		saveReviewArtifactFunc = origSaveFunc
-		defaultACPClientFactory = origFactory
-		validateAgentFunc = origValidate
 	}()
-	validateAgentFunc = func(cwd, agent string) error { return nil }
 
-	fixedTime := time.Now()
+	// Fixed time for testing
+	fixedTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
 	timeNow = func() time.Time { return fixedTime }
-	loadPriorReviewsFunc = func(baseDir, owner, repo string, pr int) ([]string, error) {
-		return []string{}, nil
-	}
-	saveReviewArtifactFunc = func(baseDir, owner, repo string, pr int, sha, content string) error {
-		return nil
+
+	// Install fake seams
+	var capturedArgv []string
+	fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+		return os.WriteFile(outputFile, []byte("fake diff"), 0644)
 	}
 
-	// Replace the factory
-	fakeClient := &fakeACPClient{
-		sendMessageResp: &acp.MessageResponse{
-			Success: true,
-			Message: "review ok",
-		},
+	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+		capturedArgv = append([]string{}, argv...) // deep copy
+		return []string{"/Users/test/PR-Review/pending/pr-review-owner-repo.md"}, nil
 	}
-	defaultACPClientFactory = func(agent string, cwd string) (acp.Client, error) {
-		return fakeClient, nil
+
+	baseDir := t.TempDir()
+	store := NewStore(baseDir)
+
+	rec := Record{
+		Repo:       "owner/repo",
+		PR:         99,
+		URL:        "https://github.com/owner/repo/pull/99",
+		Status:     StatusWatching,
+		EnrolledAt: time.Now().Format(time.RFC3339),
+		ReviewDir:  "/tmp/review-99",
+	}
+
+	ctx := context.Background()
+	err := RunReview(ctx, rec, "def456", store, io.Discard)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify argv structure
+	if len(capturedArgv) < 8 {
+		t.Fatalf("expected at least 8 argv elements, got %d: %v", len(capturedArgv), capturedArgv)
+	}
+
+	expectedArgv := map[string]string{
+		"pr_review.py": capturedArgv[0],
+		"--diff-file":  capturedArgv[1],
+		"--repo":       capturedArgv[3],
+		"owner/repo":   capturedArgv[4],
+		"--pr":         capturedArgv[5],
+		"99":           capturedArgv[6],
+		"--language":   capturedArgv[7],
+		"auto":         capturedArgv[8],
+	}
+
+	// Check key argv elements
+	if capturedArgv[0] != "pr_review.py" {
+		t.Errorf("expected argv[0] = 'pr_review.py', got %q", capturedArgv[0])
+	}
+	if capturedArgv[1] != "--diff-file" {
+		t.Errorf("expected argv[1] = '--diff-file', got %q", capturedArgv[1])
+	}
+	// argv[2] is the diff file path (temp file, varies)
+	if capturedArgv[3] != "--repo" {
+		t.Errorf("expected argv[3] = '--repo', got %q", capturedArgv[3])
+	}
+	if capturedArgv[4] != "owner/repo" {
+		t.Errorf("expected argv[4] = 'owner/repo', got %q", capturedArgv[4])
+	}
+	if capturedArgv[5] != "--pr" {
+		t.Errorf("expected argv[5] = '--pr', got %q", capturedArgv[5])
+	}
+	if capturedArgv[6] != "99" {
+		t.Errorf("expected argv[6] = '99', got %q", capturedArgv[6])
+	}
+	if capturedArgv[7] != "--language" {
+		t.Errorf("expected argv[7] = '--language', got %q", capturedArgv[7])
+	}
+	if capturedArgv[8] != "auto" {
+		t.Errorf("expected argv[8] = 'auto', got %q", capturedArgv[8])
+	}
+
+	_ = expectedArgv // keep linter happy
+}
+
+// TestRunReview_StderrRouting verifies stderr from runReviewToolFunc is written to tabWriter
+func TestRunReview_StderrRouting(t *testing.T) {
+	// Save and restore original seams
+	origFetchDiff := fetchDiffFunc
+	origRunReviewTool := runReviewToolFunc
+	origTimeNow := timeNow
+	defer func() {
+		fetchDiffFunc = origFetchDiff
+		runReviewToolFunc = origRunReviewTool
+		timeNow = origTimeNow
+	}()
+
+	// Fixed time for testing
+	fixedTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	timeNow = func() time.Time { return fixedTime }
+
+	// Install fake seams
+	fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+		return os.WriteFile(outputFile, []byte("fake diff"), 0644)
+	}
+
+	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+		// Write fake stderr progress to the provided writer
+		io.WriteString(stderrWriter, "→ [1/3] Orienting…\n")
+		io.WriteString(stderrWriter, "→ [2/3] Running lenses…\n")
+		io.WriteString(stderrWriter, "→ [3/3] Consolidating…\n")
+		io.WriteString(stderrWriter, "→ verdict: APPROVE\n")
+		return []string{"/Users/test/PR-Review/pending/pr-review-owner-repo.md"}, nil
 	}
 
 	baseDir := t.TempDir()
@@ -985,12 +208,536 @@ func TestRunReviewWrapper(t *testing.T) {
 		URL:        "https://github.com/owner/repo/pull/1",
 		Status:     StatusWatching,
 		EnrolledAt: time.Now().Format(time.RFC3339),
-		ReviewDir:  "/tmp/review",
+		ReviewDir:  "/tmp/review-1",
+	}
+
+	// Capture stderr output via a buffer
+	var stderrBuf bytes.Buffer
+
+	ctx := context.Background()
+	err := RunReview(ctx, rec, "sha1", store, &stderrBuf)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify stderr content
+	stderrOutput := stderrBuf.String()
+	expectedLines := []string{
+		"→ [1/3] Orienting…",
+		"→ [2/3] Running lenses…",
+		"→ [3/3] Consolidating…",
+		"→ verdict: APPROVE",
+	}
+
+	for _, expected := range expectedLines {
+		if !strings.Contains(stderrOutput, expected) {
+			t.Errorf("stderr missing expected line: %q\nGot:\n%s", expected, stderrOutput)
+		}
+	}
+}
+
+// TestRunReview_StdoutCapture_SpoolPath verifies stdout is captured and becomes SpoolPath
+func TestRunReview_StdoutCapture_SpoolPath(t *testing.T) {
+	// Save and restore original seams
+	origFetchDiff := fetchDiffFunc
+	origRunReviewTool := runReviewToolFunc
+	origTimeNow := timeNow
+	defer func() {
+		fetchDiffFunc = origFetchDiff
+		runReviewToolFunc = origRunReviewTool
+		timeNow = origTimeNow
+	}()
+
+	// Fixed time for testing
+	fixedTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	timeNow = func() time.Time { return fixedTime }
+
+	// Install fake seams
+	fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+		return os.WriteFile(outputFile, []byte("fake diff"), 0644)
+	}
+
+	expectedSpoolPath := "/Users/test/PR-Review/pending/pr-review-owner-repo-42.md"
+	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+		// Return spool path as stdout
+		return []string{expectedSpoolPath}, nil
+	}
+
+	baseDir := t.TempDir()
+	store := NewStore(baseDir)
+
+	rec := Record{
+		Repo:       "owner/repo",
+		PR:         42,
+		URL:        "https://github.com/owner/repo/pull/42",
+		Status:     StatusWatching,
+		EnrolledAt: time.Now().Format(time.RFC3339),
+		ReviewDir:  "/tmp/review-42",
 	}
 
 	ctx := context.Background()
-	err := RunReview(ctx, rec, baseDir, "sha1", store)
+	err := RunReview(ctx, rec, "abc123", store, io.Discard)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify SpoolPath was captured
+	updated, found, err := store.Get("owner/repo", 42)
+	if err != nil {
+		t.Fatalf("failed to get record: %v", err)
+	}
+	if !found {
+		t.Fatal("record not found")
+	}
+	if updated.SpoolPath != expectedSpoolPath {
+		t.Errorf("expected SpoolPath %q, got %q", expectedSpoolPath, updated.SpoolPath)
+	}
+}
+
+// TestRunReview_RecordUpdate_Success verifies record is updated correctly
+func TestRunReview_RecordUpdate_Success(t *testing.T) {
+	// Save and restore original seams
+	origFetchDiff := fetchDiffFunc
+	origRunReviewTool := runReviewToolFunc
+	origTimeNow := timeNow
+	defer func() {
+		fetchDiffFunc = origFetchDiff
+		runReviewToolFunc = origRunReviewTool
+		timeNow = origTimeNow
+	}()
+
+	// Fixed time for testing
+	fixedTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	timeNow = func() time.Time { return fixedTime }
+
+	// Install fake seams
+	fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+		return os.WriteFile(outputFile, []byte("fake diff"), 0644)
+	}
+
+	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+		return []string{"/Users/test/PR-Review/pending/pr-review-owner-repo.md"}, nil
+	}
+
+	baseDir := t.TempDir()
+	store := NewStore(baseDir)
+
+	rec := Record{
+		Repo:       "owner/repo",
+		PR:         10,
+		URL:        "https://github.com/owner/repo/pull/10",
+		Status:     StatusWatching,
+		EnrolledAt: time.Now().Format(time.RFC3339),
+		ReviewDir:  "/tmp/review-10",
+	}
+
+	ctx := context.Background()
+	headSHA := "commit-sha-123"
+	err := RunReview(ctx, rec, headSHA, store, io.Discard)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify record was updated correctly
+	updated, found, err := store.Get("owner/repo", 10)
+	if err != nil {
+		t.Fatalf("failed to get record: %v", err)
+	}
+	if !found {
+		t.Fatal("record not found")
+	}
+
+	// Check all updated fields
+	if updated.Status != StatusReviewed {
+		t.Errorf("expected Status %q, got %q", StatusReviewed, updated.Status)
+	}
+	if updated.LastReviewedSHA != headSHA {
+		t.Errorf("expected LastReviewedSHA %q, got %q", headSHA, updated.LastReviewedSHA)
+	}
+	if updated.LastReviewedAt != fixedTime.Format(time.RFC3339) {
+		t.Errorf("expected LastReviewedAt %q, got %q", fixedTime.Format(time.RFC3339), updated.LastReviewedAt)
+	}
+	if updated.LastServicedRequest != headSHA {
+		t.Errorf("expected LastServicedRequest %q, got %q", headSHA, updated.LastServicedRequest)
+	}
+	if updated.SpoolPath != "/Users/test/PR-Review/pending/pr-review-owner-repo.md" {
+		t.Errorf("expected SpoolPath '/tmp/spool.md', got %q", updated.SpoolPath)
+	}
+}
+
+// TestRunReview_Cancellation verifies context cancellation works (concurrent test)
+func TestRunReview_Cancellation(t *testing.T) {
+	// Save and restore original seams
+	origFetchDiff := fetchDiffFunc
+	origRunReviewTool := runReviewToolFunc
+	origTimeNow := timeNow
+	defer func() {
+		fetchDiffFunc = origFetchDiff
+		runReviewToolFunc = origRunReviewTool
+		timeNow = origTimeNow
+	}()
+
+	// Fixed time for testing
+	fixedTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	timeNow = func() time.Time { return fixedTime }
+
+	// Install fake seams
+	fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+		return os.WriteFile(outputFile, []byte("fake diff"), 0644)
+	}
+
+	// Seam that checks for cancellation
+	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+		// Check if context is cancelled
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+			return []string{"/Users/test/PR-Review/pending/pr-review-owner-repo.md"}, nil
+		}
+	}
+
+	baseDir := t.TempDir()
+	store := NewStore(baseDir)
+
+	rec := Record{
+		Repo:       "owner/repo",
+		PR:         5,
+		URL:        "https://github.com/owner/repo/pull/5",
+		Status:     StatusWatching,
+		EnrolledAt: time.Now().Format(time.RFC3339),
+		ReviewDir:  "/tmp/review-5",
+	}
+
+	// Create cancellable context and cancel it immediately
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel before calling RunReview
+
+	err := RunReview(ctx, rec, "sha5", store, io.Discard)
+
+	// Verify error is context.Canceled
+	if err == nil {
+		t.Fatal("expected error due to cancelled context")
+	}
+	if !strings.Contains(err.Error(), "context canceled") {
+		t.Errorf("expected context.Canceled error, got: %v", err)
+	}
+
+	// Verify record was NOT updated (no save on cancellation)
+	_, found, err := store.Get("owner/repo", 5)
+	if err != nil {
+		t.Fatalf("failed to check record: %v", err)
+	}
+	if found {
+		t.Error("expected record to NOT exist (should not be saved on cancellation)")
+	}
+}
+
+// TestRunReview_DiffFetchFailure verifies error handling for diff fetch failure
+func TestRunReview_DiffFetchFailure(t *testing.T) {
+	// Save and restore original seams
+	origFetchDiff := fetchDiffFunc
+	origRunReviewTool := runReviewToolFunc
+	origTimeNow := timeNow
+	defer func() {
+		fetchDiffFunc = origFetchDiff
+		runReviewToolFunc = origRunReviewTool
+		timeNow = origTimeNow
+	}()
+
+	// Fixed time for testing
+	fixedTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	timeNow = func() time.Time { return fixedTime }
+
+	// Install fake seams - fetchDiff fails
+	fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+		return fmt.Errorf("gh pr diff failed: network error")
+	}
+
+	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+		t.Fatal("runReviewToolFunc should not be called when diff fetch fails")
+		return nil, nil
+	}
+
+	baseDir := t.TempDir()
+	store := NewStore(baseDir)
+
+	rec := Record{
+		Repo:       "owner/repo",
+		PR:         1,
+		URL:        "https://github.com/owner/repo/pull/1",
+		Status:     StatusWatching,
+		EnrolledAt: time.Now().Format(time.RFC3339),
+		ReviewDir:  "/tmp/review-1",
+	}
+
+	ctx := context.Background()
+	err := RunReview(ctx, rec, "sha1", store, io.Discard)
+
+	// Verify error
+	if err == nil {
+		t.Fatal("expected error from diff fetch failure")
+	}
+	if !strings.Contains(err.Error(), "failed to fetch PR diff") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+
+	// Verify record was NOT saved
+	_, found, err := store.Get("owner/repo", 1)
+	if err != nil {
+		t.Fatalf("failed to check record: %v", err)
+	}
+	if found {
+		t.Error("expected record to NOT exist (should not be saved on failure)")
+	}
+}
+
+// TestRunReview_ReviewToolFailure verifies error handling and cleanup for tool failure
+func TestRunReview_ReviewToolFailure(t *testing.T) {
+	// Save and restore original seams
+	origFetchDiff := fetchDiffFunc
+	origRunReviewTool := runReviewToolFunc
+	origTimeNow := timeNow
+	defer func() {
+		fetchDiffFunc = origFetchDiff
+		runReviewToolFunc = origRunReviewTool
+		timeNow = origTimeNow
+	}()
+
+	// Fixed time for testing
+	fixedTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	timeNow = func() time.Time { return fixedTime }
+
+	// Track temp file creation to verify cleanup
+	var createdDiffFile string
+	fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+		createdDiffFile = outputFile
+		return os.WriteFile(outputFile, []byte("fake diff"), 0644)
+	}
+
+	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+		return nil, fmt.Errorf("pr_review.py failed: exit code 1")
+	}
+
+	baseDir := t.TempDir()
+	store := NewStore(baseDir)
+
+	rec := Record{
+		Repo:       "owner/repo",
+		PR:         2,
+		URL:        "https://github.com/owner/repo/pull/2",
+		Status:     StatusWatching,
+		EnrolledAt: time.Now().Format(time.RFC3339),
+		ReviewDir:  "/tmp/review-2",
+	}
+
+	ctx := context.Background()
+	err := RunReview(ctx, rec, "sha2", store, io.Discard)
+
+	// Verify error
+	if err == nil {
+		t.Fatal("expected error from review tool failure")
+	}
+	if !strings.Contains(err.Error(), "pr_review.py invocation failed") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+
+	// Verify temp file was cleaned up (defer os.Remove should have run)
+	if createdDiffFile != "" {
+		if _, err := os.Stat(createdDiffFile); err == nil {
+			t.Errorf("temp diff file %q should have been cleaned up", createdDiffFile)
+		}
+	}
+
+	// Verify record was NOT saved
+	_, found, err := store.Get("owner/repo", 2)
+	if err != nil {
+		t.Fatalf("failed to check record: %v", err)
+	}
+	if found {
+		t.Error("expected record to NOT exist (should not be saved on failure)")
+	}
+}
+
+// TestRunReview_TempFileCleanup verifies temp files are cleaned up in all paths
+func TestRunReview_TempFileCleanup(t *testing.T) {
+	// Save and restore original seams
+	origFetchDiff := fetchDiffFunc
+	origRunReviewTool := runReviewToolFunc
+	origTimeNow := timeNow
+	defer func() {
+		fetchDiffFunc = origFetchDiff
+		runReviewToolFunc = origRunReviewTool
+		timeNow = origTimeNow
+	}()
+
+	// Fixed time for testing
+	fixedTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	timeNow = func() time.Time { return fixedTime }
+
+	tests := []struct {
+		name              string
+		runReviewToolMock func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error)
+		expectError       bool
+	}{
+		{
+			name: "success path",
+			runReviewToolMock: func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+				return []string{"/Users/test/PR-Review/pending/pr-review-owner-repo.md"}, nil
+			},
+			expectError: false,
+		},
+		{
+			name: "failure path",
+			runReviewToolMock: func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+				return nil, fmt.Errorf("tool failed")
+			},
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var createdDiffFile string
+			fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+				createdDiffFile = outputFile
+				return os.WriteFile(outputFile, []byte("fake diff"), 0644)
+			}
+
+			runReviewToolFunc = tt.runReviewToolMock
+
+			baseDir := t.TempDir()
+			store := NewStore(baseDir)
+
+			rec := Record{
+				Repo:       "owner/repo",
+				PR:         3,
+				URL:        "https://github.com/owner/repo/pull/3",
+				Status:     StatusWatching,
+				EnrolledAt: time.Now().Format(time.RFC3339),
+				ReviewDir:  "/tmp/review-3",
+			}
+
+			ctx := context.Background()
+			err := RunReview(ctx, rec, "sha3", store, io.Discard)
+
+			if tt.expectError && err == nil {
+				t.Fatal("expected error")
+			}
+			if !tt.expectError && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			// Verify temp file was cleaned up
+			if createdDiffFile != "" {
+				if _, statErr := os.Stat(createdDiffFile); statErr == nil {
+					t.Errorf("temp diff file %q should have been cleaned up", createdDiffFile)
+				}
+			}
+		})
+	}
+}
+
+// TestRunReview_RecordValidation verifies SpoolPath integration with Record
+func TestRunReview_RecordValidation(t *testing.T) {
+	// Save and restore original seams
+	origFetchDiff := fetchDiffFunc
+	origRunReviewTool := runReviewToolFunc
+	origTimeNow := timeNow
+	defer func() {
+		fetchDiffFunc = origFetchDiff
+		runReviewToolFunc = origRunReviewTool
+		timeNow = origTimeNow
+	}()
+
+	// Fixed time for testing
+	fixedTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	timeNow = func() time.Time { return fixedTime }
+
+	// Install fake seams
+	fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+		return os.WriteFile(outputFile, []byte("fake diff"), 0644)
+	}
+
+	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+		return []string{"/Users/test/PR-Review/pending/pr-review-owner-repo.md"}, nil
+	}
+
+	baseDir := t.TempDir()
+	store := NewStore(baseDir)
+
+	rec := Record{
+		Repo:       "owner/repo",
+		PR:         20,
+		URL:        "https://github.com/owner/repo/pull/20",
+		Status:     StatusWatching,
+		EnrolledAt: time.Now().Format(time.RFC3339),
+		ReviewDir:  "/tmp/review-20",
+	}
+
+	ctx := context.Background()
+	err := RunReview(ctx, rec, "sha20", store, io.Discard)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Retrieve and validate the updated record
+	updated, found, err := store.Get("owner/repo", 20)
+	if err != nil {
+		t.Fatalf("failed to get record: %v", err)
+	}
+	if !found {
+		t.Fatal("record not found")
+	}
+
+	// Verify record passes validation with SpoolPath populated
+	if err := updated.Validate(); err != nil {
+		t.Errorf("record validation failed: %v", err)
+	}
+
+	// Verify JSON serialization includes SpoolPath
+	jsonData, err := updated.ToJSON()
+	if err != nil {
+		t.Fatalf("ToJSON failed: %v", err)
+	}
+
+	if !strings.Contains(string(jsonData), `"spool_path"`) {
+		t.Error("JSON serialization missing 'spool_path' field")
+	}
+	if !strings.Contains(string(jsonData), `"/Users/test/PR-Review/pending/pr-review-owner-repo.md"`) {
+		t.Error("JSON serialization missing spool path value")
+	}
+
+	// Verify round-trip deserialization
+	roundtrip, err := FromJSON(jsonData)
+	if err != nil {
+		t.Fatalf("FromJSON failed: %v", err)
+	}
+	if roundtrip.SpoolPath != "/Users/test/PR-Review/pending/pr-review-owner-repo.md" {
+		t.Errorf("round-trip SpoolPath mismatch: expected '/path/to/spool.md', got %q", roundtrip.SpoolPath)
+	}
+}
+
+// TestValidateSpoolPath checks the spool-path contract guard: only a
+// PR-Review/pending/<name>.md path is accepted, so a trailing banner or
+// diagnostic line is rejected rather than silently persisted as SpoolPath.
+func TestValidateSpoolPath(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		wantErr bool
+	}{
+		{"valid pending md", "/Users/x/PR-Review/pending/pr-review-owner-repo-1.md", false},
+		{"empty", "", true},
+		{"not md", "/Users/x/PR-Review/pending/review", true},
+		{"wrong dir", "/tmp/spool.md", true},
+		{"banner line", "Done reviewing 3 files", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := validateSpoolPath(tt.path); (err != nil) != tt.wantErr {
+				t.Errorf("validateSpoolPath(%q) error = %v, wantErr %v", tt.path, err, tt.wantErr)
+			}
+		})
 	}
 }

@@ -3,6 +3,7 @@ package review
 import (
 	"context"
 	"fmt"
+	"io"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -146,7 +147,7 @@ func TestWatcherPollOrchestration(t *testing.T) {
 		return github.PR{}, fmt.Errorf("unknown PR")
 	}
 
-	dispatchReviewFunc = func(ctx context.Context, rec Record, headSHA string, store StoreInterface) error {
+	dispatchReviewFunc = func(ctx context.Context, rec Record, headSHA string, store StoreInterface, tabWriter io.Writer) error {
 		mu.Lock()
 		dispatchCalls = append(dispatchCalls, dispatchCall{
 			repo:    rec.Repo,
@@ -236,7 +237,7 @@ func TestWatcherConcurrencyCap(t *testing.T) {
 		}, nil
 	}
 
-	dispatchReviewFunc = func(ctx context.Context, rec Record, headSHA string, store StoreInterface) error {
+	dispatchReviewFunc = func(ctx context.Context, rec Record, headSHA string, store StoreInterface, tabWriter io.Writer) error {
 		dispatchedPRs <- rec.PR
 
 		// Simulate some work time
@@ -327,7 +328,7 @@ func TestWatcherSkipDoesNothing(t *testing.T) {
 		}, nil
 	}
 
-	dispatchReviewFunc = func(ctx context.Context, rec Record, headSHA string, store StoreInterface) error {
+	dispatchReviewFunc = func(ctx context.Context, rec Record, headSHA string, store StoreInterface, tabWriter io.Writer) error {
 		dispatchCalled = true
 		return nil
 	}
@@ -373,7 +374,7 @@ func TestWatcherGracefulStop(t *testing.T) {
 	fetchPRFunc = func(repo string, pr int) (github.PR, error) {
 		return github.PR{State: "OPEN", HeadRefOid: "sha"}, nil
 	}
-	dispatchReviewFunc = func(ctx context.Context, rec Record, headSHA string, store StoreInterface) error {
+	dispatchReviewFunc = func(ctx context.Context, rec Record, headSHA string, store StoreInterface, tabWriter io.Writer) error {
 		return nil
 	}
 	removeRecordFunc = func(store StoreInterface, repo string, pr int) error {
@@ -439,7 +440,7 @@ func TestWatcherSamePRNotDoubleDispatched(t *testing.T) {
 	// A slow review that stays in flight across multiple poll rounds.
 	release := make(chan struct{})
 	var dispatchCount int32
-	dispatchReviewFunc = func(ctx context.Context, rec Record, headSHA string, store StoreInterface) error {
+	dispatchReviewFunc = func(ctx context.Context, rec Record, headSHA string, store StoreInterface, tabWriter io.Writer) error {
 		atomic.AddInt32(&dispatchCount, 1)
 		<-release // block until the test allows completion
 		return nil
@@ -490,7 +491,7 @@ func TestWatcherStopWaitsForInFlight(t *testing.T) {
 	}
 
 	var finished int32
-	dispatchReviewFunc = func(ctx context.Context, rec Record, headSHA string, store StoreInterface) error {
+	dispatchReviewFunc = func(ctx context.Context, rec Record, headSHA string, store StoreInterface, tabWriter io.Writer) error {
 		// Simulate a review that respects context cancellation.
 		select {
 		case <-ctx.Done():
@@ -532,7 +533,9 @@ func TestWatcherConcurrentStop(t *testing.T) {
 	fetchPRFunc = func(repo string, pr int) (github.PR, error) {
 		return github.PR{State: "OPEN", HeadRefOid: "sha"}, nil
 	}
-	dispatchReviewFunc = func(ctx context.Context, rec Record, headSHA string, store StoreInterface) error { return nil }
+	dispatchReviewFunc = func(ctx context.Context, rec Record, headSHA string, store StoreInterface, tabWriter io.Writer) error {
+		return nil
+	}
 
 	watcher := NewWatcher(store, 50*time.Millisecond, 5, "test-reviewer")
 	watcher.Start()
@@ -566,7 +569,7 @@ func TestWatcherStartIdempotent(t *testing.T) {
 	fetchPRFunc = func(repo string, pr int) (github.PR, error) {
 		return github.PR{State: "OPEN", HeadRefOid: "sha"}, nil
 	}
-	dispatchReviewFunc = func(ctx context.Context, rec Record, headSHA string, store StoreInterface) error {
+	dispatchReviewFunc = func(ctx context.Context, rec Record, headSHA string, store StoreInterface, tabWriter io.Writer) error {
 		return nil
 	}
 	removeRecordFunc = func(store StoreInterface, repo string, pr int) error {
@@ -620,7 +623,7 @@ func TestWatcherConcurrentDispatchRaceCondition(t *testing.T) {
 		}, nil
 	}
 
-	dispatchReviewFunc = func(ctx context.Context, rec Record, headSHA string, store StoreInterface) error {
+	dispatchReviewFunc = func(ctx context.Context, rec Record, headSHA string, store StoreInterface, tabWriter io.Writer) error {
 		// Simulate work
 		time.Sleep(50 * time.Millisecond)
 		completedPRs <- rec.PR
