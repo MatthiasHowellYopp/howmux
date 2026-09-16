@@ -10,7 +10,13 @@ import (
 // RequiredReviewAssets returns the canonical list of agents and skills
 // the PR-review workflow depends on. Each entry is prefixed with its type:
 // - "agent:" for agent configs (.kiro/agents/<name>.json)
-// - "skill:" for skill directories (.kiro/skills/<name>/)
+// - "skill:" for skill directories (.kiro/skills/<name>/SKILL.md)
+//
+// These are the agents/skills the pr_review.py orchestrator uses (reviewer
+// lenses, consolidation, posting). howmux does NOT list its own issue
+// orchestrator (krew-lead) here: per the #73 decision it runs reviews by
+// invoking pr_review.py, not by spawning krew-lead, so krew-lead is
+// intentionally out of scope for the review asset check.
 func RequiredReviewAssets() []string {
 	return []string{
 		// Language-specific reviewer agents
@@ -54,9 +60,12 @@ func RequiredReviewAssets() []string {
 // the given kiro directory. Returns nil if all assets are present, or a
 // descriptive error listing exactly what is missing and where to symlink it.
 //
-// kiroDir should typically be os.UserHomeDir()+"/.kiro", but is parameterized
-// to enable testing against temporary directories without dependency on the
-// real ~/.kiro.
+// Root — why ~/.kiro (see #73): the review is run by the existing pr_review.py
+// orchestrator, which resolves agents/skills from ~/.kiro. The review is
+// diff-based, not run from the PR checkout dir, so agent resolution never
+// happens against the third-party checkout. That makes ~/.kiro the correct
+// (and only) root to validate here. kiroDir is parameterized so tests can use
+// a temp directory instead of the real ~/.kiro.
 func CheckReviewAssets(kiroDir string) error {
 	required := RequiredReviewAssets()
 	var missing []string
@@ -76,8 +85,11 @@ func CheckReviewAssets(kiroDir string) error {
 			// Agents are JSON config files: .kiro/agents/<name>.json
 			assetPath = filepath.Join(kiroDir, "agents", assetName+".json")
 		case "skill":
-			// Skills are directories: .kiro/skills/<name>/
-			assetPath = filepath.Join(kiroDir, "skills", assetName)
+			// Skills load from .kiro/skills/<name>/SKILL.md. Check the file,
+			// not just the directory: a present-but-empty (or half-generated)
+			// skill dir with no SKILL.md would otherwise pass while loading
+			// nothing at runtime.
+			assetPath = filepath.Join(kiroDir, "skills", assetName, "SKILL.md")
 		default:
 			return fmt.Errorf("internal error: unknown asset type %q in %q", assetType, asset)
 		}
