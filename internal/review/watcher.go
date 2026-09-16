@@ -3,6 +3,7 @@ package review
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -19,8 +20,8 @@ var (
 	removeRecordFunc = func(store StoreInterface, repo string, pr int) error {
 		return store.Remove(repo, pr)
 	}
-	dispatchReviewFunc = func(ctx context.Context, rec Record, headSHA string, store StoreInterface) error {
-		return RunReview(ctx, rec, ".howmux/reviews", headSHA, store)
+	dispatchReviewFunc = func(ctx context.Context, rec Record, headSHA string, store StoreInterface, tabWriter io.Writer) error {
+		return RunReview(ctx, rec, headSHA, store, tabWriter)
 	}
 )
 
@@ -223,7 +224,8 @@ func (w *Watcher) dispatch(rec Record, headSHA string) {
 
 		// Use the watcher-scoped context so Stop() cancels in-flight reviews
 		// rather than letting them run their full ACP timeout.
-		if err := dispatchReviewFunc(w.ctx, r, sha, w.store); err != nil {
+		// TODO: wire actual review tab writer when tab management is integrated
+		if err := dispatchReviewFunc(w.ctx, r, sha, w.store, io.Discard); err != nil {
 			logging.Error("review dispatch failed", "repo", r.Repo, "pr", r.PR, "error", err)
 		} else {
 			logging.Info("review dispatch succeeded", "repo", r.Repo, "pr", r.PR)

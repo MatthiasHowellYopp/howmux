@@ -36,6 +36,7 @@ type Record struct {
 	LastServicedRequest string `json:"last_serviced_request"` // Head SHA at the time the last review request was serviced; used to avoid re-reviewing the same commit on every poll
 	EnrolledAt          string `json:"enrolled_at"`           // RFC3339 timestamp
 	ReviewDir           string `json:"review_dir"`            // Path to worktree
+	SpoolPath           string `json:"spool_path"`            // Path to the review spool file (populated after successful review)
 }
 
 // Validate checks required fields and valid status

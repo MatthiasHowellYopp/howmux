@@ -3,209 +3,72 @@ package review
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
-	"path/filepath"
-	"sort"
+	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/matthiashowellyopp/howmux/internal/acp"
 	"github.com/matthiashowellyopp/howmux/internal/logging"
 )
 
-// reviewPromptContext assembles the review prompt from prior artifacts
-// Pure function that builds the prompt text for the ACP agent
-func reviewPromptContext(owner, repo string, pr int, currentSHA string, priorReviews []string) string {
-	var sb strings.Builder
+// Injectable command seams for subprocess execution
+// These use exec.CommandContext for cancellation support and are replaceable in tests
 
-	sb.WriteString(fmt.Sprintf("Review PR #%d from %s/%s\n", pr, owner, repo))
-	sb.WriteString(fmt.Sprintf("Current SHA: %s\n\n", currentSHA))
-
-	if len(priorReviews) == 0 {
-		sb.WriteString("This is the first review of this PR.\n")
-	} else {
-		sb.WriteString(fmt.Sprintf("This PR has %d prior review(s):\n\n", len(priorReviews)))
-		for i, review := range priorReviews {
-			sb.WriteString(fmt.Sprintf("--- Prior Review %d ---\n", i+1))
-			sb.WriteString(review)
-			sb.WriteString("\n\n")
-		}
-	}
-
-	sb.WriteString("Please conduct a thorough review of the current state.\n")
-
-	return sb.String()
-}
-
-// loadPriorReviews reads all *.md files from the reviews subdirectory
-// Returns empty slice if directory doesn't exist
-func loadPriorReviews(baseDir, owner, repo string, pr int) ([]string, error) {
-	fullRepo := owner + "/" + repo
-	dirName := RecordDir(fullRepo, pr)
-	reviewsDir := filepath.Join(baseDir, dirName, "reviews")
-
-	// Return empty slice if directory doesn't exist
-	if _, err := os.Stat(reviewsDir); os.IsNotExist(err) {
-		return []string{}, nil
-	}
-
-	entries, err := os.ReadDir(reviewsDir)
+// fetchDiffFunc fetches a PR diff via gh CLI and writes it to outputFile
+var fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+	cmd := exec.CommandContext(ctx, "gh", "pr", "diff", strconv.Itoa(pr), "--repo", owner+"/"+repo)
+	output, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("failed to read reviews directory: %w", err)
-	}
-
-	// Collect .md files with their modification time so we can feed prior
-	// reviews to the agent in chronological order. os.ReadDir returns
-	// filename (SHA-lexical) order, which is arbitrary w.r.t. review time.
-	type reviewFile struct {
-		content string
-		modTime time.Time
-	}
-	var files []reviewFile
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
-			continue
+		var exitErr *exec.ExitError
+		if errors, ok := err.(*exec.ExitError); ok {
+			exitErr = errors
+			return fmt.Errorf("gh pr diff failed (exit %d): %s: %w", exitErr.ExitCode(), string(exitErr.Stderr), err)
 		}
-
-		filePath := filepath.Join(reviewsDir, entry.Name())
-		content, err := os.ReadFile(filePath)
-		if err != nil {
-			logging.Warn("failed to read review file", "file", filePath, "error", err)
-			continue
-		}
-
-		info, err := entry.Info()
-		if err != nil {
-			logging.Warn("failed to stat review file", "file", filePath, "error", err)
-			continue
-		}
-
-		files = append(files, reviewFile{content: string(content), modTime: info.ModTime()})
+		return fmt.Errorf("gh pr diff failed: %w", err)
 	}
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].modTime.Before(files[j].modTime)
-	})
-
-	reviews := make([]string, 0, len(files))
-	for _, f := range files {
-		reviews = append(reviews, f.content)
-	}
-
-	return reviews, nil
+	return os.WriteFile(outputFile, output, 0644)
 }
 
-// saveReviewArtifact writes review content to the reviews subdirectory
-// Uses atomic write (temp + rename) for crash safety
-func saveReviewArtifact(baseDir, owner, repo string, pr int, sha string, content string) error {
-	fullRepo := owner + "/" + repo
-	dirName := RecordDir(fullRepo, pr)
-	reviewsDir := filepath.Join(baseDir, dirName, "reviews")
-
-	// Create reviews directory if it doesn't exist
-	if err := os.MkdirAll(reviewsDir, 0755); err != nil {
-		return fmt.Errorf("failed to create reviews directory: %w", err)
+// runReviewToolFunc runs pr_review.py (or any command) with the given argv,
+// streams stderr to stderrWriter for progress visibility, and captures stdout lines
+var runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) (stdoutLines []string, err error) {
+	if len(argv) == 0 {
+		return nil, fmt.Errorf("argv is empty")
 	}
 
-	targetFile := filepath.Join(reviewsDir, fmt.Sprintf("%s.md", sha))
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Stderr = stderrWriter
 
-	// Atomic write: create temp file, write, sync, rename
-	tmp, err := os.CreateTemp(reviewsDir, "review-*.tmp")
+	output, err := cmd.Output()
 	if err != nil {
-		return fmt.Errorf("failed to create temp file: %w", err)
-	}
-	tempFile := tmp.Name()
-
-	renamed := false
-	defer func() {
-		if !renamed {
-			os.Remove(tempFile)
+		var exitErr *exec.ExitError
+		if errors, ok := err.(*exec.ExitError); ok {
+			exitErr = errors
+			return nil, fmt.Errorf("command failed (exit %d): %w", exitErr.ExitCode(), err)
 		}
-	}()
-
-	if _, err := tmp.WriteString(content); err != nil {
-		tmp.Close()
-		return fmt.Errorf("failed to write temp file: %w", err)
+		return nil, fmt.Errorf("command failed: %w", err)
 	}
 
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return fmt.Errorf("failed to sync temp file: %w", err)
+	// Parse stdout into lines, filtering out empty lines
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	var nonEmptyLines []string
+	for _, line := range lines {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			nonEmptyLines = append(nonEmptyLines, trimmed)
+		}
 	}
 
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("failed to close temp file: %w", err)
-	}
-
-	if err := os.Rename(tempFile, targetFile); err != nil {
-		return fmt.Errorf("failed to finalize write: %w", err)
-	}
-	renamed = true
-
-	// Fsync parent directory (best effort)
-	if dir, err := os.Open(reviewsDir); err == nil {
-		_ = dir.Sync()
-		_ = dir.Close()
-	}
-
-	return nil
+	return nonEmptyLines, nil
 }
 
-// reviewAgent is the ACP agent howmux prompts to run a review.
-//
-// TODO(#73): this is a placeholder. "krew-lead" is howmux's issue-implementation
-// orchestrator, not a review orchestrator, and it does not post a PR review.
-// The review-orchestrator boundary — which agent runs the review, whether it
-// posts to GitHub itself or returns a review for howmux to post, and therefore
-// whether howmux posts at all — is an open design question tracked in #73.
-// Until that is resolved this runner prompts a placeholder and only persists
-// the returned artifact; it does not post.
-const reviewAgent = "krew-lead"
+// Injectable seam for time (used for timestamps)
+var timeNow = time.Now
 
-// Injectable seams for testing
-var (
-	loadPriorReviewsFunc   = loadPriorReviews
-	saveReviewArtifactFunc = saveReviewArtifact
-	timeNow                = time.Now
-	// validateAgentFunc is a seam over acp.ValidateAgentResolvable so the
-	// unresolvable-agent branch is testable without a real kiro-cli.
-	validateAgentFunc = acp.ValidateAgentResolvable
-)
-
-// reviewTimeout is the single authoritative time budget for a review request.
-const reviewTimeout = 10 * time.Minute
-
-// ACPClientFactory creates an ACP client for a given agent
-type ACPClientFactory func(agent string, cwd string) (acp.Client, error)
-
-// defaultACPClientFactory creates a real ACP client
-var defaultACPClientFactory ACPClientFactory = func(agent string, cwd string) (acp.Client, error) {
-	config := &acp.ConnectionConfig{
-		KiroCLIPath:       "kiro-cli",
-		Agent:             agent,
-		Cwd:               cwd,
-		MaxRetries:        3,
-		RetryDelay:        1 * time.Second,
-		ConnectionTimeout: 30 * time.Second,
-		RequestTimeout:    reviewTimeout,
-	}
-
-	if err := acp.ValidateConnectionConfig(config); err != nil {
-		return nil, fmt.Errorf("invalid ACP config: %w", err)
-	}
-
-	client := acp.NewClient(config)
-	return client, nil
-}
-
-// RunReview orchestrates a complete PR review via ACP
-// Loads prior reviews → assembles prompt → runs ACP session → writes artifact → updates record
-func RunReview(ctx context.Context, rec Record, baseDir, currentSHA string, storeImpl StoreInterface) error {
-	return RunReviewWithFactory(ctx, rec, baseDir, currentSHA, storeImpl, defaultACPClientFactory)
-}
-
-// RunReviewWithFactory is the injectable version for testing
-func RunReviewWithFactory(ctx context.Context, rec Record, baseDir, currentSHA string, storeImpl StoreInterface, factory ACPClientFactory) error {
+// RunReview orchestrates a complete PR review via subprocess invocation of pr_review.py
+// Fetches diff → runs pr_review.py → captures spool path → updates record
+func RunReview(ctx context.Context, rec Record, headSHA string, storeImpl StoreInterface, tabWriter io.Writer) error {
 	// Parse repo into owner/name
 	parts := strings.Split(rec.Repo, "/")
 	if len(parts) != 2 {
@@ -213,86 +76,61 @@ func RunReviewWithFactory(ctx context.Context, rec Record, baseDir, currentSHA s
 	}
 	owner, repo := parts[0], parts[1]
 
-	logging.Info("starting PR review", "repo", rec.Repo, "pr", rec.PR, "sha", currentSHA)
+	logging.Info("starting PR review", "repo", rec.Repo, "pr", rec.PR, "sha", headSHA)
 
-	// Load prior reviews
-	priorReviews, err := loadPriorReviewsFunc(baseDir, owner, repo, rec.PR)
+	// Create temp file for diff
+	diffFile, err := os.CreateTemp("", fmt.Sprintf("pr-%d-*.diff", rec.PR))
 	if err != nil {
-		return fmt.Errorf("failed to load prior reviews: %w", err)
+		return fmt.Errorf("failed to create temp diff file: %w", err)
 	}
-	logging.Debug("loaded prior reviews", "count", len(priorReviews))
+	diffPath := diffFile.Name()
+	diffFile.Close()
+	defer os.Remove(diffPath)
 
-	// Assemble prompt
-	prompt := reviewPromptContext(owner, repo, rec.PR, currentSHA, priorReviews)
-	logging.Debug("assembled review prompt", "length", len(prompt))
+	// Fetch PR diff via gh CLI
+	if err := fetchDiffFunc(ctx, owner, repo, rec.PR, diffPath); err != nil {
+		return fmt.Errorf("failed to fetch PR diff: %w", err)
+	}
+	logging.Debug("fetched PR diff", "file", diffPath)
 
-	// Pre-flight: fail loud if the agent can't be resolved from the checkout
-	// dir. Over ACP, kiro-cli silently falls back to a default agent for an
-	// unknown agent and still returns success, so without this we could persist
-	// a "review" produced by the wrong agent. The review dir is a third-party
-	// PR checkout and won't contain howmux's agent configs, so this is the
-	// likely failure — surface it rather than spend a session on it.
-	if err := validateAgentFunc(rec.ReviewDir, reviewAgent); err != nil {
-		return fmt.Errorf("agent %q not resolvable from %s: %w", reviewAgent, rec.ReviewDir, err)
+	// Construct pr_review.py argv
+	// Always use --language auto to let pr_review.py detect both language and valkey
+	argv := []string{
+		"pr_review.py",
+		"--diff-file", diffPath,
+		"--repo", rec.Repo,
+		"--pr", strconv.Itoa(rec.PR),
+		"--language", "auto",
 	}
 
-	// Create ACP client with the review agent
-	client, err := factory(reviewAgent, rec.ReviewDir)
+	logging.Debug("invoking pr_review.py", "argv", strings.Join(argv, " "))
+
+	// Run pr_review.py with stderr streaming to tabWriter and stdout capture
+	stdoutLines, err := runReviewToolFunc(ctx, argv, tabWriter)
 	if err != nil {
-		return fmt.Errorf("failed to create ACP client: %w", err)
+		return fmt.Errorf("pr_review.py invocation failed: %w", err)
 	}
 
-	// Connect to ACP
-	if err := client.Connect(ctx); err != nil {
-		return fmt.Errorf("failed to connect to ACP: %w", err)
+	// Parse stdout: last non-empty line is the spool path
+	if len(stdoutLines) == 0 {
+		return fmt.Errorf("pr_review.py produced no output (expected spool path)")
 	}
-	defer client.Close()
+	spoolPath := stdoutLines[len(stdoutLines)-1]
+	logging.Debug("review completed", "spool_path", spoolPath)
 
-	logging.Info("ACP connection established", "agent", reviewAgent)
-
-	// Send review request under the single authoritative timeout.
-	reviewCtx, cancel := context.WithTimeout(ctx, reviewTimeout)
-	defer cancel()
-
-	req := &acp.MessageRequest{
-		Agent:          reviewAgent,
-		Message:        prompt,
-		Streaming:      false,
-		ResponseFormat: "text",
-		Timeout:        reviewTimeout,
-	}
-
-	resp, err := client.SendMessage(reviewCtx, req)
-	if err != nil {
-		return fmt.Errorf("ACP review request failed: %w", err)
-	}
-
-	if !resp.Success {
-		return fmt.Errorf("review failed: %s", resp.Error)
-	}
-
-	logging.Info("review completed successfully", "response_length", len(resp.Message))
-
-	// Save review artifact
-	if err := saveReviewArtifactFunc(baseDir, owner, repo, rec.PR, currentSHA, resp.Message); err != nil {
-		return fmt.Errorf("failed to save review artifact: %w", err)
-	}
-	logging.Debug("review artifact saved", "sha", currentSHA)
-
-	// Update record. Use the non-terminal StatusReviewed: the PR has been
-	// reviewed at this SHA but is still open, so the watch loop (#64) can
-	// re-fire on the next push/re-request. StatusDone is reserved for the
-	// terminal merged/closed case, set by the loop when it prunes.
+	// Update record with StatusReviewed, timestamps, and spool path
 	rec.Status = StatusReviewed
-	rec.LastReviewedSHA = currentSHA
+	rec.LastReviewedSHA = headSHA
 	rec.LastReviewedAt = timeNow().Format(time.RFC3339)
-	rec.LastServicedRequest = currentSHA // Mark this request as serviced to avoid duplicate reviews
+	rec.LastServicedRequest = headSHA
+	rec.SpoolPath = spoolPath
 
+	// Save record atomically
 	if err := storeImpl.Save(rec); err != nil {
 		return fmt.Errorf("failed to update record: %w", err)
 	}
 
-	logging.Info("PR review completed", "repo", rec.Repo, "pr", rec.PR, "sha", currentSHA)
+	logging.Info("PR review completed", "repo", rec.Repo, "pr", rec.PR, "sha", headSHA, "spool", spoolPath)
 
 	return nil
 }

@@ -144,6 +144,7 @@ func TestRecordJSON(t *testing.T) {
 		LastServicedRequest: "request-id-123",
 		EnrolledAt:          now,
 		ReviewDir:           ".worktrees/review-owner-name-123",
+		SpoolPath:           "",
 	}
 
 	t.Run("round-trip marshal/unmarshal", func(t *testing.T) {
@@ -187,6 +188,9 @@ func TestRecordJSON(t *testing.T) {
 		if decoded.ReviewDir != original.ReviewDir {
 			t.Errorf("ReviewDir mismatch: got %q, want %q", decoded.ReviewDir, original.ReviewDir)
 		}
+		if decoded.SpoolPath != original.SpoolPath {
+			t.Errorf("SpoolPath mismatch: got %q, want %q", decoded.SpoolPath, original.SpoolPath)
+		}
 	})
 
 	t.Run("JSON field names match schema", func(t *testing.T) {
@@ -205,6 +209,7 @@ func TestRecordJSON(t *testing.T) {
 			"repo", "pr", "url", "status",
 			"last_reviewed_sha", "last_reviewed_at",
 			"last_serviced_request", "enrolled_at", "review_dir",
+			"spool_path",
 		}
 
 		for _, field := range expectedFields {
@@ -225,6 +230,94 @@ func TestRecordJSON(t *testing.T) {
 		_, err := FromJSON([]byte(""))
 		if err == nil {
 			t.Error("expected error for empty JSON, got nil")
+		}
+	})
+}
+
+func TestRecord_SpoolPath_SerializationRoundTrip(t *testing.T) {
+	now := time.Now().Format(time.RFC3339)
+	original := Record{
+		Repo:                "owner/name",
+		PR:                  456,
+		URL:                 "https://github.com/owner/name/pull/456",
+		Status:              StatusReviewed,
+		LastReviewedSHA:     "def789abc123",
+		LastReviewedAt:      now,
+		LastServicedRequest: "def789abc123",
+		EnrolledAt:          now,
+		ReviewDir:           ".worktrees/review-owner-name-456",
+		SpoolPath:           "/Users/test/PR-Review/pending/pr-review-owner-name-456.md",
+	}
+
+	t.Run("populated SpoolPath round-trips correctly", func(t *testing.T) {
+		// Marshal
+		data, err := original.ToJSON()
+		if err != nil {
+			t.Fatalf("ToJSON failed: %v", err)
+		}
+
+		// Unmarshal
+		decoded, err := FromJSON(data)
+		if err != nil {
+			t.Fatalf("FromJSON failed: %v", err)
+		}
+
+		// Verify SpoolPath is preserved
+		if decoded.SpoolPath != original.SpoolPath {
+			t.Errorf("SpoolPath mismatch: got %q, want %q", decoded.SpoolPath, original.SpoolPath)
+		}
+
+		// Verify it appears in raw JSON with correct field name
+		var raw map[string]interface{}
+		if err := json.Unmarshal(data, &raw); err != nil {
+			t.Fatalf("Unmarshal to map failed: %v", err)
+		}
+
+		spoolPath, ok := raw["spool_path"]
+		if !ok {
+			t.Error("spool_path field missing from JSON")
+		} else if spoolPath != original.SpoolPath {
+			t.Errorf("spool_path in JSON: got %q, want %q", spoolPath, original.SpoolPath)
+		}
+	})
+
+	t.Run("empty SpoolPath round-trips correctly", func(t *testing.T) {
+		rec := original
+		rec.SpoolPath = ""
+		rec.Status = StatusWatching
+
+		// Marshal
+		data, err := rec.ToJSON()
+		if err != nil {
+			t.Fatalf("ToJSON failed: %v", err)
+		}
+
+		// Unmarshal
+		decoded, err := FromJSON(data)
+		if err != nil {
+			t.Fatalf("FromJSON failed: %v", err)
+		}
+
+		// Verify empty SpoolPath is preserved
+		if decoded.SpoolPath != "" {
+			t.Errorf("SpoolPath should be empty, got %q", decoded.SpoolPath)
+		}
+	})
+
+	t.Run("SpoolPath not required for validation", func(t *testing.T) {
+		rec := original
+		rec.SpoolPath = ""
+		rec.Status = StatusWatching
+
+		// Should pass validation without SpoolPath
+		if err := rec.Validate(); err != nil {
+			t.Errorf("validation failed with empty SpoolPath: %v", err)
+		}
+
+		// Should also pass with populated SpoolPath
+		rec.SpoolPath = "/some/path.md"
+		if err := rec.Validate(); err != nil {
+			t.Errorf("validation failed with populated SpoolPath: %v", err)
 		}
 	})
 }
