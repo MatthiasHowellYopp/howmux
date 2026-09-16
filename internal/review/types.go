@@ -16,6 +16,15 @@ const (
 	StatusDone      Status = "done"      // Terminal: PR merged/closed
 )
 
+// ReviewAction represents the action to take for a PR during a watch poll
+type ReviewAction int
+
+const (
+	ActionSkip   ReviewAction = iota // Skip this PR (not requested or already serviced)
+	ActionReview                     // Trigger a review
+	ActionPrune                      // Remove from tracking (merged/closed)
+)
+
 // Record represents the persisted state for a single PR review
 type Record struct {
 	Repo                string `json:"repo"`                  // "owner/name"
@@ -24,7 +33,7 @@ type Record struct {
 	Status              Status `json:"status"`                // Current review status
 	LastReviewedSHA     string `json:"last_reviewed_sha"`     // Commit SHA last reviewed
 	LastReviewedAt      string `json:"last_reviewed_at"`      // RFC3339 timestamp or empty
-	LastServicedRequest string `json:"last_serviced_request"` // Dedup tracking (unused now, carried forward)
+	LastServicedRequest string `json:"last_serviced_request"` // Head SHA at the time the last review request was serviced; used to avoid re-reviewing the same commit on every poll
 	EnrolledAt          string `json:"enrolled_at"`           // RFC3339 timestamp
 	ReviewDir           string `json:"review_dir"`            // Path to worktree
 }
