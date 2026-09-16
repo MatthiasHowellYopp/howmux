@@ -39,7 +39,7 @@ func TestRunReview_DiffFetch_Argv(t *testing.T) {
 	}
 
 	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
-		return []string{"/tmp/spool.md"}, nil
+		return []string{"/Users/test/PR-Review/pending/pr-review-owner-repo.md"}, nil
 	}
 
 	baseDir := t.TempDir()
@@ -102,7 +102,7 @@ func TestRunReview_ReviewTool_Argv(t *testing.T) {
 
 	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
 		capturedArgv = append([]string{}, argv...) // deep copy
-		return []string{"/tmp/spool.md"}, nil
+		return []string{"/Users/test/PR-Review/pending/pr-review-owner-repo.md"}, nil
 	}
 
 	baseDir := t.TempDir()
@@ -196,7 +196,7 @@ func TestRunReview_StderrRouting(t *testing.T) {
 		io.WriteString(stderrWriter, "→ [2/3] Running lenses…\n")
 		io.WriteString(stderrWriter, "→ [3/3] Consolidating…\n")
 		io.WriteString(stderrWriter, "→ verdict: APPROVE\n")
-		return []string{"/tmp/spool.md"}, nil
+		return []string{"/Users/test/PR-Review/pending/pr-review-owner-repo.md"}, nil
 	}
 
 	baseDir := t.TempDir()
@@ -316,7 +316,7 @@ func TestRunReview_RecordUpdate_Success(t *testing.T) {
 	}
 
 	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
-		return []string{"/tmp/spool.md"}, nil
+		return []string{"/Users/test/PR-Review/pending/pr-review-owner-repo.md"}, nil
 	}
 
 	baseDir := t.TempDir()
@@ -360,7 +360,7 @@ func TestRunReview_RecordUpdate_Success(t *testing.T) {
 	if updated.LastServicedRequest != headSHA {
 		t.Errorf("expected LastServicedRequest %q, got %q", headSHA, updated.LastServicedRequest)
 	}
-	if updated.SpoolPath != "/tmp/spool.md" {
+	if updated.SpoolPath != "/Users/test/PR-Review/pending/pr-review-owner-repo.md" {
 		t.Errorf("expected SpoolPath '/tmp/spool.md', got %q", updated.SpoolPath)
 	}
 }
@@ -393,7 +393,7 @@ func TestRunReview_Cancellation(t *testing.T) {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		default:
-			return []string{"/tmp/spool.md"}, nil
+			return []string{"/Users/test/PR-Review/pending/pr-review-owner-repo.md"}, nil
 		}
 	}
 
@@ -583,7 +583,7 @@ func TestRunReview_TempFileCleanup(t *testing.T) {
 		{
 			name: "success path",
 			runReviewToolMock: func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
-				return []string{"/tmp/spool.md"}, nil
+				return []string{"/Users/test/PR-Review/pending/pr-review-owner-repo.md"}, nil
 			},
 			expectError: false,
 		},
@@ -660,7 +660,7 @@ func TestRunReview_RecordValidation(t *testing.T) {
 	}
 
 	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
-		return []string{"/path/to/spool.md"}, nil
+		return []string{"/Users/test/PR-Review/pending/pr-review-owner-repo.md"}, nil
 	}
 
 	baseDir := t.TempDir()
@@ -704,7 +704,7 @@ func TestRunReview_RecordValidation(t *testing.T) {
 	if !strings.Contains(string(jsonData), `"spool_path"`) {
 		t.Error("JSON serialization missing 'spool_path' field")
 	}
-	if !strings.Contains(string(jsonData), `"/path/to/spool.md"`) {
+	if !strings.Contains(string(jsonData), `"/Users/test/PR-Review/pending/pr-review-owner-repo.md"`) {
 		t.Error("JSON serialization missing spool path value")
 	}
 
@@ -713,7 +713,31 @@ func TestRunReview_RecordValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FromJSON failed: %v", err)
 	}
-	if roundtrip.SpoolPath != "/path/to/spool.md" {
+	if roundtrip.SpoolPath != "/Users/test/PR-Review/pending/pr-review-owner-repo.md" {
 		t.Errorf("round-trip SpoolPath mismatch: expected '/path/to/spool.md', got %q", roundtrip.SpoolPath)
+	}
+}
+
+// TestValidateSpoolPath checks the spool-path contract guard: only a
+// PR-Review/pending/<name>.md path is accepted, so a trailing banner or
+// diagnostic line is rejected rather than silently persisted as SpoolPath.
+func TestValidateSpoolPath(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		wantErr bool
+	}{
+		{"valid pending md", "/Users/x/PR-Review/pending/pr-review-owner-repo-1.md", false},
+		{"empty", "", true},
+		{"not md", "/Users/x/PR-Review/pending/review", true},
+		{"wrong dir", "/tmp/spool.md", true},
+		{"banner line", "Done reviewing 3 files", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := validateSpoolPath(tt.path); (err != nil) != tt.wantErr {
+				t.Errorf("validateSpoolPath(%q) error = %v, wantErr %v", tt.path, err, tt.wantErr)
+			}
+		})
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -21,9 +22,7 @@ var fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, output
 	cmd := exec.CommandContext(ctx, "gh", "pr", "diff", strconv.Itoa(pr), "--repo", owner+"/"+repo)
 	output, err := cmd.Output()
 	if err != nil {
-		var exitErr *exec.ExitError
-		if errors, ok := err.(*exec.ExitError); ok {
-			exitErr = errors
+		if exitErr, ok := err.(*exec.ExitError); ok {
 			return fmt.Errorf("gh pr diff failed (exit %d): %s: %w", exitErr.ExitCode(), string(exitErr.Stderr), err)
 		}
 		return fmt.Errorf("gh pr diff failed: %w", err)
@@ -43,9 +42,7 @@ var runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io
 
 	output, err := cmd.Output()
 	if err != nil {
-		var exitErr *exec.ExitError
-		if errors, ok := err.(*exec.ExitError); ok {
-			exitErr = errors
+		if exitErr, ok := err.(*exec.ExitError); ok {
 			return nil, fmt.Errorf("command failed (exit %d): %w", exitErr.ExitCode(), err)
 		}
 		return nil, fmt.Errorf("command failed: %w", err)
@@ -65,6 +62,30 @@ var runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io
 
 // Injectable seam for time (used for timestamps)
 var timeNow = time.Now
+
+// validateSpoolPath checks that a captured stdout line looks like the spool
+// path pr_review.py is expected to emit (…/PR-Review/pending/<name>.md). This
+// guards against a trailing diagnostic/banner line being persisted as the
+// SpoolPath — a wrong value would otherwise only surface downstream when
+// finalize tries to drain it.
+//
+// This is a format check, not an existence check, so it stays unit-testable
+// without a real pr_review.py run. A tighter contract (a `SPOOL_PATH=<path>`
+// sentinel line grepped from stdout) would remove the last-line ordering
+// assumption entirely, but that requires a change to pr_review.py in
+// ai-resources; tracked as a follow-up.
+func validateSpoolPath(p string) error {
+	if p == "" {
+		return fmt.Errorf("empty path")
+	}
+	if !strings.HasSuffix(p, ".md") {
+		return fmt.Errorf("expected a .md file")
+	}
+	if !strings.Contains(filepath.ToSlash(p), "PR-Review/pending/") {
+		return fmt.Errorf("expected a PR-Review/pending/ path")
+	}
+	return nil
+}
 
 // RunReview orchestrates a complete PR review via subprocess invocation of pr_review.py
 // Fetches diff → runs pr_review.py → captures spool path → updates record
@@ -111,11 +132,17 @@ func RunReview(ctx context.Context, rec Record, headSHA string, storeImpl StoreI
 		return fmt.Errorf("pr_review.py invocation failed: %w", err)
 	}
 
-	// Parse stdout: last non-empty line is the spool path
+	// Parse stdout: pr_review.py prints the spool path as its single stdout
+	// line. Take the last non-empty line and validate it against the expected
+	// contract before persisting — a silently-wrong SpoolPath would only
+	// surface downstream when finalize tries to drain it, far from the cause.
 	if len(stdoutLines) == 0 {
 		return fmt.Errorf("pr_review.py produced no output (expected spool path)")
 	}
 	spoolPath := stdoutLines[len(stdoutLines)-1]
+	if err := validateSpoolPath(spoolPath); err != nil {
+		return fmt.Errorf("pr_review.py returned an unexpected spool path %q: %w", spoolPath, err)
+	}
 	logging.Debug("review completed", "spool_path", spoolPath)
 
 	// Update record with StatusReviewed, timestamps, and spool path

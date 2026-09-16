@@ -29,8 +29,8 @@ func TestRequiredReviewAssets_WellFormed(t *testing.T) {
 			t.Errorf("malformed asset %q (expected non-empty type:name)", asset)
 			continue
 		}
-		if parts[0] != "agent" && parts[0] != "skill" {
-			t.Errorf("asset %q has unknown type %q (expected agent or skill)", asset, parts[0])
+		if parts[0] != "agent" && parts[0] != "skill" && parts[0] != "tool" {
+			t.Errorf("asset %q has unknown type %q (expected agent, skill, or tool)", asset, parts[0])
 		}
 	}
 
@@ -50,8 +50,8 @@ func TestRequiredReviewAssets(t *testing.T) {
 
 	// Verify all entries are properly prefixed
 	for _, asset := range assets {
-		if !strings.HasPrefix(asset, "agent:") && !strings.HasPrefix(asset, "skill:") {
-			t.Errorf("asset %q missing type prefix (expected 'agent:' or 'skill:')", asset)
+		if !strings.HasPrefix(asset, "agent:") && !strings.HasPrefix(asset, "skill:") && !strings.HasPrefix(asset, "tool:") {
+			t.Errorf("asset %q missing type prefix (expected 'agent:', 'skill:', or 'tool:')", asset)
 		}
 	}
 
@@ -80,6 +80,11 @@ func TestRequiredReviewAssets(t *testing.T) {
 // TestCheckReviewAssets_AllPresent verifies nil error when all assets exist
 func TestCheckReviewAssets_AllPresent(t *testing.T) {
 	kiroDir := t.TempDir()
+
+	// Tool resolution is on PATH; stub it so only kiroDir assets drive the result.
+	origLookPath := lookPathFunc
+	lookPathFunc = func(string) (string, error) { return "/usr/local/bin/stub", nil }
+	t.Cleanup(func() { lookPathFunc = origLookPath })
 	agentsDir := filepath.Join(kiroDir, "agents")
 	skillsDir := filepath.Join(kiroDir, "skills")
 
@@ -125,6 +130,11 @@ func TestCheckReviewAssets_AllPresent(t *testing.T) {
 // TestCheckReviewAssets_MissingAgent verifies error when agent is missing
 func TestCheckReviewAssets_MissingAgent(t *testing.T) {
 	kiroDir := t.TempDir()
+
+	// Tool resolution is on PATH; stub it so only kiroDir assets drive the result.
+	origLookPath := lookPathFunc
+	lookPathFunc = func(string) (string, error) { return "/usr/local/bin/stub", nil }
+	t.Cleanup(func() { lookPathFunc = origLookPath })
 	agentsDir := filepath.Join(kiroDir, "agents")
 	skillsDir := filepath.Join(kiroDir, "skills")
 
@@ -189,6 +199,11 @@ func TestCheckReviewAssets_MissingAgent(t *testing.T) {
 // TestCheckReviewAssets_MissingSkill verifies error when skill is missing
 func TestCheckReviewAssets_MissingSkill(t *testing.T) {
 	kiroDir := t.TempDir()
+
+	// Tool resolution is on PATH; stub it so only kiroDir assets drive the result.
+	origLookPath := lookPathFunc
+	lookPathFunc = func(string) (string, error) { return "/usr/local/bin/stub", nil }
+	t.Cleanup(func() { lookPathFunc = origLookPath })
 	agentsDir := filepath.Join(kiroDir, "agents")
 	skillsDir := filepath.Join(kiroDir, "skills")
 
@@ -248,6 +263,11 @@ func TestCheckReviewAssets_MissingSkill(t *testing.T) {
 // TestCheckReviewAssets_MultipleMissing verifies error lists all missing assets
 func TestCheckReviewAssets_MultipleMissing(t *testing.T) {
 	kiroDir := t.TempDir()
+
+	// Tool resolution is on PATH; stub it so only kiroDir assets drive the result.
+	origLookPath := lookPathFunc
+	lookPathFunc = func(string) (string, error) { return "/usr/local/bin/stub", nil }
+	t.Cleanup(func() { lookPathFunc = origLookPath })
 	agentsDir := filepath.Join(kiroDir, "agents")
 	skillsDir := filepath.Join(kiroDir, "skills")
 
@@ -317,17 +337,73 @@ func TestCheckReviewAssets_MultipleMissing(t *testing.T) {
 func TestCheckReviewAssets_EmptyKiroDir(t *testing.T) {
 	kiroDir := t.TempDir()
 
+	// Tool resolution is on PATH; stub it so only kiroDir assets drive the result.
+	origLookPath := lookPathFunc
+	lookPathFunc = func(string) (string, error) { return "/usr/local/bin/stub", nil }
+	t.Cleanup(func() { lookPathFunc = origLookPath })
+
 	// Verify CheckReviewAssets returns error
 	err := CheckReviewAssets(kiroDir)
 	if err == nil {
 		t.Fatal("CheckReviewAssets() with empty kiro directory returned nil, expected error")
 	}
 
-	// Verify error message indicates all assets are missing
+	// Verify error message indicates all kiroDir assets are missing. The
+	// tool: entry is resolved on PATH (stubbed present here), so it is not
+	// among the missing — expect total-1.
 	errMsg := err.Error()
 	totalAssets := len(RequiredReviewAssets())
-	expectedMsg := fmt.Sprintf("Missing %d of %d", totalAssets, totalAssets)
+	expectedMsg := fmt.Sprintf("Missing %d of %d", totalAssets-1, totalAssets)
 	if !strings.Contains(errMsg, expectedMsg) {
-		t.Errorf("error message does not indicate all assets missing: expected %q in %v", expectedMsg, errMsg)
+		t.Errorf("error message does not indicate kiroDir assets missing: expected %q in %v", expectedMsg, errMsg)
+	}
+}
+
+// TestCheckReviewAssets_MissingTool verifies a tool: entry not on PATH is
+// reported as missing.
+func TestCheckReviewAssets_MissingTool(t *testing.T) {
+	kiroDir := t.TempDir()
+	agentsDir := filepath.Join(kiroDir, "agents")
+	skillsDir := filepath.Join(kiroDir, "skills")
+	if err := os.MkdirAll(agentsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(skillsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Provision every agent/skill so the tool is the only thing missing.
+	for _, asset := range RequiredReviewAssets() {
+		parts := strings.SplitN(asset, ":", 2)
+		switch parts[0] {
+		case "agent":
+			if err := os.WriteFile(filepath.Join(agentsDir, parts[1]+".json"), []byte("{}"), 0644); err != nil {
+				t.Fatal(err)
+			}
+		case "skill":
+			sd := filepath.Join(skillsDir, parts[1])
+			if err := os.Mkdir(sd, 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(sd, "SKILL.md"), []byte("# skill"), 0644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	// Tool not found on PATH.
+	origLookPath := lookPathFunc
+	lookPathFunc = func(string) (string, error) { return "", fmt.Errorf("not found") }
+	t.Cleanup(func() { lookPathFunc = origLookPath })
+
+	err := CheckReviewAssets(kiroDir)
+	if err == nil {
+		t.Fatal("expected error when the review tool is not on PATH")
+	}
+	if !strings.Contains(err.Error(), "tool:pr_review.py") {
+		t.Errorf("error should name the missing tool: %v", err.Error())
+	}
+	if !strings.Contains(err.Error(), "PATH") {
+		t.Errorf("error should mention PATH: %v", err.Error())
 	}
 }

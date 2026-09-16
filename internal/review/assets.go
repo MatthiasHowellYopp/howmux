@@ -3,6 +3,7 @@ package review
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -53,8 +54,18 @@ func RequiredReviewAssets() []string {
 		"skill:valkey-python-reviewer",
 		"skill:valkey-go-reviewer",
 		"skill:infra-reviewer",
+
+		// The review orchestrator tool itself (must be resolvable on PATH).
+		// Per #73 howmux runs reviews by invoking pr_review.py; if it isn't on
+		// PATH, every dispatched review is guaranteed to fail — catch it in the
+		// preflight rather than at dispatch time.
+		"tool:pr_review.py",
 	}
 }
+
+// lookPathFunc resolves a tool on PATH. Package var so tests can fake PATH
+// resolution hermetically.
+var lookPathFunc = exec.LookPath
 
 // CheckReviewAssets validates that all required review assets exist under
 // the given kiro directory. Returns nil if all assets are present, or a
@@ -66,6 +77,9 @@ func RequiredReviewAssets() []string {
 // happens against the third-party checkout. That makes ~/.kiro the correct
 // (and only) root to validate here. kiroDir is parameterized so tests can use
 // a temp directory instead of the real ~/.kiro.
+//
+// "tool:" entries (e.g. the pr_review.py orchestrator) are resolved on PATH
+// rather than under kiroDir.
 func CheckReviewAssets(kiroDir string) error {
 	required := RequiredReviewAssets()
 	var missing []string
@@ -78,8 +92,16 @@ func CheckReviewAssets(kiroDir string) error {
 
 		assetType := parts[0]
 		assetName := parts[1]
-		var assetPath string
 
+		// Tools are resolved on PATH, not under kiroDir.
+		if assetType == "tool" {
+			if _, err := lookPathFunc(assetName); err != nil {
+				missing = append(missing, fmt.Sprintf("  - %s (not found on PATH)", asset))
+			}
+			continue
+		}
+
+		var assetPath string
 		switch assetType {
 		case "agent":
 			// Agents are JSON config files: .kiro/agents/<name>.json
