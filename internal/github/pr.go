@@ -23,9 +23,13 @@ type PR struct {
 	Number         int             `json:"number"`         // PR number
 }
 
-// ReviewRequest represents a pending review request
+// ReviewRequest represents a pending review request. GitHub's reviewRequests
+// list mixes user reviewers (which carry a login) and team reviewers (which
+// carry a slug/name and no login), so both shapes are captured here.
 type ReviewRequest struct {
-	Login string `json:"login"` // GitHub username
+	Login string `json:"login"` // GitHub username (empty for team requests)
+	Slug  string `json:"slug"`  // Team slug (empty for user requests)
+	Name  string `json:"name"`  // Team name (empty for user requests)
 }
 
 // IsTerminal returns true if the PR is merged or closed
@@ -33,10 +37,19 @@ func (pr PR) IsTerminal() bool {
 	return pr.State == "MERGED" || pr.State == "CLOSED"
 }
 
-// IsReviewRequestedFor returns true if the given login appears in reviewRequests
-func (pr PR) IsReviewRequestedFor(login string) bool {
+// IsReviewRequestedFor reports whether the given reviewer is a pending
+// reviewer on the PR. GitHub logins and team slugs are case-insensitive, so
+// the match is case-insensitive. The reviewer may be a user login or a team
+// slug/name.
+func (pr PR) IsReviewRequestedFor(reviewer string) bool {
 	for _, req := range pr.ReviewRequests {
-		if req.Login == login {
+		if req.Login != "" && strings.EqualFold(req.Login, reviewer) {
+			return true
+		}
+		if req.Slug != "" && strings.EqualFold(req.Slug, reviewer) {
+			return true
+		}
+		if req.Name != "" && strings.EqualFold(req.Name, reviewer) {
 			return true
 		}
 	}
@@ -90,14 +103,17 @@ func ResolvePRURL(prURL string) (owner, repo string, pr int, err error) {
 		return "", "", 0, fmt.Errorf("invalid URL: %w", err)
 	}
 
-	// Check if it's a github.com URL
-	if parsed.Host != "github.com" {
+	// Check that it's a github.com URL (tolerate a leading www.)
+	host := strings.TrimPrefix(parsed.Host, "www.")
+	if host != "github.com" {
 		return "", "", 0, fmt.Errorf("invalid GitHub PR URL format: not a github.com URL")
 	}
 
-	// Path should be /owner/repo/pull/number
+	// Path is /owner/repo/pull/number, optionally followed by deep-link
+	// segments such as /files, /commits, or /commits/<sha>. Accept anything
+	// with at least those four leading segments and ignore the rest.
 	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
-	if len(parts) != 4 || parts[2] != "pull" {
+	if len(parts) < 4 || parts[2] != "pull" {
 		return "", "", 0, fmt.Errorf("invalid GitHub PR URL format: expected /owner/repo/pull/number")
 	}
 

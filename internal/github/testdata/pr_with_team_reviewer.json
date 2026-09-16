@@ -1,0 +1,19 @@
+{
+  "state": "OPEN",
+  "isDraft": false,
+  "mergedAt": null,
+  "closedAt": null,
+  "headRefOid": "abcdef1234567890abcdef1234567890abcdef12",
+  "headRefName": "feature/team-review",
+  "reviewRequests": [
+    {
+      "login": "testuser"
+    },
+    {
+      "slug": "backend-reviewers",
+      "name": "Backend Reviewers"
+    }
+  ],
+  "url": "https://github.com/owner/repo/pull/235",
+  "number": 235
+}

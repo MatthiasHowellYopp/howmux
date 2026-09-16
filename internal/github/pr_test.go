@@ -71,6 +71,46 @@ func TestIsReviewRequestedFor(t *testing.T) {
 			want:  false,
 		},
 		{
+			name: "login matches case-insensitively",
+			pr: PR{
+				ReviewRequests: []ReviewRequest{
+					{Login: "matthiashowellyopp"},
+				},
+			},
+			login: "MatthiasHowellYopp",
+			want:  true,
+		},
+		{
+			name: "team request matched by slug",
+			pr: PR{
+				ReviewRequests: []ReviewRequest{
+					{Slug: "reviewers", Name: "Reviewers"},
+				},
+			},
+			login: "reviewers",
+			want:  true,
+		},
+		{
+			name: "team request matched by slug case-insensitively",
+			pr: PR{
+				ReviewRequests: []ReviewRequest{
+					{Slug: "reviewers", Name: "Reviewers"},
+				},
+			},
+			login: "Reviewers",
+			want:  true,
+		},
+		{
+			name: "team request does not match unrelated reviewer",
+			pr: PR{
+				ReviewRequests: []ReviewRequest{
+					{Slug: "reviewers", Name: "Reviewers"},
+				},
+			},
+			login: "testuser",
+			want:  false,
+		},
+		{
 			name:  "empty reviewRequests",
 			pr:    PR{ReviewRequests: []ReviewRequest{}},
 			login: "testuser",
@@ -285,6 +325,41 @@ func TestParsePRView(t *testing.T) {
 	}
 }
 
+// TestParsePRViewTeamReviewer verifies that a team review request (which
+// carries slug/name and no login) parses and is detected, alongside a user
+// reviewer in the same list.
+func TestParsePRViewTeamReviewer(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "pr_with_team_reviewer.json"))
+	if err != nil {
+		t.Fatalf("failed to read fixture: %v", err)
+	}
+
+	pr, err := parsePRView(data)
+	if err != nil {
+		t.Fatalf("parsePRView() error = %v", err)
+	}
+
+	if len(pr.ReviewRequests) != 2 {
+		t.Fatalf("ReviewRequests count = %d, want 2", len(pr.ReviewRequests))
+	}
+
+	// User reviewer detected by login.
+	if !pr.IsReviewRequestedFor("testuser") {
+		t.Error("IsReviewRequestedFor(\"testuser\") = false, want true")
+	}
+	// Team reviewer detected by slug (case-insensitively).
+	if !pr.IsReviewRequestedFor("backend-reviewers") {
+		t.Error("IsReviewRequestedFor(\"backend-reviewers\") = false, want true")
+	}
+	if !pr.IsReviewRequestedFor("Backend-Reviewers") {
+		t.Error("IsReviewRequestedFor(\"Backend-Reviewers\") = false, want true (case-insensitive)")
+	}
+	// Unrelated reviewer not detected.
+	if pr.IsReviewRequestedFor("nonexistent") {
+		t.Error("IsReviewRequestedFor(\"nonexistent\") = true, want false")
+	}
+}
+
 // TestParsePRViewMalformed tests error handling for malformed JSON
 func TestParsePRViewMalformed(t *testing.T) {
 	malformed := []byte(`{"state": "OPEN", "number": `)
@@ -326,6 +401,38 @@ func TestResolvePRURL(t *testing.T) {
 			wantOwner: "my-org",
 			wantRepo:  "my_repo",
 			wantPR:    789,
+			wantErr:   false,
+		},
+		{
+			name:      "deep link - files suffix",
+			url:       "https://github.com/owner/repo/pull/123/files",
+			wantOwner: "owner",
+			wantRepo:  "repo",
+			wantPR:    123,
+			wantErr:   false,
+		},
+		{
+			name:      "deep link - commits suffix",
+			url:       "https://github.com/owner/repo/pull/123/commits",
+			wantOwner: "owner",
+			wantRepo:  "repo",
+			wantPR:    123,
+			wantErr:   false,
+		},
+		{
+			name:      "deep link - specific commit sha",
+			url:       "https://github.com/owner/repo/pull/123/commits/abc123",
+			wantOwner: "owner",
+			wantRepo:  "repo",
+			wantPR:    123,
+			wantErr:   false,
+		},
+		{
+			name:      "www host is tolerated",
+			url:       "https://www.github.com/owner/repo/pull/123",
+			wantOwner: "owner",
+			wantRepo:  "repo",
+			wantPR:    123,
 			wantErr:   false,
 		},
 		{
