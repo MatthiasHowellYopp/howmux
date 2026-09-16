@@ -65,7 +65,6 @@ func (s *Store) Save(rec Record) error {
 	prDir := filepath.Join(s.baseDir, dirName)
 	reviewsSubdir := filepath.Join(prDir, "reviews")
 	recordFile := filepath.Join(prDir, "record.json")
-	tempFile := recordFile + ".tmp"
 
 	// Create directories
 	if err := os.MkdirAll(reviewsSubdir, 0755); err != nil {
@@ -78,14 +77,51 @@ func (s *Store) Save(rec Record) error {
 		return fmt.Errorf("failed to serialize: %w", err)
 	}
 
-	// Atomic write (temp file + rename)
-	if err := os.WriteFile(tempFile, data, 0644); err != nil {
+	// Atomic, crash-durable write: write to a uniquely-named temp file in the
+	// same directory, fsync it, rename over the target, then fsync the parent
+	// directory so the rename itself is durable.
+	//
+	// The temp name is unique (os.CreateTemp) rather than a fixed
+	// "record.json.tmp" so concurrent Saves of the *same* PR cannot clobber
+	// each other's temp file. Same-directory temp keeps the rename atomic
+	// (guaranteed same filesystem).
+	tmp, err := os.CreateTemp(prDir, "record-*.tmp")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	tempFile := tmp.Name()
+
+	// Best-effort cleanup if we bail out before a successful rename.
+	renamed := false
+	defer func() {
+		if !renamed {
+			os.Remove(tempFile)
+		}
+	}()
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
 		return fmt.Errorf("failed to write temp file: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("failed to sync temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("failed to close temp file: %w", err)
 	}
 
 	if err := os.Rename(tempFile, recordFile); err != nil {
-		os.Remove(tempFile)
 		return fmt.Errorf("failed to finalize write: %w", err)
+	}
+	renamed = true
+
+	// Fsync the parent directory so the rename survives a crash. A failure
+	// here is best-effort: the data is already durable and the rename has
+	// succeeded, so don't fail the Save.
+	if dir, err := os.Open(prDir); err == nil {
+		_ = dir.Sync()
+		_ = dir.Close()
 	}
 
 	return nil

@@ -3,6 +3,7 @@ package review
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -105,12 +106,6 @@ func TestStoreList(t *testing.T) {
 	}
 
 	// Verify all records are present
-	foundRepos := make(map[string]bool)
-	for _, rec := range got {
-		key := rec.Repo + "#" + string(rune(rec.PR))
-		foundRepos[key] = true
-	}
-
 	for _, want := range records {
 		found := false
 		for _, got := range got {
@@ -215,15 +210,16 @@ func TestStoreAtomicWrite(t *testing.T) {
 		t.Fatalf("Save failed: %v", err)
 	}
 
-	// Verify no .tmp file remains
+	// Verify no temp file remains (temp names are unique: record-*.tmp)
 	dirName := RecordDir(rec.Repo, rec.PR)
 	prDir := filepath.Join(baseDir, dirName)
-	tmpFile := filepath.Join(prDir, "record.json.tmp")
 
-	if _, err := os.Stat(tmpFile); err == nil {
-		t.Error("temp file still exists after successful Save")
-	} else if !os.IsNotExist(err) {
-		t.Errorf("unexpected error checking for temp file: %v", err)
+	leftovers, err := filepath.Glob(filepath.Join(prDir, "record-*.tmp"))
+	if err != nil {
+		t.Fatalf("glob for temp files failed: %v", err)
+	}
+	if len(leftovers) > 0 {
+		t.Errorf("temp file(s) still exist after successful Save: %v", leftovers)
 	}
 
 	// Verify record.json exists
@@ -303,10 +299,10 @@ func TestStoreConcurrentSaves(t *testing.T) {
 			rec := Record{
 				Repo:       "owner/repo",
 				PR:         prNum,
-				URL:        "https://github.com/owner/repo/pull/" + string(rune(prNum)),
+				URL:        "https://github.com/owner/repo/pull/" + strconv.Itoa(prNum),
 				Status:     StatusWatching,
 				EnrolledAt: time.Now().Format(time.RFC3339),
-				ReviewDir:  ".worktrees/review-owner-repo-" + string(rune(prNum)),
+				ReviewDir:  ".worktrees/review-owner-repo-" + strconv.Itoa(prNum),
 			}
 
 			if err := store.Save(rec); err != nil {
@@ -325,6 +321,61 @@ func TestStoreConcurrentSaves(t *testing.T) {
 
 	if len(records) != numGoroutines {
 		t.Errorf("List returned %d records, want %d", len(records), numGoroutines)
+	}
+}
+
+// TestStoreConcurrentSavesSamePR exercises the case the fixed-temp-name bug
+// affected: many goroutines saving the *same* repo+PR at once. With a fixed
+// temp name they would clobber a shared path; with unique os.CreateTemp names
+// each write is isolated. After the dust settles there must be exactly one
+// intact record and no leftover temp files.
+func TestStoreConcurrentSavesSamePR(t *testing.T) {
+	baseDir := t.TempDir()
+	store := NewStore(baseDir)
+
+	var wg sync.WaitGroup
+	numGoroutines := 20
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			rec := Record{
+				Repo:            "owner/repo",
+				PR:              123,
+				URL:             "https://github.com/owner/repo/pull/123",
+				Status:          StatusWatching,
+				LastReviewedSHA: strconv.Itoa(n),
+				EnrolledAt:      time.Now().Format(time.RFC3339),
+				ReviewDir:       ".worktrees/review-owner-repo-123",
+			}
+			if err := store.Save(rec); err != nil {
+				t.Errorf("Save failed on iteration %d: %v", n, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	// Exactly one record, and it must be a valid (fully-written) record.
+	got, found, err := store.Get("owner/repo", 123)
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if !found {
+		t.Fatal("record not found after concurrent saves")
+	}
+	if err := got.Validate(); err != nil {
+		t.Errorf("record is corrupt after concurrent saves: %v", err)
+	}
+
+	// No leftover temp files.
+	prDir := filepath.Join(baseDir, RecordDir("owner/repo", 123))
+	leftovers, err := filepath.Glob(filepath.Join(prDir, "record-*.tmp"))
+	if err != nil {
+		t.Fatalf("glob failed: %v", err)
+	}
+	if len(leftovers) > 0 {
+		t.Errorf("leftover temp files after concurrent saves: %v", leftovers)
 	}
 }
 
