@@ -38,6 +38,22 @@ type ReviewsTab struct {
 	styles *Styles
 	width  int
 	height int
+
+	// selectedKey identifies the selected PR by identity ("<repo>#<pr>"), not
+	// by row index, so the selection follows its PR across the re-sorts,
+	// prunes, and enrollments that happen between renders (this tab re-reads
+	// and re-sorts the store every View()). "" means nothing selected.
+	selectedKey string
+
+	// lastOrder is the ordered list of row keys from the most recent render,
+	// cached so moveCursor() can step to an adjacent PR without re-reading the
+	// store on every keypress. Refreshed every renderTable().
+	lastOrder []string
+}
+
+// recordKey is the stable identity of a row: "<repo>#<pr>".
+func recordKey(rec review.Record) string {
+	return fmt.Sprintf("%s#%d", rec.Repo, rec.PR)
 }
 
 // NewReviewsTab creates a new reviews tab backed by the given
@@ -163,15 +179,16 @@ func reviewsHeader() string {
 
 // buildTable is the single source of truth for the table body. It writes the
 // header (via headerStyle) and one row per record, styling only the STATUS
-// column via statusStyle. records must already be sorted (via sortedRecords)
-// by the caller, and spoolInfo[i] must correspond to records[i] — buildTable
-// no longer sorts internally, since two independent call sites each calling
-// sortedRecords could otherwise drift relative to a separately-computed
-// spoolInfo slice. Passing identity functions produces the plain-text form
-// used by CopyableContent(); passing the real style functions produces the
-// styled View() form. This keeps the row/header layout and loop in one place
-// so the styled and plain outputs cannot drift.
-func buildTable(records []review.Record, spoolInfo []review.SpoolInfo, headerStyle func(string) string, statusStyle func(review.Status, string) string) string {
+// column via statusStyle and the whole row via rowStyle. records must already
+// be sorted (via sortedRecords) by the caller, and spoolInfo[i] must
+// correspond to records[i] — buildTable no longer sorts internally, since two
+// independent call sites each calling sortedRecords could otherwise drift
+// relative to a separately-computed spoolInfo slice. Passing identity
+// functions produces the plain-text form used by CopyableContent(); passing
+// the real style functions produces the styled View() form. This keeps the
+// row/header layout and loop in one place so the styled and plain outputs
+// cannot drift.
+func buildTable(records []review.Record, spoolInfo []review.SpoolInfo, headerStyle func(string) string, statusStyle func(review.Status, string) string, rowStyle func(int, string) string) string {
 	var b strings.Builder
 	b.WriteString(headerStyle(reviewsHeader()))
 
@@ -198,25 +215,53 @@ func buildTable(records []review.Record, spoolInfo []review.SpoolInfo, headerSty
 
 		decisionStateCol := info.DecisionState
 
-		b.WriteString(fmt.Sprintf("%s %s %s %s %s %s %s", repoCol, prCol, statusCol, lastReviewed, spoolPathCol, verdictCol, decisionStateCol))
+		line := fmt.Sprintf("%s %s %s %s %s %s %s", repoCol, prCol, statusCol, lastReviewed, spoolPathCol, verdictCol, decisionStateCol)
+		b.WriteString(rowStyle(i, line))
 	}
 
 	return b.String()
 }
 
-// renderTable renders the styled table: the header uses styles.Prompt and the
-// STATUS column is colored by styleStatus. Sorts records once and resolves
-// spool info against that sorted slice so index i stays aligned between the
-// two slices passed into buildTable.
+// renderTable renders the styled table: the header uses styles.Prompt, the
+// STATUS column is colored by styleStatus, and the row at rt.selectedIndex is
+// highlighted using styles.AutocompleteSelected (the same selection style used
+// by the autocomplete dropdown). Sorts records once and resolves spool info
+// against that sorted slice so index i stays aligned between the two slices
+// passed into buildTable.
 func (rt *ReviewsTab) renderTable(records []review.Record) string {
 	sorted := sortedRecords(records)
 	spoolInfo := rt.resolveSpoolInfo(sorted)
+
+	// Reconcile selection by identity every render: cache the current order so
+	// keypresses can navigate without I/O, and resolve selectedKey to a row
+	// index. If nothing is selected yet, or the previously-selected PR is gone
+	// (pruned), default to the first row — so a freshly-populated tab shows a
+	// selection immediately and a stale key never highlights the wrong PR.
+	rt.lastOrder = make([]string, len(sorted))
+	selectedIdx := -1
+	for i, rec := range sorted {
+		key := recordKey(rec)
+		rt.lastOrder[i] = key
+		if key == rt.selectedKey {
+			selectedIdx = i
+		}
+	}
+	if selectedIdx == -1 && len(sorted) > 0 {
+		selectedIdx = 0
+		rt.selectedKey = rt.lastOrder[0]
+	}
 
 	headerStyle := identityStyle
 	if rt.styles != nil {
 		headerStyle = func(s string) string { return rt.styles.Prompt.Render(s) }
 	}
-	return buildTable(sorted, spoolInfo, headerStyle, rt.styleStatus)
+	rowStyle := func(i int, line string) string {
+		if rt.styles == nil || i != selectedIdx {
+			return line
+		}
+		return rt.styles.AutocompleteSelected.Render(line)
+	}
+	return buildTable(sorted, spoolInfo, headerStyle, rt.styleStatus, rowStyle)
 }
 
 // resolveSpoolInfo resolves review.SpoolInfo for each record in sorted, in
@@ -298,11 +343,65 @@ func sortedRecords(records []review.Record) []review.Record {
 	return sorted
 }
 
-// Update handles messages for the reviews tab. There is no internal state to
-// update in response to tea.Msg — resize is handled via Resize, and every
-// View() call reads fresh data directly from the store, so no tea.Tick poll
-// loop is needed.
+// moveCursor moves the selection to an adjacent PR by identity, using the
+// order cached at the last render (rt.lastOrder) so it performs no store I/O
+// on a keypress — holding an arrow key does not hammer the filesystem, and
+// the authoritative reconciliation still happens at render time in
+// renderTable(). delta is the step (-1 up, +1 down); the target index is
+// clamped to [0, len-1]. A no-op when no rows have been rendered yet.
+func (rt *ReviewsTab) moveCursor(delta int) {
+	if len(rt.lastOrder) == 0 {
+		rt.selectedKey = ""
+		return
+	}
+
+	// Find the current selection's position in the cached order.
+	cur := -1
+	for i, key := range rt.lastOrder {
+		if key == rt.selectedKey {
+			cur = i
+			break
+		}
+	}
+	if cur == -1 {
+		// Selection not in the current order (or unset): start at the top.
+		rt.selectedKey = rt.lastOrder[0]
+		return
+	}
+
+	next := cur + delta
+	if next < 0 {
+		next = 0
+	}
+	if next > len(rt.lastOrder)-1 {
+		next = len(rt.lastOrder) - 1
+	}
+	rt.selectedKey = rt.lastOrder[next]
+}
+
+// SelectedKey returns the identity ("<repo>#<pr>") of the currently selected
+// PR, or "" if nothing is selected. Exposed for the decision-action work
+// (#85) so it can act on the PR the user actually selected, by identity,
+// rather than a row index that may have shifted under a re-sort.
+func (rt *ReviewsTab) SelectedKey() string {
+	return rt.selectedKey
+}
+
+// Update handles messages for the reviews tab. Arrow-key navigation moves the
+// row cursor (selectedIndex); all other messages are no-ops, matching the
+// tab's existing "no background state to update" design — resize is handled
+// via Resize, and every View() call reads fresh data directly from the store.
 func (rt *ReviewsTab) Update(msg tea.Msg) (Tab, tea.Cmd) {
+	keyMsg, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return rt, nil
+	}
+	switch keyMsg.String() {
+	case "up":
+		rt.moveCursor(-1)
+	case "down":
+		rt.moveCursor(1)
+	}
 	return rt, nil
 }
 
@@ -332,7 +431,8 @@ func (rt *ReviewsTab) CopyableContent() string {
 	spoolInfo := rt.resolveSpoolInfo(sorted)
 
 	plainStatus := func(_ review.Status, text string) string { return text }
-	return buildTable(sorted, spoolInfo, identityStyle, plainStatus)
+	plainRow := func(_ int, line string) string { return line }
+	return buildTable(sorted, spoolInfo, identityStyle, plainStatus, plainRow)
 }
 
 // CaptureFocusState returns the current focus state for the reviews tab. This

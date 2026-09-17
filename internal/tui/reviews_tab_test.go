@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/matthiashowellyopp/howmux/internal/review"
 )
 
@@ -534,5 +536,358 @@ func TestReviewsTabManagerIntegration(t *testing.T) {
 
 	if removed := tm.RemoveTab("reviews"); removed {
 		t.Error("expected RemoveTab to return false for non-closable reviews tab")
+	}
+}
+
+// upKeyMsg and downKeyMsg build the tea.KeyMsg values ReviewsTab.Update()
+// matches on via keyMsg.String() == "up"/"down".
+func upKeyMsg() tea.KeyMsg   { return tea.KeyPressMsg{Code: tea.KeyUp} }
+func downKeyMsg() tea.KeyMsg { return tea.KeyPressMsg{Code: tea.KeyDown} }
+
+// TestReviewsTabMoveCursor covers identity-based navigation over the order
+// cached at the last render: up from the first row stays put, down past the
+// last row clamps, and an empty store clears the selection. moveCursor
+// performs no store I/O — it steps within rt.lastOrder, which a prior render
+// populates.
+func TestReviewsTabMoveCursor(t *testing.T) {
+	seed := func(rt *ReviewsTab) { _ = rt.View() } // populate lastOrder
+
+	t.Run("moveCursor(-1) from first row stays on first", func(t *testing.T) {
+		store := &fakeReviewStore{records: []review.Record{
+			{Repo: "owner/repo-a", PR: 1},
+			{Repo: "owner/repo-b", PR: 2},
+		}}
+		rt := NewReviewsTab("reviews", store, testReviewsStyles())
+		seed(rt) // selection defaults to first row (owner/repo-a#1)
+
+		rt.moveCursor(-1)
+		if rt.SelectedKey() != "owner/repo-a#1" {
+			t.Errorf("SelectedKey() = %q, want owner/repo-a#1", rt.SelectedKey())
+		}
+	})
+
+	t.Run("moveCursor(1) repeatedly clamps at last row", func(t *testing.T) {
+		store := &fakeReviewStore{records: []review.Record{
+			{Repo: "owner/repo-a", PR: 1},
+			{Repo: "owner/repo-b", PR: 2},
+			{Repo: "owner/repo-c", PR: 3},
+		}}
+		rt := NewReviewsTab("reviews", store, testReviewsStyles())
+		seed(rt)
+
+		for i := 0; i < 10; i++ {
+			rt.moveCursor(1)
+		}
+		if rt.SelectedKey() != "owner/repo-c#3" {
+			t.Errorf("SelectedKey() = %q, want owner/repo-c#3 (last row)", rt.SelectedKey())
+		}
+	})
+
+	t.Run("moveCursor clears selection when store has zero records", func(t *testing.T) {
+		for _, delta := range []int{-1, 1} {
+			store := &fakeReviewStore{records: nil}
+			rt := NewReviewsTab("reviews", store, testReviewsStyles())
+			seed(rt) // empty render leaves lastOrder empty
+
+			rt.moveCursor(delta)
+			if rt.SelectedKey() != "" {
+				t.Errorf("delta=%d: SelectedKey() = %q, want empty", delta, rt.SelectedKey())
+			}
+		}
+	})
+}
+
+// TestReviewsTabSelectionFollowsPRAcrossResort is the core identity-selection
+// guarantee (the #83 review's architectural finding): when a new PR enrolls
+// and sorts ABOVE the selected row, the selection must still point at the same
+// PR — not silently re-target to whatever now occupies the old row index.
+func TestReviewsTabSelectionFollowsPRAcrossResort(t *testing.T) {
+	store := &fakeReviewStore{records: []review.Record{
+		{Repo: "foo/bar", PR: 10, Status: review.StatusWatching},
+		{Repo: "foo/baz", PR: 20, Status: review.StatusWatching},
+	}}
+	rt := NewReviewsTab("reviews", store, testReviewsStyles())
+	_ = rt.View() // seed order: [foo/bar#10, foo/baz#20], selection -> foo/bar#10
+
+	// Select the second row (foo/baz#20).
+	rt.moveCursor(1)
+	if rt.SelectedKey() != "foo/baz#20" {
+		t.Fatalf("SelectedKey() = %q, want foo/baz#20", rt.SelectedKey())
+	}
+
+	// A new PR enrolls that sorts to the TOP (aaa/zzz < foo/*).
+	store.records = append(store.records, review.Record{Repo: "aaa/zzz", PR: 1, Status: review.StatusWatching})
+
+	// Re-render: order is now [aaa/zzz#1, foo/bar#10, foo/baz#20]. The
+	// selection must still be foo/baz#20 (now index 2), not the PR that took
+	// its old index.
+	view := rt.View()
+	if rt.SelectedKey() != "foo/baz#20" {
+		t.Errorf("after re-sort SelectedKey() = %q, want foo/baz#20 (selection must follow its PR)", rt.SelectedKey())
+	}
+	// And the highlight must be on the foo/baz#20 row.
+	for _, line := range strings.Split(view, "\n")[1:] { // skip styled header
+		if strings.HasPrefix(line, "\x1b[") && !strings.Contains(line, "foo/baz") {
+			t.Errorf("highlight landed on the wrong row after re-sort: %q", line)
+		}
+	}
+}
+
+// TestReviewsTabEmptyThenPopulatedSelectsFirst verifies that when the tab goes
+// from empty to populated, the first render reconciles the selection to the
+// first row (no keypress required) — the empty→populated gap the #83 review
+// flagged.
+func TestReviewsTabEmptyThenPopulatedSelectsFirst(t *testing.T) {
+	store := &fakeReviewStore{records: nil}
+	rt := NewReviewsTab("reviews", store, testReviewsStyles())
+	_ = rt.View() // empty
+	if rt.SelectedKey() != "" {
+		t.Fatalf("expected empty selection on empty store, got %q", rt.SelectedKey())
+	}
+
+	store.records = []review.Record{{Repo: "owner/repo-a", PR: 1, Status: review.StatusWatching}}
+	_ = rt.View() // now populated
+	if rt.SelectedKey() != "owner/repo-a#1" {
+		t.Errorf("expected first row selected on populate, got %q", rt.SelectedKey())
+	}
+}
+
+// TestReviewsTabBuildTableRowStyleIdentity verifies passing an identity
+// rowStyle (as CopyableContent does) leaves buildTable's output unstyled.
+func TestReviewsTabBuildTableRowStyleIdentity(t *testing.T) {
+	records := []review.Record{
+		{Repo: "owner/repo-a", PR: 1, Status: review.StatusWatching},
+	}
+	spoolInfo := []review.SpoolInfo{{}}
+	plainStatus := func(_ review.Status, text string) string { return text }
+	identityRow := func(_ int, line string) string { return line }
+
+	got := buildTable(records, spoolInfo, identityStyle, plainStatus, identityRow)
+	if strings.Contains(got, "\x1b[") {
+		t.Errorf("expected no ANSI codes with identity rowStyle, got %q", got)
+	}
+	if !strings.Contains(got, "owner/repo-a") {
+		t.Errorf("expected row content present, got %q", got)
+	}
+}
+
+// TestReviewsTabHighlightPresence verifies View() wraps exactly the selected
+// row (by identity) with the AutocompleteSelected style, and no other row.
+func TestReviewsTabHighlightPresence(t *testing.T) {
+	records := []review.Record{
+		{Repo: "owner/repo-a", PR: 1, Status: review.StatusWatching},
+		{Repo: "owner/repo-b", PR: 2, Status: review.StatusDone},
+		{Repo: "owner/repo-c", PR: 3, Status: review.StatusReviewed},
+	}
+	store := &fakeReviewStore{records: records}
+	rt := NewReviewsTab("reviews", store, testReviewsStyles())
+	_ = rt.View()                     // seed order
+	rt.selectedKey = "owner/repo-b#2" // select the middle row by identity
+
+	view := rt.View()
+	lines := strings.Split(view, "\n")
+
+	isRowHighlighted := func(line string) bool { return strings.HasPrefix(line, "\x1b[") }
+
+	for _, line := range lines[1:] { // skip header
+		switch {
+		case strings.Contains(line, "owner/repo-b"):
+			if !isRowHighlighted(line) {
+				t.Errorf("expected selected row (owner/repo-b) to carry the row-highlight wrapper, got %q", line)
+			}
+		case strings.Contains(line, "owner/repo-a"), strings.Contains(line, "owner/repo-c"):
+			if isRowHighlighted(line) {
+				t.Errorf("expected non-selected row to lack the row-highlight wrapper, got %q", line)
+			}
+		}
+	}
+}
+
+// TestReviewsTabHighlightStaleKey verifies that when selectedKey names a PR no
+// longer present, the render reconciles to the first row rather than
+// highlighting nothing or panicking.
+func TestReviewsTabHighlightStaleKey(t *testing.T) {
+	records := []review.Record{
+		{Repo: "owner/repo-a", PR: 1, Status: review.StatusWatching},
+		{Repo: "owner/repo-b", PR: 2, Status: review.StatusDone},
+	}
+	store := &fakeReviewStore{records: records}
+	rt := NewReviewsTab("reviews", store, testReviewsStyles())
+	rt.selectedKey = "gone/away#99" // not present
+
+	view := rt.View()
+	if rt.SelectedKey() != "owner/repo-a#1" {
+		t.Errorf("stale key should reconcile to first row, got %q", rt.SelectedKey())
+	}
+	// First row highlighted, exactly one highlight (skip styled header).
+	highlights := 0
+	for _, line := range strings.Split(view, "\n")[1:] {
+		if strings.HasPrefix(line, "\x1b[") {
+			highlights++
+		}
+	}
+	if highlights != 1 {
+		t.Errorf("expected exactly one highlighted row, got %d", highlights)
+	}
+}
+
+// TestReviewsTabHighlightNilStyles verifies that with styles == nil, View()
+// does not panic and produces entirely unstyled output.
+func TestReviewsTabHighlightNilStyles(t *testing.T) {
+	records := []review.Record{
+		{Repo: "owner/repo-a", PR: 1, Status: review.StatusWatching},
+	}
+	store := &fakeReviewStore{records: records}
+	rt := NewReviewsTab("reviews", store, nil)
+
+	var view string
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("View() panicked with nil styles: %v", r)
+			}
+		}()
+		view = rt.View()
+	}()
+
+	if strings.Contains(view, "\x1b[") {
+		t.Errorf("expected no ANSI codes with nil styles, got %q", view)
+	}
+	if !strings.Contains(view, "owner/repo-a") {
+		t.Errorf("expected row content present, got %q", view)
+	}
+}
+
+// TestReviewsTabUpdateNavigation covers arrow-key navigation through Update().
+func TestReviewsTabUpdateNavigation(t *testing.T) {
+	t.Run("down navigation clamps at last row", func(t *testing.T) {
+		store := &fakeReviewStore{records: []review.Record{
+			{Repo: "owner/repo-a", PR: 1},
+			{Repo: "owner/repo-b", PR: 2},
+			{Repo: "owner/repo-c", PR: 3},
+		}}
+		rt := NewReviewsTab("reviews", store, testReviewsStyles())
+		_ = rt.View() // seed; selection -> owner/repo-a#1
+
+		for i := 0; i < 2; i++ {
+			tab, cmd := rt.Update(downKeyMsg())
+			rt = tab.(*ReviewsTab)
+			if cmd != nil {
+				t.Errorf("expected nil cmd from Update, got %v", cmd)
+			}
+			_ = rt.View() // re-render refreshes lastOrder between presses
+		}
+		if rt.SelectedKey() != "owner/repo-c#3" {
+			t.Errorf("SelectedKey() = %q, want owner/repo-c#3", rt.SelectedKey())
+		}
+
+		tab, _ := rt.Update(downKeyMsg())
+		rt = tab.(*ReviewsTab)
+		if rt.SelectedKey() != "owner/repo-c#3" {
+			t.Errorf("SelectedKey() = %q after extra down, want clamped at owner/repo-c#3", rt.SelectedKey())
+		}
+	})
+
+	t.Run("up navigation clamps at first row", func(t *testing.T) {
+		store := &fakeReviewStore{records: []review.Record{
+			{Repo: "owner/repo-a", PR: 1},
+			{Repo: "owner/repo-b", PR: 2},
+		}}
+		rt := NewReviewsTab("reviews", store, testReviewsStyles())
+		_ = rt.View()
+
+		tab, _ := rt.Update(upKeyMsg())
+		rt = tab.(*ReviewsTab)
+		if rt.SelectedKey() != "owner/repo-a#1" {
+			t.Errorf("SelectedKey() = %q, want owner/repo-a#1 (floor)", rt.SelectedKey())
+		}
+	})
+
+	t.Run("empty store does not panic and disables selection", func(t *testing.T) {
+		store := &fakeReviewStore{records: nil}
+		rt := NewReviewsTab("reviews", store, testReviewsStyles())
+		_ = rt.View()
+
+		for _, keyMsg := range []tea.KeyMsg{upKeyMsg(), downKeyMsg()} {
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						t.Fatalf("Update() panicked on empty store: %v", r)
+					}
+				}()
+				tab, _ := rt.Update(keyMsg)
+				rt = tab.(*ReviewsTab)
+			}()
+			if rt.SelectedKey() != "" {
+				t.Errorf("SelectedKey() = %q, want empty on empty store", rt.SelectedKey())
+			}
+		}
+	})
+
+	t.Run("non-key message and unrecognized key are no-ops", func(t *testing.T) {
+		store := &fakeReviewStore{records: []review.Record{
+			{Repo: "owner/repo-a", PR: 1},
+			{Repo: "owner/repo-b", PR: 2},
+		}}
+		rt := NewReviewsTab("reviews", store, testReviewsStyles())
+		_ = rt.View() // selection -> owner/repo-a#1
+
+		tab, cmd := rt.Update(TickMsg{})
+		rt = tab.(*ReviewsTab)
+		if cmd != nil {
+			t.Error("expected nil cmd for non-key message")
+		}
+		if rt.SelectedKey() != "owner/repo-a#1" {
+			t.Errorf("expected selection unchanged by non-key message, got %q", rt.SelectedKey())
+		}
+
+		tab, _ = rt.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		rt = tab.(*ReviewsTab)
+		if rt.SelectedKey() != "owner/repo-a#1" {
+			t.Errorf("expected selection unchanged by an unrecognized key, got %q", rt.SelectedKey())
+		}
+	})
+}
+
+// TestReviewsTabCursorPersistsAcrossViewCalls verifies the selection is not
+// implicitly reset by View(), Resize(), CaptureFocusState(), or
+// RestoreFocusState() — the "tab regains focus" scenario.
+func TestReviewsTabCursorPersistsAcrossViewCalls(t *testing.T) {
+	records := []review.Record{
+		{Repo: "owner/repo-a", PR: 1, Status: review.StatusWatching},
+		{Repo: "owner/repo-b", PR: 2, Status: review.StatusDone},
+		{Repo: "owner/repo-c", PR: 3, Status: review.StatusReviewed},
+	}
+	store := &fakeReviewStore{records: records}
+	rt := NewReviewsTab("reviews", store, testReviewsStyles())
+	_ = rt.View()
+
+	tab, _ := rt.Update(downKeyMsg())
+	rt = tab.(*ReviewsTab)
+	_ = rt.View()
+	tab, _ = rt.Update(downKeyMsg())
+	rt = tab.(*ReviewsTab)
+	if rt.SelectedKey() != "owner/repo-c#3" {
+		t.Fatalf("SelectedKey() = %q, want owner/repo-c#3 before simulating focus change", rt.SelectedKey())
+	}
+
+	_ = rt.CaptureFocusState()
+	_ = rt.RestoreFocusState(FocusTargetFooter)
+	rt.Resize(80, 24)
+	_ = rt.View()
+
+	if rt.SelectedKey() != "owner/repo-c#3" {
+		t.Errorf("selection was reset to %q, want owner/repo-c#3 across View()/Resize()/focus calls", rt.SelectedKey())
+	}
+
+	view := rt.View()
+	found := false
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, "owner/repo-c") && strings.HasPrefix(line, "\x1b[") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected owner/repo-c to remain highlighted on second View() call, got:\n%s", view)
 	}
 }
