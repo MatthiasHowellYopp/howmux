@@ -26,6 +26,7 @@ import (
 	"github.com/matthiashowellyopp/howmux/internal/github"
 	"github.com/matthiashowellyopp/howmux/internal/hotkey"
 	"github.com/matthiashowellyopp/howmux/internal/logging"
+	"github.com/matthiashowellyopp/howmux/internal/review"
 	"github.com/matthiashowellyopp/howmux/internal/session"
 	"github.com/matthiashowellyopp/howmux/internal/version"
 	"github.com/matthiashowellyopp/howmux/internal/watcher"
@@ -70,6 +71,7 @@ type consoleState struct {
 
 type model struct {
 	watcher          *watcher.Watcher
+	reviewWatcher    *review.Watcher
 	manager          *agent.Manager
 	sessionManager   *session.SessionManager
 	config           *config.Config
@@ -144,8 +146,17 @@ func newModel(w *watcher.Watcher, m *agent.Manager, cfg *config.Config, logFile 
 	// Initialize footer system
 	footerManager := NewFooterManager(styles, cfg, w, autocompleteInput, tabManager)
 
+	// Initialize review watcher
+	reviewStore := review.NewDefaultStore()
+	reviewPollInterval := 5 * time.Minute // Default poll interval
+	if cfg.PollInterval > 0 {
+		reviewPollInterval = cfg.PollInterval
+	}
+	reviewWatcher := review.NewWatcher(reviewStore, reviewPollInterval, 2, cfg.Repo)
+
 	return model{
 		watcher:          w,
+		reviewWatcher:    reviewWatcher,
 		manager:          m,
 		sessionManager:   session.NewSessionManager(),
 		config:           cfg,
@@ -1249,6 +1260,11 @@ func (m model) performExitCleanup() model {
 		m.watcher.Stop()
 	}
 
+	// Stop review watcher
+	if m.reviewWatcher != nil {
+		m.reviewWatcher.Stop()
+	}
+
 	// Deactivate logging if active
 	if m.loggingActive {
 		if err := m.deactivateLogging(); err != nil {
@@ -1435,6 +1451,12 @@ func (m model) executeCommand(input string) (model, tea.Cmd) {
 			args = parts[1:]
 		}
 		return m.handleLog(args)
+	case "review":
+		args := []string{}
+		if len(parts) > 1 {
+			args = parts[1:]
+		}
+		return m.handleReview(args)
 	default:
 		m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("Unknown command: %s", cmd)))
 		return m, nil

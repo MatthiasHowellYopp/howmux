@@ -93,6 +93,13 @@ func NewCommandRegistry(agentManager *agent.Manager) *CommandRegistry {
 		ArgPattern:  "[level] [size]",
 	})
 
+	registry.register(&Command{
+		Name:        "review",
+		Description: "Start PR review workflow",
+		HasArgs:     true,
+		ArgPattern:  "[PR_URL]",
+	})
+
 	// Build flattened command list
 	registry.buildFlattenedCommands()
 

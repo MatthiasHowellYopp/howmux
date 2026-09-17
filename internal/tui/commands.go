@@ -1,8 +1,12 @@
 package tui
 
 import (
+	"context"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,6 +18,7 @@ import (
 	"github.com/matthiashowellyopp/howmux/internal/config"
 	"github.com/matthiashowellyopp/howmux/internal/github"
 	"github.com/matthiashowellyopp/howmux/internal/incidents"
+	"github.com/matthiashowellyopp/howmux/internal/review"
 	"github.com/matthiashowellyopp/howmux/internal/session"
 )
 
@@ -784,4 +789,118 @@ func (m model) handleLog(args []string) (model, tea.Cmd) {
 	m = m.appendActivity(m.styles.Success.Render(fmt.Sprintf("Log viewer opened: level=%s, buffer_size=%d", level, bufferSize)))
 
 	return m, tea.Batch(switchCmd, pollCmd)
+}
+
+func (m model) handleReview(args []string) (model, tea.Cmd) {
+	// Preflight check - blocks before any enrollment/checkout/review
+	kiroDir := filepath.Join(os.Getenv("HOME"), ".kiro")
+	if err := review.CheckReviewAssets(kiroDir); err != nil {
+		m = m.appendActivity(m.styles.Error.Render("PR-review preflight failed:"))
+		m = m.appendActivity(m.styles.Error.Render(err.Error()))
+		return m, nil
+	}
+
+	// Bare form: start/continue the loop over enrolled PRs
+	if len(args) == 0 {
+		if m.reviewWatcher.Running() {
+			m = m.appendActivity(m.styles.Warning.Render("Review watcher already running"))
+			return m, nil
+		}
+		m.reviewWatcher.Start()
+		m = m.appendActivity(m.styles.Success.Render("Review watcher started"))
+		return m, nil
+	}
+
+	// URL form: parse, enroll, checkout, review, and ensure loop running
+	prURL := args[0]
+
+	// Parse PR URL
+	owner, repo, prNum, err := github.ResolvePRURL(prURL)
+	if err != nil {
+		m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("Invalid PR URL: %v", err)))
+		return m, nil
+	}
+	fullRepo := owner + "/" + repo
+
+	// Create store instance (watcher's store is unexported)
+	store := review.NewDefaultStore()
+
+	// Check if already enrolled
+	existing, found, err := store.Get(fullRepo, prNum)
+	if err != nil {
+		m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("Failed to check enrollment: %v", err)))
+		return m, nil
+	}
+
+	if found {
+		m = m.appendActivity(m.styles.Warning.Render(fmt.Sprintf("PR #%d already enrolled (status: %s)", prNum, existing.Status)))
+	} else {
+		// Create new record
+		reviewDirPath := fmt.Sprintf(".worktrees/review-%s-%s-%d", owner, repo, prNum)
+		rec := review.Record{
+			Repo:       fullRepo,
+			PR:         prNum,
+			URL:        prURL,
+			Status:     review.StatusWatching,
+			EnrolledAt: time.Now().Format(time.RFC3339),
+			ReviewDir:  reviewDirPath,
+		}
+		if err := store.Save(rec); err != nil {
+			m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("Failed to enroll PR: %v", err)))
+			return m, nil
+		}
+		m = m.appendActivity(m.styles.Success.Render(fmt.Sprintf("Enrolled PR #%d for review", prNum)))
+	}
+
+	// Fetch PR metadata for head SHA
+	prData, err := github.GetPR(fullRepo, prNum)
+	if err != nil {
+		m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("Failed to fetch PR metadata: %v", err)))
+		return m, nil
+	}
+
+	// Construct repo URL for cloning
+	repoURL := fmt.Sprintf("https://github.com/%s/%s.git", owner, repo)
+
+	// Ensure checkout (warning on failure, not fatal)
+	reviewDirPath := fmt.Sprintf(".worktrees/review-%s-%s-%d", owner, repo, prNum)
+	if err := review.EnsureCheckout(owner, repo, repoURL, prNum, reviewDirPath); err != nil {
+		m = m.appendActivity(m.styles.Warning.Render(fmt.Sprintf("Checkout failed: %v", err)))
+		// Continue anyway - checkout can be retried later
+	} else {
+		m = m.appendActivity(m.styles.Success.Render("PR checkout ready"))
+	}
+
+	// Get the fresh record (may have been updated by checkout)
+	rec, found, err := store.Get(fullRepo, prNum)
+	if err != nil || !found {
+		m = m.appendActivity(m.styles.Error.Render("Failed to retrieve record for review"))
+		return m, nil
+	}
+
+	// Get head SHA (it's a method, not a field)
+	headSHA := prData.HeadSHA()
+
+	// Run review (synchronous for immediate feedback)
+	m = m.appendActivity(m.styles.Activity.Render(fmt.Sprintf("Starting review of PR #%d...", prNum)))
+
+	// Use io.Discard for now since we're in the command handler
+	// TODO: Future enhancement - capture review output to agent tab
+	ctx := context.Background()
+	if err := review.RunReview(ctx, rec, headSHA, store, io.Discard); err != nil {
+		m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("Review failed: %v", err)))
+		return m, nil
+	}
+
+	// Get updated record to access SpoolPath
+	rec, _, _ = store.Get(fullRepo, prNum)
+	m = m.appendActivity(m.styles.Success.Render(fmt.Sprintf("Review complete - spool at %s", rec.SpoolPath)))
+
+	// Ensure loop running
+	if !m.reviewWatcher.Running() {
+		m.reviewWatcher.Start()
+		m = m.appendActivity(m.styles.Success.Render("Review watcher started"))
+	}
+
+	return m, nil
 }
