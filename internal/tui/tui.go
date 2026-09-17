@@ -166,6 +166,7 @@ func newModel(w *watcher.Watcher, m *agent.Manager, cfg *config.Config, logFile 
 		reviewPollInterval = cfg.PollInterval
 	}
 	reviewer, err := ResolveReviewer(cfg)
+	var reviewerNotice string
 	if err != nil {
 		// No override configured and gh login resolution failed: the watcher
 		// would otherwise compare against an identity that can never match a
@@ -174,9 +175,22 @@ func newModel(w *watcher.Watcher, m *agent.Manager, cfg *config.Config, logFile 
 		// rather than crashing the whole TUI over a re-review convenience
 		// feature. Rule 2 (never-reviewed) still works with an empty
 		// reviewer; only re-request detection (Rule 3) is disabled.
+		//
+		// Also surface it where the operator will actually see it: with
+		// console_logging off, a log-only message is invisible and the
+		// degraded behavior ("I re-requested a review and nothing happened")
+		// is indistinguishable from the very bug #89 fixed. Seed a startup
+		// activity line too.
 		logging.Error("failed to resolve reviewer identity for PR review watcher; re-request detection disabled", "error", err)
+		reviewerNotice = "PR-review: could not resolve your GitHub identity — re-request detection is OFF " +
+			"(set 'reviewer:' in .howmux/config.yaml or fix 'gh auth'). New-PR reviews still work."
 	}
 	reviewWatcher := review.NewWatcher(reviewStore, reviewPollInterval, 2, reviewer)
+
+	initialActivity := make([]string, 0)
+	if reviewerNotice != "" {
+		initialActivity = append(initialActivity, styles.Warning.Render(reviewerNotice))
+	}
 
 	return model{
 		watcher:          w,
@@ -192,9 +206,10 @@ func newModel(w *watcher.Watcher, m *agent.Manager, cfg *config.Config, logFile 
 		logReader:        logReader,
 		maxActivityLines: cfg.MaxActivityLines,
 		currentMode:      session.Console,
+		activityLines:    initialActivity,
 		consoleState: &consoleState{
 			inputValue:    "",
-			activityLines: make([]string, 0),
+			activityLines: append([]string(nil), initialActivity...),
 		},
 		tabManager:     tabManager,
 		mainTab:        mainTab,

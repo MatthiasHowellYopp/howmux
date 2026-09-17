@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/matthiashowellyopp/howmux/internal/agent"
 	"github.com/matthiashowellyopp/howmux/internal/config"
 )
 
@@ -67,4 +68,48 @@ func TestResolveReviewer(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestNewModel_ReviewerDegradedNotice verifies the degraded-mode fallback is
+// surfaced where the operator can see it (a startup activity line), not only
+// in logs — otherwise, with console_logging off, disabled re-request
+// detection is indistinguishable from the #89 bug it fixes.
+func TestNewModel_ReviewerDegradedNotice(t *testing.T) {
+	cfg := &config.Config{
+		Repo:        "owner/repo", // no Reviewer override
+		Theme:       "dark",
+		LoadedTheme: &config.Theme{Name: "dark"},
+	}
+	manager := agent.NewManager(cfg)
+
+	hasNotice := func(m model) bool {
+		for _, line := range m.activityLines {
+			if contains(line, "re-request detection is OFF") {
+				return true
+			}
+		}
+		return false
+	}
+
+	t.Run("resolution failure seeds a visible notice", func(t *testing.T) {
+		orig := getCurrentUserFunc
+		getCurrentUserFunc = func() (string, error) { return "", fmt.Errorf("gh: not authenticated") }
+		defer func() { getCurrentUserFunc = orig }()
+
+		m := newModel(nil, manager, cfg, nil, nil, "")
+		if !hasNotice(m) {
+			t.Errorf("expected a degraded-mode notice in activityLines, got %v", m.activityLines)
+		}
+	})
+
+	t.Run("successful resolution seeds no notice", func(t *testing.T) {
+		orig := getCurrentUserFunc
+		getCurrentUserFunc = func() (string, error) { return "some-user", nil }
+		defer func() { getCurrentUserFunc = orig }()
+
+		m := newModel(nil, manager, cfg, nil, nil, "")
+		if hasNotice(m) {
+			t.Errorf("did not expect a degraded-mode notice, got %v", m.activityLines)
+		}
+	})
 }
