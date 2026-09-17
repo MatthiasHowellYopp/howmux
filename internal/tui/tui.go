@@ -39,6 +39,20 @@ type tickMsg struct{}
 
 type planningHotkeyMsg struct{}
 
+// openReviewContentMsg is emitted by ReviewsTab.Update's "enter" case (via a
+// tea.Cmd) to ask the top-level model to open a read-only review content
+// window for the given PR. ReviewsTab has no reference to TabManager (by
+// design, matching every other tab), so it cannot add a tab itself — this
+// message/case pair is the mechanism, matching the existing pattern used
+// for other cross-tab, asynchronous-shaped concerns (reviewStartMsg,
+// reviewCompleteMsg, execDoneMsg). See the "case openReviewContentMsg:" arm
+// in model.Update for the handler.
+type openReviewContentMsg struct {
+	repo      string
+	pr        int
+	spoolPath string
+}
+
 type overlayType int
 
 const (
@@ -418,6 +432,35 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.reviewCancel = nil
 		return m, nil
 
+	case openReviewContentMsg:
+		// Opens (or refocuses) a read-only window showing the full markdown
+		// body of a single PR review's spool file. This message is emitted
+		// by ReviewsTab.Update's "enter" case — ReviewsTab has no reference
+		// to TabManager (by design, matching every other tab), so it cannot
+		// add a tab itself; this handler is the other half of that
+		// tea.Cmd/custom-tea.Msg round trip (see issue #84 design spec).
+		homeDir, err := userHomeDirFunc()
+		if err != nil {
+			homeDir = ""
+		}
+		body, info := review.ReadSpoolBody(msg.spoolPath, homeDir)
+		title := fmt.Sprintf("Review: %s #%d", msg.repo, msg.pr)
+		id := fmt.Sprintf("review-content-%s-%d", msg.repo, msg.pr)
+
+		// Reuse an already-open window for the same PR instead of stacking
+		// duplicate tabs if the user presses Enter again on the same row.
+		if existingIdx := m.tabManager.FindTabByID(id); existingIdx >= 0 {
+			var cmd tea.Cmd
+			m, cmd = m.switchActiveTab(existingIdx)
+			return m, cmd
+		}
+
+		contentTab := NewReviewContentTab(id, title, body, info.Found, m.styles)
+		m.tabManager.AddTab(contentTab)
+		var cmd tea.Cmd
+		m, cmd = m.switchActiveTab(len(m.tabManager.GetTabs()) - 1)
+		return m, cmd
+
 	case focusTransferMsg:
 		// Handle focus coordination between planning tab and footer input.
 		// Route through the single focus helper so the three focus stores
@@ -683,6 +726,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					cmd := m.setPlanningFocus(FocusTargetFooter)
 					return m, cmd
 				}
+			}
+		}
+
+		// Priority handling for closing a review content window: Esc closes
+		// the window and returns focus to the permanent Reviews tab. Since
+		// ReviewsTab.IsClosable() is false, the Reviews tab is guaranteed to
+		// still exist, so the fallback "return m, nil" branch below is
+		// defensive only (mirrors the nil-check style already used
+		// throughout this file, e.g. checkLogTabClosed).
+		if msg.String() == "esc" {
+			activeTab := m.tabManager.GetActiveTab()
+			if activeTab != nil && activeTab.Type() == TabTypeReviewContent {
+				reviewsIdx := m.findReviewsTabIndex()
+				m.tabManager.CloseTab(m.tabManager.GetActiveTabIndex())
+				if reviewsIdx >= 0 {
+					var cmd tea.Cmd
+					m, cmd = m.switchActiveTab(reviewsIdx)
+					return m, cmd
+				}
+				return m, nil
 			}
 		}
 
@@ -1669,6 +1732,20 @@ func (m *model) checkLogTabClosed() {
 			log.Printf("Error deactivating logging after tab close: %v", err)
 		}
 	}
+}
+
+// findReviewsTabIndex returns the index of the permanent Reviews tab. The
+// Reviews tab is always present (IsClosable() == false, added once in
+// newModel), so -1 is only a defensive fallback that should not occur in
+// practice. Used by the ESC handling that closes a review content window
+// and returns focus to the Reviews tab it was opened from.
+func (m model) findReviewsTabIndex() int {
+	for i, tab := range m.tabManager.GetTabs() {
+		if tab.Type() == TabTypeReviews {
+			return i
+		}
+	}
+	return -1
 }
 
 // loggingMultiWriter writes to both ring buffer and file handler

@@ -146,6 +146,20 @@ func (tm *TabManager) FindTabByAgentID(agentID string) int {
 	return -1
 }
 
+// FindTabByID returns the index of the tab with the given ID, or -1 if not
+// found. This is the generic by-ID lookup FindTabByAgentID and FindLogTab
+// don't provide — used by the openReviewContentMsg handler in tui.go to
+// reuse an already-open review content window instead of stacking a
+// duplicate tab when the user presses Enter again on the same row.
+func (tm *TabManager) FindTabByID(id string) int {
+	for i, tab := range tm.tabs {
+		if tab.ID() == id {
+			return i
+		}
+	}
+	return -1
+}
+
 // CloseTab closes tab at index
 func (tm *TabManager) CloseTab(index int) bool {
 	if index < 0 || index >= len(tm.tabs) || !tm.tabs[index].IsClosable() {

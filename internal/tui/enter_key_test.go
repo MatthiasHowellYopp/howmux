@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/matthiashowellyopp/howmux/internal/agent"
 	"github.com/matthiashowellyopp/howmux/internal/config"
+	"github.com/matthiashowellyopp/howmux/internal/review"
 )
 
 // TestEnterKeyCommandExecutionInAllTabs tests that command execution works
@@ -316,6 +317,45 @@ func createTestModelWithTab(t *testing.T, tabType TabType) model {
 				m.tabManager.SetActiveTab(i)
 				break
 			}
+		}
+	case TabTypeReviews:
+		// A Reviews tab is already added by newModel (backed by a real
+		// review.NewDefaultStore()); switch to it. Tests that need seeded
+		// records use createTestModelWithReviewsTab instead, which swaps in
+		// a fakeReviewStore before returning.
+		tabs := m.tabManager.GetTabs()
+		for i, tab := range tabs {
+			if tab.Type() == TabTypeReviews {
+				m.tabManager.SetActiveTab(i)
+				break
+			}
+		}
+	}
+
+	return m
+}
+
+// createTestModelWithReviewsTab is a variant of createTestModelWithTab for
+// tests that need the Reviews tab backed by a fakeReviewStore seeded with
+// specific records (e.g. valid/invalid SpoolPath values pointing at
+// t.TempDir() fixtures), rather than the real review.NewDefaultStore()
+// newModel wires up by default. It replaces the existing "reviews" tab
+// in-place (same ID, same TabManager slot) so findReviewsTabIndex() and
+// FindTabByID("reviews") continue to resolve correctly, and switches to it.
+func createTestModelWithReviewsTab(t *testing.T, records []review.Record) model {
+	t.Helper()
+
+	m := createTestModelWithTab(t, TabTypeReviews)
+
+	store := &fakeReviewStore{records: records}
+	reviewsTab := NewReviewsTab("reviews", store, m.styles)
+
+	tabs := m.tabManager.GetTabs()
+	for i, tab := range tabs {
+		if tab.Type() == TabTypeReviews {
+			tabs[i] = reviewsTab
+			m.tabManager.SetActiveTab(i)
+			break
 		}
 	}
 

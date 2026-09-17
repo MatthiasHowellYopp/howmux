@@ -891,3 +891,81 @@ func TestReviewsTabCursorPersistsAcrossViewCalls(t *testing.T) {
 		t.Errorf("expected owner/repo-c to remain highlighted on second View() call, got:\n%s", view)
 	}
 }
+
+// enterKeyMsg builds the tea.KeyMsg value ReviewsTab.Update() matches on via
+// keyMsg.String() == "enter", matching the existing
+// TestKeyPressMsg{Code: tea.KeyEnter} convention already used in this file's
+// "non-key message and unrecognized key are no-ops" subtest.
+func enterKeyMsg() tea.KeyMsg { return tea.KeyPressMsg{Code: tea.KeyEnter} }
+
+// TestReviewsTabEnterOnSelectedRowReturnsOpenReviewContentCmd verifies that
+// pressing Enter with a row selected returns a non-nil tea.Cmd which, when
+// invoked, produces an openReviewContentMsg carrying the selected record's
+// repo/PR/spoolPath.
+func TestReviewsTabEnterOnSelectedRowReturnsOpenReviewContentCmd(t *testing.T) {
+	records := []review.Record{
+		{Repo: "owner/repo-a", PR: 1, SpoolPath: "/tmp/spool-a.md"},
+		{Repo: "owner/repo-b", PR: 2, SpoolPath: "/tmp/spool-b.md"},
+	}
+	store := &fakeReviewStore{records: records}
+	rt := NewReviewsTab("reviews", store, testReviewsStyles())
+	_ = rt.View() // seed order; selection -> owner/repo-a#1
+
+	tab, _ := rt.Update(downKeyMsg())
+	rt = tab.(*ReviewsTab)
+	_ = rt.View() // reconcile selection to owner/repo-b#2
+	if rt.SelectedKey() != "owner/repo-b#2" {
+		t.Fatalf("SelectedKey() = %q, want owner/repo-b#2 before pressing enter", rt.SelectedKey())
+	}
+
+	tab, cmd := rt.Update(enterKeyMsg())
+	rt = tab.(*ReviewsTab)
+	if cmd == nil {
+		t.Fatal("expected a non-nil tea.Cmd from Update on enter with a selection")
+	}
+
+	msg := cmd()
+	openMsg, ok := msg.(openReviewContentMsg)
+	if !ok {
+		t.Fatalf("expected openReviewContentMsg, got %T (%v)", msg, msg)
+	}
+	if openMsg.repo != "owner/repo-b" || openMsg.pr != 2 || openMsg.spoolPath != "/tmp/spool-b.md" {
+		t.Errorf("openReviewContentMsg = %+v, want repo=owner/repo-b pr=2 spoolPath=/tmp/spool-b.md", openMsg)
+	}
+}
+
+// TestReviewsTabEnterWithNoSelectionReturnsNilCmd verifies that Enter on an
+// empty store (no selection) is a no-op, mirroring the existing
+// "empty store does not panic and disables selection" fixture.
+func TestReviewsTabEnterWithNoSelectionReturnsNilCmd(t *testing.T) {
+	store := &fakeReviewStore{records: nil}
+	rt := NewReviewsTab("reviews", store, testReviewsStyles())
+	_ = rt.View() // seed; selection stays empty
+
+	_, cmd := rt.Update(enterKeyMsg())
+	if cmd != nil {
+		t.Error("expected nil cmd from Update on enter with no selection")
+	}
+}
+
+// TestReviewsTabEnterWithStoreListErrorReturnsNilCmd verifies that a
+// store.List() error at the time Enter is pressed degrades to a no-op —
+// no panic, no message emitted for a PR that can't be re-resolved.
+func TestReviewsTabEnterWithStoreListErrorReturnsNilCmd(t *testing.T) {
+	records := []review.Record{
+		{Repo: "owner/repo-a", PR: 1, SpoolPath: "/tmp/spool-a.md"},
+	}
+	store := &fakeReviewStore{records: records}
+	rt := NewReviewsTab("reviews", store, testReviewsStyles())
+	_ = rt.View() // seed selection while List() still succeeds
+
+	// Now make List() fail, simulating a transient I/O error between render
+	// and the enter keypress.
+	store.records = nil
+	store.listErr = errors.New("disk fell over")
+
+	_, cmd := rt.Update(enterKeyMsg())
+	if cmd != nil {
+		t.Error("expected nil cmd from Update on enter when store.List() errors")
+	}
+}

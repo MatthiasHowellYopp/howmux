@@ -80,6 +80,30 @@ func ParseSpoolFrontMatter(data []byte) map[string]string {
 	return fields
 }
 
+// resolveSpoolPath resolves spoolPath to the file that actually exists on
+// disk, per the pending -> done fallback the external finalize pipeline
+// uses. Returns (path, found, inDoneDir). Shared by ReadSpoolInfo and
+// ReadSpoolBody so the two functions cannot drift on resolution logic.
+//
+//   - spoolPath == ""              -> ("", false, false), zero filesystem calls
+//   - spoolPath exists              -> (spoolPath, true, false)
+//   - derived done/ path exists      -> (donePath, true, true)
+//   - neither exists                 -> ("", false, false)
+func resolveSpoolPath(spoolPath string) (path string, found bool, inDoneDir bool) {
+	if spoolPath == "" {
+		return "", false, false
+	}
+	if _, err := os.Stat(spoolPath); err == nil {
+		return spoolPath, true, false
+	}
+	if donePath := derivePendingToDone(spoolPath); donePath != "" {
+		if _, err := os.Stat(donePath); err == nil {
+			return donePath, true, true
+		}
+	}
+	return "", false, false
+}
+
 // ReadSpoolInfo resolves and reads a spool file for display purposes only.
 // spoolPath is the value from Record.SpoolPath (may be "" if the PR has
 // never been reviewed, or may point at a pending/ path that has since been
@@ -94,7 +118,9 @@ func ParseSpoolFrontMatter(data []byte) map[string]string {
 // match the documented signature and leave room for future relative-path
 // resolution without an API change.
 //
-// Resolution order:
+// Resolution order (delegated to resolveSpoolPath, shared with
+// ReadSpoolBody so the two functions cannot drift on file-resolution
+// logic):
 //  1. If spoolPath == "", return SpoolInfo{Found: false, DecisionState: "no spool"} immediately, with zero filesystem calls.
 //  2. If the file at spoolPath exists, read and parse it from there (pending/ case).
 //  3. Otherwise, derive the done/ counterpart by swapping the "pending" path
@@ -105,22 +131,98 @@ func ParseSpoolFrontMatter(data []byte) map[string]string {
 func ReadSpoolInfo(spoolPath string, homeDir string) SpoolInfo {
 	_ = homeDir // reserved for future relative-path resolution; spoolPath is always absolute today
 
-	if spoolPath == "" {
+	path, found, inDoneDir := resolveSpoolPath(spoolPath)
+	if !found {
 		return SpoolInfo{Found: false, DecisionState: ClassifySpoolState(false, false, "")}
 	}
 
-	if data, err := os.ReadFile(spoolPath); err == nil {
-		return buildSpoolInfo(data, false)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return SpoolInfo{Found: false, DecisionState: ClassifySpoolState(false, false, "")}
 	}
 
-	donePath := derivePendingToDone(spoolPath)
-	if donePath != "" {
-		if data, err := os.ReadFile(donePath); err == nil {
-			return buildSpoolInfo(data, true)
+	return buildSpoolInfo(data, inDoneDir)
+}
+
+// ReadSpoolBody reads and returns the markdown body of a spool file — the
+// content after the closing "---" front-matter fence — along with the same
+// SpoolInfo metadata ReadSpoolInfo returns, so a single call gives a caller
+// (ReviewContentTab) everything needed to render both the window title
+// (Verdict/DecisionState available on info) and the content (body).
+//
+// spoolPath is Record.SpoolPath (may be ""). homeDir is accepted for the
+// same reason and with the same current no-op status as in ReadSpoolInfo
+// (kept for signature symmetry and future relative-path resolution).
+//
+// Resolution mirrors ReadSpoolInfo exactly (via the shared resolveSpoolPath
+// helper): pending path first, then its done/ counterpart.
+//
+// Return contract:
+//   - spoolPath == "" or neither location exists:
+//     body == "", info == SpoolInfo{Found: false, DecisionState: "no spool"}
+//   - file exists but is unreadable (permission error, race where it's
+//     deleted between resolveSpoolPath's Stat and the ReadFile):
+//     body == "", info.Found == false, info.DecisionState == "no spool" —
+//     ReviewContentTab surfaces this as a file-error message (AC6), not a
+//     panic or an empty-but-"found" window
+//   - file exists and is readable: info is populated exactly as
+//     buildSpoolInfo already does (Verdict/Decision/DecisionState from
+//     front-matter), and body is the substring after the closing "---"
+//     line, with a single leading newline (if present, immediately after
+//     the fence) trimmed, and otherwise returned verbatim — no further
+//     markdown processing. If no front-matter fence is present at all
+//     (ParseSpoolFrontMatter's "malformed/legacy" case), body is the
+//     entire raw file content, matching ParseSpoolFrontMatter's own
+//     degrade-gracefully-to-"treat as unstructured" contract.
+func ReadSpoolBody(spoolPath string, homeDir string) (body string, info SpoolInfo) {
+	_ = homeDir
+
+	path, found, inDoneDir := resolveSpoolPath(spoolPath)
+	if !found {
+		return "", SpoolInfo{Found: false, DecisionState: ClassifySpoolState(false, false, "")}
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", SpoolInfo{Found: false, DecisionState: ClassifySpoolState(false, false, "")}
+	}
+
+	info = buildSpoolInfo(data, inDoneDir)
+	body = extractSpoolBody(data)
+	return body, info
+}
+
+// extractSpoolBody returns the text following the closing "---" front-matter
+// fence (see ParseSpoolFrontMatter for the fence-detection contract this
+// mirrors). If the file has no opening "---" as its first non-empty-trimmed
+// line, or no closing "---" is found, the entire raw content is returned
+// unchanged (same degrade-gracefully rule ParseSpoolFrontMatter uses for its
+// map return). A single leading "\n" immediately after the closing fence is
+// trimmed so the body doesn't start with a blank line; nothing else about
+// the body content is altered (no trimming trailing whitespace, no markdown
+// rendering).
+func extractSpoolBody(data []byte) string {
+	raw := string(data)
+	lines := strings.Split(raw, "\n")
+
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
+		return raw
+	}
+
+	closingIdx := -1
+	for i, line := range lines[1:] {
+		if strings.TrimSpace(line) == "---" {
+			closingIdx = i + 1
+			break
 		}
 	}
+	if closingIdx == -1 {
+		return raw
+	}
 
-	return SpoolInfo{Found: false, DecisionState: ClassifySpoolState(false, false, "")}
+	body := strings.Join(lines[closingIdx+1:], "\n")
+	body = strings.TrimPrefix(body, "\n")
+	return body
 }
 
 // buildSpoolInfo parses the given spool file contents and assembles a

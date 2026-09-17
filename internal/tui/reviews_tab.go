@@ -388,9 +388,11 @@ func (rt *ReviewsTab) SelectedKey() string {
 }
 
 // Update handles messages for the reviews tab. Arrow-key navigation moves the
-// row cursor (selectedIndex); all other messages are no-ops, matching the
-// tab's existing "no background state to update" design — resize is handled
-// via Resize, and every View() call reads fresh data directly from the store.
+// row cursor (selectedIndex); Enter opens the selected PR's review content in
+// a new window (see openSelectedReviewCmd); all other messages are no-ops,
+// matching the tab's existing "no background state to update" design —
+// resize is handled via Resize, and every View() call reads fresh data
+// directly from the store.
 func (rt *ReviewsTab) Update(msg tea.Msg) (Tab, tea.Cmd) {
 	keyMsg, ok := msg.(tea.KeyMsg)
 	if !ok {
@@ -401,8 +403,40 @@ func (rt *ReviewsTab) Update(msg tea.Msg) (Tab, tea.Cmd) {
 		rt.moveCursor(-1)
 	case "down":
 		rt.moveCursor(1)
+	case "enter":
+		return rt, rt.openSelectedReviewCmd()
 	}
 	return rt, nil
+}
+
+// openSelectedReviewCmd returns a tea.Cmd that emits openReviewContentMsg
+// for the currently selected PR, or nil if nothing is selected or the store
+// read fails. This tab has no reference to TabManager (by design, matching
+// every other tab), so it cannot open the review content window itself —
+// the tea.Cmd/custom-tea.Msg round trip is the only mechanism available
+// through the Tab interface's Update(tea.Msg) (Tab, tea.Cmd) signature (see
+// openReviewContentMsg in tui.go, where the message is handled).
+//
+// A store-level failure (List() erroring) degrades to a no-op rather than
+// opening a broken window. A spool-level failure (file missing/unreadable)
+// is handled downstream in model.Update via ReadSpoolBody's found==false
+// path, since only the spool path is known here, not whether that file is
+// actually readable.
+func (rt *ReviewsTab) openSelectedReviewCmd() tea.Cmd {
+	if rt.selectedKey == "" {
+		return nil
+	}
+	records, err := rt.store.List()
+	if err != nil {
+		return nil
+	}
+	for _, rec := range records {
+		if recordKey(rec) == rt.selectedKey {
+			msg := openReviewContentMsg{repo: rec.Repo, pr: rec.PR, spoolPath: rec.SpoolPath}
+			return func() tea.Msg { return msg }
+		}
+	}
+	return nil
 }
 
 // Resize updates the tab dimensions
