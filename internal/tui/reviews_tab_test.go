@@ -283,6 +283,33 @@ func TestReviewsTabViewCopyDrift(t *testing.T) {
 	}
 }
 
+// TestReviewsTabViewPadsToHeight verifies View() fills its content area so the
+// footer (composed after it) pins to the bottom, matching MainTab/LogTab. With
+// no height set (height 0) it must not pad, so CopyableContent parity holds.
+func TestReviewsTabViewPadsToHeight(t *testing.T) {
+	store := &fakeReviewStore{records: []review.Record{
+		{Repo: "owner/repo-a", PR: 1, Status: review.StatusWatching},
+	}}
+
+	t.Run("pads to height when set", func(t *testing.T) {
+		rt := NewReviewsTab("reviews", store, testReviewsStyles())
+		rt.Resize(80, 20)
+		got := rt.View()
+		if lines := strings.Count(got, "\n") + 1; lines != 20 {
+			t.Errorf("expected View() padded to 20 lines, got %d", lines)
+		}
+	})
+
+	t.Run("no pad when height unset", func(t *testing.T) {
+		rt := NewReviewsTab("reviews", store, testReviewsStyles())
+		got := rt.View()
+		// header + one row = 2 lines, no trailing blanks
+		if lines := strings.Count(got, "\n") + 1; lines != 2 {
+			t.Errorf("expected 2 unpadded lines, got %d", lines)
+		}
+	})
+}
+
 // TestReviewsTabResizeNoPanic verifies Resize with a variety of dimensions
 // doesn't panic and View() still returns a non-empty string afterward.
 func TestReviewsTabResizeNoPanic(t *testing.T) {
