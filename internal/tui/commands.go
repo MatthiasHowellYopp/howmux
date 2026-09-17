@@ -436,6 +436,11 @@ var userHomeDirFunc = func() (string, error) {
 	return os.UserHomeDir()
 }
 
+// spoolInfoForFunc wraps review.ReadSpoolInfo for testability
+var spoolInfoForFunc = func(spoolPath, homeDir string) review.SpoolInfo {
+	return review.ReadSpoolInfo(spoolPath, homeDir)
+}
+
 func truncate(s string, max int) string {
 	if max <= 0 {
 		return ""

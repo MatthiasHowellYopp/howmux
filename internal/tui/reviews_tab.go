@@ -139,53 +139,105 @@ func (rt *ReviewsTab) renderError(err error) string {
 // reviewsColumnWidths returns the fixed column widths used by both the styled
 // table and the plain-text CopyableContent rebuild, so the two stay aligned.
 const (
-	reviewsColRepo   = 30
-	reviewsColPR     = 8
-	reviewsColStatus = 12
+	reviewsColRepo          = 30
+	reviewsColPR            = 8
+	reviewsColStatus        = 12
+	reviewsColLastReviewed  = 19 // width of "2006-01-02 15:04:05"
+	reviewsColSpoolPath     = 40
+	reviewsColVerdict       = 16
+	reviewsColDecisionState = 20
 )
 
 // reviewsHeader returns the plain (unstyled) header row. Shared by the styled
 // View() (which styles it) and CopyableContent() (which does not).
 func reviewsHeader() string {
-	return fmt.Sprintf("%-*s %-*s %-*s %s",
+	return fmt.Sprintf("%-*s %-*s %-*s %-*s %-*s %-*s %s",
 		reviewsColRepo, "REPO",
 		reviewsColPR, "PR",
 		reviewsColStatus, "STATUS",
-		"LAST REVIEWED")
+		reviewsColLastReviewed, "LAST REVIEWED",
+		reviewsColSpoolPath, "SPOOL PATH",
+		reviewsColVerdict, "VERDICT",
+		"DECISION STATE")
 }
 
 // buildTable is the single source of truth for the table body. It writes the
-// header (via headerStyle) and one row per sorted record, styling only the
-// STATUS column via statusStyle. Passing identity functions produces the
-// plain-text form used by CopyableContent(); passing the real style functions
-// produces the styled View() form. This keeps the row/header layout and loop
-// in one place so the styled and plain outputs cannot drift.
-func buildTable(records []review.Record, headerStyle func(string) string, statusStyle func(review.Status, string) string) string {
-	sorted := sortedRecords(records)
-
+// header (via headerStyle) and one row per record, styling only the STATUS
+// column via statusStyle. records must already be sorted (via sortedRecords)
+// by the caller, and spoolInfo[i] must correspond to records[i] — buildTable
+// no longer sorts internally, since two independent call sites each calling
+// sortedRecords could otherwise drift relative to a separately-computed
+// spoolInfo slice. Passing identity functions produces the plain-text form
+// used by CopyableContent(); passing the real style functions produces the
+// styled View() form. This keeps the row/header layout and loop in one place
+// so the styled and plain outputs cannot drift.
+func buildTable(records []review.Record, spoolInfo []review.SpoolInfo, headerStyle func(string) string, statusStyle func(review.Status, string) string) string {
 	var b strings.Builder
 	b.WriteString(headerStyle(reviewsHeader()))
 
-	for _, rec := range sorted {
+	for i, rec := range records {
 		b.WriteString("\n")
 		repoCol := fmt.Sprintf("%-*s", reviewsColRepo, rec.Repo)
 		prCol := fmt.Sprintf("%-*s", reviewsColPR, fmt.Sprintf("#%d", rec.PR))
 		statusCol := statusStyle(rec.Status, fmt.Sprintf("%-*s", reviewsColStatus, string(rec.Status)))
-		lastReviewed := formatLastReviewedAt(rec.LastReviewedAt)
-		b.WriteString(fmt.Sprintf("%s %s %s %s", repoCol, prCol, statusCol, lastReviewed))
+		lastReviewed := fmt.Sprintf("%-*s", reviewsColLastReviewed, formatLastReviewedAt(rec.LastReviewedAt))
+
+		info := spoolInfo[i]
+
+		spoolPathVal := emptyTimestampPlaceholder
+		if rec.SpoolPath != "" {
+			spoolPathVal = truncate(rec.SpoolPath, reviewsColSpoolPath)
+		}
+		spoolPathCol := fmt.Sprintf("%-*s", reviewsColSpoolPath, spoolPathVal)
+
+		verdictVal := info.Verdict
+		if verdictVal == "" {
+			verdictVal = emptyTimestampPlaceholder
+		}
+		verdictCol := fmt.Sprintf("%-*s", reviewsColVerdict, verdictVal)
+
+		decisionStateCol := info.DecisionState
+
+		b.WriteString(fmt.Sprintf("%s %s %s %s %s %s %s", repoCol, prCol, statusCol, lastReviewed, spoolPathCol, verdictCol, decisionStateCol))
 	}
 
 	return b.String()
 }
 
 // renderTable renders the styled table: the header uses styles.Prompt and the
-// STATUS column is colored by styleStatus.
+// STATUS column is colored by styleStatus. Sorts records once and resolves
+// spool info against that sorted slice so index i stays aligned between the
+// two slices passed into buildTable.
 func (rt *ReviewsTab) renderTable(records []review.Record) string {
+	sorted := sortedRecords(records)
+	spoolInfo := rt.resolveSpoolInfo(sorted)
+
 	headerStyle := identityStyle
 	if rt.styles != nil {
 		headerStyle = func(s string) string { return rt.styles.Prompt.Render(s) }
 	}
-	return buildTable(records, headerStyle, rt.styleStatus)
+	return buildTable(sorted, spoolInfo, headerStyle, rt.styleStatus)
+}
+
+// resolveSpoolInfo resolves review.SpoolInfo for each record in sorted, in
+// order, so index i of the returned slice corresponds to sorted[i]. Calls
+// userHomeDirFunc() once for the whole render rather than once per record. If
+// userHomeDirFunc() errors, "" is used as homeDir for every spoolInfoForFunc
+// call in this render — a home-dir lookup failure degrades spool resolution
+// rather than failing the whole tab render (Record.SpoolPath is always
+// already absolute per validateSpoolPath's contract in runner.go, so an empty
+// homeDir does not prevent resolution).
+func (rt *ReviewsTab) resolveSpoolInfo(sorted []review.Record) []review.SpoolInfo {
+	homeDir, err := userHomeDirFunc()
+	if err != nil {
+		homeDir = ""
+	}
+
+	infos := make([]review.SpoolInfo, len(sorted))
+	for i, rec := range sorted {
+		infos[i] = spoolInfoForFunc(rec.SpoolPath, homeDir)
+	}
+	return infos
 }
 
 // styleStatus colors the STATUS column: StatusDone -> Success, StatusReviewing
@@ -266,8 +318,11 @@ func (rt *ReviewsTab) CopyableContent() string {
 		return reviewsEmptyMessage
 	}
 
+	sorted := sortedRecords(records)
+	spoolInfo := rt.resolveSpoolInfo(sorted)
+
 	plainStatus := func(_ review.Status, text string) string { return text }
-	return buildTable(records, identityStyle, plainStatus)
+	return buildTable(sorted, spoolInfo, identityStyle, plainStatus)
 }
 
 // CaptureFocusState returns the current focus state for the reviews tab. This
