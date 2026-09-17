@@ -1,13 +1,30 @@
 {
   "name": "krew-lead",
   "prompt": "file://./krew-lead-prompt.md",
-  "resources": ["skill://.kiro/skills/krew-lead-conventions/SKILL.md"],
-  "tools": ["read", "shell", "subagent", "todo_list"],
-  "allowedTools": ["read", "shell", "subagent", "todo_list"],
+  "resources": [
+    "skill://.kiro/skills/krew-lead-conventions/SKILL.md"
+  ],
+  "tools": [
+    "read",
+    "shell",
+    "subagent",
+    "todo_list"
+  ],
+  "allowedTools": [
+    "read",
+    "shell",
+    "subagent",
+    "todo_list"
+  ],
   "toolsSettings": {
     "subagent": {
-      "trustedAgents": ["architect", "builder", "validator", "documenter"]
+      "trustedAgents": [
+        "architect",
+        "builder",
+        "validator",
+        "documenter"
+      ]
     }
   },
-  "model": "claude-sonnet-4"
+  "model": "claude-sonnet-5"
 }
