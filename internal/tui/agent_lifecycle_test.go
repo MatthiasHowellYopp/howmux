@@ -18,7 +18,7 @@ func TestAgentLifecycleIntegration(t *testing.T) {
 	manager := agent.NewManager(cfg)
 
 	// Create a mock TUI model
-	model := newModel(nil, manager, cfg, nil, nil)
+	model := newModel(nil, manager, cfg, nil, nil, "")
 
 	// Initially should have only the main tab
 	if len(model.tabManager.GetTabs()) != 1 {

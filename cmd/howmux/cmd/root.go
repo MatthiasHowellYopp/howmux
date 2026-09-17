@@ -48,7 +48,7 @@ var rootCmd = &cobra.Command{
 		defer manager.StopAll()
 		defer w.Stop()
 
-		return tui.Run(w, manager, cfg)
+		return tui.Run(w, manager, cfg, "")
 	},
 }
 

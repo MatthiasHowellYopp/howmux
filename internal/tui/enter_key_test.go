@@ -267,7 +267,7 @@ func createTestModelWithTab(t *testing.T, tabType TabType) model {
 	}
 
 	// Create model using newModel - we need to provide nil for watcher and log files for testing
-	m := newModel(nil, agent.NewManager(cfg), cfg, nil, nil)
+	m := newModel(nil, agent.NewManager(cfg), cfg, nil, nil, "")
 
 	// Create and add the appropriate tab type
 	switch tabType {

@@ -115,6 +115,42 @@ howmux> watch start
 howmux> status
 ```
 
+## PR Review Workflow
+
+Howmux can review pull requests and provide feedback via the PR-review workflow.
+
+### Prerequisites
+
+Before using the review workflow, ensure required kiro assets are symlinked:
+- Review agents in `~/.kiro/agents/`
+- Review skills in `~/.kiro/skills/`
+- `pr_review.py` orchestrator on PATH
+
+See the [ai-resources repository](https://github.com/yourorg/ai-resources) for asset setup.
+
+### Usage
+
+From the REPL:
+```
+howmux> review https://github.com/owner/repo/pull/123
+```
+
+This will:
+1. Run preflight check for required assets
+2. Enroll the PR for tracking
+3. Check out the PR code to `.worktrees/review-owner-repo-123`
+4. Run the review and write results to `~/PR-Review/pending/`
+5. Start the recurring review loop (watches for new commits)
+
+To start the loop over already-enrolled PRs without enrolling a new one:
+```
+howmux> review
+```
+
+The review loop polls enrolled PRs periodically and triggers reviews when:
+- A review is requested from you
+- A new commit is pushed after the last review
+
 ## CLI Usage
 
 ```bash
@@ -126,6 +162,9 @@ howmux init
 
 # Force-update templates (overwrites all files except config.yaml)
 howmux update
+
+# Start PR review workflow
+howmux review https://github.com/owner/repo/pull/123
 
 # Start interactive REPL (default when no arguments)
 howmux
@@ -140,6 +179,7 @@ howmux
 | `status` | Show all agents with issue, status, and elapsed time |
 | `stop <issue>` | Stop the agent working on a specific issue number |
 | `plan [desc]` | Start interactive planning session |
+| `review [PR_URL]` | Start PR review workflow (URL to enroll/review now, bare to start loop) |
 | `theme` | Show current theme |
 | `theme <name>` | Switch to theme |
 | `about` | Show version information and check for updates |

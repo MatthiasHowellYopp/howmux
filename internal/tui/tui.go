@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,6 +27,7 @@ import (
 	"github.com/matthiashowellyopp/howmux/internal/github"
 	"github.com/matthiashowellyopp/howmux/internal/hotkey"
 	"github.com/matthiashowellyopp/howmux/internal/logging"
+	"github.com/matthiashowellyopp/howmux/internal/review"
 	"github.com/matthiashowellyopp/howmux/internal/session"
 	"github.com/matthiashowellyopp/howmux/internal/version"
 	"github.com/matthiashowellyopp/howmux/internal/watcher"
@@ -70,6 +72,7 @@ type consoleState struct {
 
 type model struct {
 	watcher          *watcher.Watcher
+	reviewWatcher    *review.Watcher
 	manager          *agent.Manager
 	sessionManager   *session.SessionManager
 	config           *config.Config
@@ -88,6 +91,10 @@ type model struct {
 	quitting         bool
 	currentMode      session.SessionType
 	consoleState     *consoleState
+	initialCommand   string // Command to auto-execute on startup
+
+	// Context cancellation for async operations (Finding #2)
+	reviewCancel context.CancelFunc // Cancel function for in-flight review
 
 	// Overlay system
 	activeOverlay  overlayType
@@ -124,7 +131,7 @@ type model struct {
 	copyStatusSeq int
 }
 
-func newModel(w *watcher.Watcher, m *agent.Manager, cfg *config.Config, logFile *os.File, logReader *os.File) model {
+func newModel(w *watcher.Watcher, m *agent.Manager, cfg *config.Config, logFile *os.File, logReader *os.File, initialCommand string) model {
 	theme := cfg.LoadedTheme
 	styles := NewStyles(theme)
 
@@ -144,8 +151,17 @@ func newModel(w *watcher.Watcher, m *agent.Manager, cfg *config.Config, logFile 
 	// Initialize footer system
 	footerManager := NewFooterManager(styles, cfg, w, autocompleteInput, tabManager)
 
+	// Initialize review watcher
+	reviewStore := review.NewDefaultStore()
+	reviewPollInterval := 5 * time.Minute // Default poll interval
+	if cfg.PollInterval > 0 {
+		reviewPollInterval = cfg.PollInterval
+	}
+	reviewWatcher := review.NewWatcher(reviewStore, reviewPollInterval, 2, cfg.Repo)
+
 	return model{
 		watcher:          w,
+		reviewWatcher:    reviewWatcher,
 		manager:          m,
 		sessionManager:   session.NewSessionManager(),
 		config:           cfg,
@@ -167,11 +183,34 @@ func newModel(w *watcher.Watcher, m *agent.Manager, cfg *config.Config, logFile 
 		aboutDialog:    NewAboutDialog(),
 		footerManager:  footerManager,
 		tabFocusStates: make(map[string]FocusTarget),
+		initialCommand: initialCommand,
 	}
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(m.input.Focus(), m.tickCmd())
+	cmds := []tea.Cmd{m.input.Focus(), m.tickCmd()}
+
+	// Fix #3: Auto-execute initial command if provided
+	if m.initialCommand != "" {
+		// Parse and execute the initial command
+		parts := strings.Fields(m.initialCommand)
+		if len(parts) > 0 {
+			cmd := parts[0]
+			args := parts[1:]
+
+			// Dispatch the initial command (same logic as the Update loop)
+			switch cmd {
+			case "review":
+				_, reviewCmd := m.handleReview(args)
+				if reviewCmd != nil {
+					cmds = append(cmds, reviewCmd)
+				}
+				// Add other commands as needed
+			}
+		}
+	}
+
+	return tea.Batch(cmds...)
 }
 
 func (m model) tickCmd() tea.Cmd {
@@ -321,6 +360,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m = m.restoreConsoleState()
 		m.input.Focus()
 		return m, tea.Batch(m.input.Focus(), tea.ClearScreen)
+
+	case reviewStartMsg:
+		// Store cancel function for cleanup on exit (Fix #2)
+		m.reviewCancel = msg.cancel
+		return m, nil
+
+	case reviewCompleteMsg:
+		// Handle async review completion
+		if msg.err != nil {
+			m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("Review failed: %v", msg.err)))
+		} else {
+			m = m.appendActivity(m.styles.Success.Render(fmt.Sprintf("Review complete - spool at %s", msg.spoolPath)))
+
+			// Ensure review watcher is running on success
+			if !m.reviewWatcher.Running() {
+				m.reviewWatcher.Start()
+				m = m.appendActivity(m.styles.Success.Render("Review watcher started"))
+			}
+		}
+
+		// Clear the cancel function since the review is done
+		m.reviewCancel = nil
+		return m, nil
 
 	case focusTransferMsg:
 		// Handle focus coordination between planning tab and footer input.
@@ -1239,6 +1301,12 @@ func (m model) tryExit() (model, tea.Cmd) {
 func (m model) performExitCleanup() model {
 	cleanupErrors := []string{}
 
+	// Cancel in-flight review operations (Fix #2)
+	if m.reviewCancel != nil {
+		m.reviewCancel()
+		m.reviewCancel = nil
+	}
+
 	// Stop all agents
 	if m.manager != nil {
 		m.manager.StopAll()
@@ -1247,6 +1315,11 @@ func (m model) performExitCleanup() model {
 	// Stop watcher
 	if m.watcher != nil {
 		m.watcher.Stop()
+	}
+
+	// Stop review watcher
+	if m.reviewWatcher != nil {
+		m.reviewWatcher.Stop()
 	}
 
 	// Deactivate logging if active
@@ -1435,6 +1508,12 @@ func (m model) executeCommand(input string) (model, tea.Cmd) {
 			args = parts[1:]
 		}
 		return m.handleLog(args)
+	case "review":
+		args := []string{}
+		if len(parts) > 1 {
+			args = parts[1:]
+		}
+		return m.handleReview(args)
 	default:
 		m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("Unknown command: %s", cmd)))
 		return m, nil
@@ -1629,7 +1708,7 @@ func mapStringToLogLevel(levelStr string) clog.Level {
 	}
 }
 
-func Run(w *watcher.Watcher, m *agent.Manager, cfg *config.Config) error {
+func Run(w *watcher.Watcher, m *agent.Manager, cfg *config.Config, initialCommand string) error {
 	logPath := ".howmux/kiro-krew.log"
 	if err := os.MkdirAll(".howmux", 0755); err != nil {
 		return fmt.Errorf("failed to create log directory: %w", err)
@@ -1657,7 +1736,7 @@ func Run(w *watcher.Watcher, m *agent.Manager, cfg *config.Config) error {
 	}
 	startPos := info.Size()
 
-	mdl := newModel(w, m, cfg, logFile, logReader)
+	mdl := newModel(w, m, cfg, logFile, logReader, initialCommand)
 	mdl.lastLogPos = startPos
 
 	// Setup cleanup on exit
