@@ -41,7 +41,7 @@ func setupTestModel(t *testing.T) model {
 	}
 	t.Cleanup(func() { logReader.Close() })
 
-	return newModel(w, manager, cfg, logFile, logReader)
+	return newModel(w, manager, cfg, logFile, logReader, "")
 }
 
 func TestSwitchToPlanningModePreservesConsoleState(t *testing.T) {

@@ -31,7 +31,12 @@ The preflight check runs first and fails if required kiro assets are missing.`,
 		}
 
 		// Run preflight check first (matching REPL behavior)
-		kiroDir := filepath.Join(os.Getenv("HOME"), ".kiro")
+		// Fix #4: Use os.UserHomeDir() instead of os.Getenv("HOME") for Windows compatibility
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("failed to get home directory: %w", err)
+		}
+		kiroDir := filepath.Join(homeDir, ".kiro")
 		if err := review.CheckReviewAssets(kiroDir); err != nil {
 			return fmt.Errorf("PR-review preflight failed:\n%w", err)
 		}
@@ -42,13 +47,13 @@ The preflight check runs first and fails if required kiro assets are missing.`,
 		defer manager.StopAll()
 		defer w.Stop()
 
-		// The CLI `review` command enters the TUI with the review command
-		// pre-seeded. The TUI handles the actual review workflow.
-		// This follows the pattern of other CLI commands that delegate to TUI.
+		// Fix #3: Pre-seed the review command into the TUI if PR URL is provided
+		initialCommand := ""
+		if len(args) > 0 {
+			initialCommand = fmt.Sprintf("review %s", args[0])
+		}
 
-		// For now, we'll enter the TUI and let the user execute the review
-		// command manually. A future enhancement could auto-execute it.
-		return tui.Run(w, manager, cfg)
+		return tui.Run(w, manager, cfg, initialCommand)
 	},
 }
 

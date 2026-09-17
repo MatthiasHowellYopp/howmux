@@ -396,9 +396,44 @@ type execDoneMsg struct {
 	err error
 }
 
+type reviewStartMsg struct {
+	cancel context.CancelFunc
+}
+
+type reviewCompleteMsg struct {
+	repo      string
+	pr        int
+	spoolPath string
+	err       error
+	cancel    context.CancelFunc // Cancel function for cleanup
+}
+
 type updateCheckMsg struct {
 	release *github.Release
 	err     error
+}
+
+// Injectable seams for testing the async review workflow
+// These mirror the pattern from internal/review/runner.go
+
+// ensureCheckoutFunc wraps review.EnsureCheckout for testability
+var ensureCheckoutFunc = func(owner, repo, repoURL string, pr int, reviewDir string) error {
+	return review.EnsureCheckout(owner, repo, repoURL, pr, reviewDir)
+}
+
+// getPRFunc wraps github.GetPR for testability
+var getPRFunc = func(repo string, pr int) (github.PR, error) {
+	return github.GetPR(repo, pr)
+}
+
+// runReviewFunc wraps review.RunReview for testability
+var runReviewFunc = func(ctx context.Context, rec review.Record, headSHA string, storeImpl review.StoreInterface, tabWriter io.Writer) error {
+	return review.RunReview(ctx, rec, headSHA, storeImpl, tabWriter)
+}
+
+// userHomeDirFunc wraps os.UserHomeDir for testability
+var userHomeDirFunc = func() (string, error) {
+	return os.UserHomeDir()
 }
 
 func truncate(s string, max int) string {
@@ -793,7 +828,13 @@ func (m model) handleLog(args []string) (model, tea.Cmd) {
 
 func (m model) handleReview(args []string) (model, tea.Cmd) {
 	// Preflight check - blocks before any enrollment/checkout/review
-	kiroDir := filepath.Join(os.Getenv("HOME"), ".kiro")
+	// Fix #4: Use os.UserHomeDir() instead of os.Getenv("HOME") for Windows compatibility
+	homeDir, err := userHomeDirFunc()
+	if err != nil {
+		m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("Failed to get home directory: %v", err)))
+		return m, nil
+	}
+	kiroDir := filepath.Join(homeDir, ".kiro")
 	if err := review.CheckReviewAssets(kiroDir); err != nil {
 		m = m.appendActivity(m.styles.Error.Render("PR-review preflight failed:"))
 		m = m.appendActivity(m.styles.Error.Render(err.Error()))
@@ -822,7 +863,8 @@ func (m model) handleReview(args []string) (model, tea.Cmd) {
 	}
 	fullRepo := owner + "/" + repo
 
-	// Create store instance (watcher's store is unexported)
+	// Create store instance - intentional separate instance from watcher's store
+	// The FS store is stateless so this is harmless; both read/write the same files
 	store := review.NewDefaultStore()
 
 	// Check if already enrolled
@@ -832,12 +874,30 @@ func (m model) handleReview(args []string) (model, tea.Cmd) {
 		return m, nil
 	}
 
+	var rec review.Record
 	if found {
 		m = m.appendActivity(m.styles.Warning.Render(fmt.Sprintf("PR #%d already enrolled (status: %s)", prNum, existing.Status)))
+		rec = existing
+
+		// Fix #5: Re-review bypasses dedup - check if head SHA was already serviced
+		// Fetch PR metadata for head SHA first
+		prData, err := getPRFunc(fullRepo, prNum)
+		if err != nil {
+			m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("Failed to fetch PR metadata: %v", err)))
+			return m, nil
+		}
+		headSHA := prData.HeadSHA()
+
+		// Mirror watcher.go's deduplication logic: if LastServicedRequest == current head SHA, skip
+		if rec.LastServicedRequest == headSHA {
+			m = m.appendActivity(m.styles.Activity.Render(fmt.Sprintf("PR #%d already reviewed at %s - nothing new to review", prNum, headSHA[:8])))
+			return m, nil
+		}
+		// Head SHA has advanced past last serviced one, proceed with review
 	} else {
-		// Create new record
+		// Create new record for enrollment
 		reviewDirPath := fmt.Sprintf(".worktrees/review-%s-%s-%d", owner, repo, prNum)
-		rec := review.Record{
+		rec = review.Record{
 			Repo:       fullRepo,
 			PR:         prNum,
 			URL:        prURL,
@@ -852,55 +912,49 @@ func (m model) handleReview(args []string) (model, tea.Cmd) {
 		m = m.appendActivity(m.styles.Success.Render(fmt.Sprintf("Enrolled PR #%d for review", prNum)))
 	}
 
-	// Fetch PR metadata for head SHA
-	prData, err := github.GetPR(fullRepo, prNum)
-	if err != nil {
-		m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("Failed to fetch PR metadata: %v", err)))
-		return m, nil
-	}
-
-	// Construct repo URL for cloning
-	repoURL := fmt.Sprintf("https://github.com/%s/%s.git", owner, repo)
-
-	// Ensure checkout (warning on failure, not fatal)
-	reviewDirPath := fmt.Sprintf(".worktrees/review-%s-%s-%d", owner, repo, prNum)
-	if err := review.EnsureCheckout(owner, repo, repoURL, prNum, reviewDirPath); err != nil {
-		m = m.appendActivity(m.styles.Warning.Render(fmt.Sprintf("Checkout failed: %v", err)))
-		// Continue anyway - checkout can be retried later
-	} else {
-		m = m.appendActivity(m.styles.Success.Render("PR checkout ready"))
-	}
-
-	// Get the fresh record (may have been updated by checkout)
-	rec, found, err := store.Get(fullRepo, prNum)
-	if err != nil || !found {
-		m = m.appendActivity(m.styles.Error.Render("Failed to retrieve record for review"))
-		return m, nil
-	}
-
-	// Get head SHA (it's a method, not a field)
-	headSHA := prData.HeadSHA()
-
-	// Run review (synchronous for immediate feedback)
+	// Immediate feedback before async dispatch
 	m = m.appendActivity(m.styles.Activity.Render(fmt.Sprintf("Starting review of PR #%d...", prNum)))
 
-	// Use io.Discard for now since we're in the command handler
-	// TODO: Future enhancement - capture review output to agent tab
-	ctx := context.Background()
-	if err := review.RunReview(ctx, rec, headSHA, store, io.Discard); err != nil {
-		m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("Review failed: %v", err)))
-		return m, nil
+	// Fix #1: Run the slow operations (checkout, GetPR, RunReview) asynchronously
+	// Return a tea.Cmd that runs the review work in a goroutine
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Store cancel function in a closure for cleanup
+	reviewCmd := func() tea.Msg {
+		// Fetch PR metadata for head SHA
+		prData, err := getPRFunc(fullRepo, prNum)
+		if err != nil {
+			return reviewCompleteMsg{repo: fullRepo, pr: prNum, err: fmt.Errorf("failed to fetch PR metadata: %w", err), cancel: cancel}
+		}
+		headSHA := prData.HeadSHA()
+
+		// Ensure checkout
+		repoURL := fmt.Sprintf("https://github.com/%s/%s.git", owner, repo)
+		if err := ensureCheckoutFunc(owner, repo, repoURL, prNum, rec.ReviewDir); err != nil {
+			// Warning, not fatal - checkout can be retried later
+			// Continue with review anyway
+		}
+
+		// Get fresh record (may have been updated by checkout)
+		rec, found, err := store.Get(fullRepo, prNum)
+		if err != nil || !found {
+			return reviewCompleteMsg{repo: fullRepo, pr: prNum, err: fmt.Errorf("failed to retrieve record for review"), cancel: cancel}
+		}
+
+		// Run review with cancellable context and io.Discard for progress
+		// Future enhancement: capture output to agent tab
+		if err := runReviewFunc(ctx, rec, headSHA, store, io.Discard); err != nil {
+			return reviewCompleteMsg{repo: fullRepo, pr: prNum, err: fmt.Errorf("review failed: %w", err), cancel: cancel}
+		}
+
+		// Get updated record to access SpoolPath
+		rec, _, _ = store.Get(fullRepo, prNum)
+		return reviewCompleteMsg{repo: fullRepo, pr: prNum, spoolPath: rec.SpoolPath, err: nil, cancel: cancel}
 	}
 
-	// Get updated record to access SpoolPath
-	rec, _, _ = store.Get(fullRepo, prNum)
-	m = m.appendActivity(m.styles.Success.Render(fmt.Sprintf("Review complete - spool at %s", rec.SpoolPath)))
-
-	// Ensure loop running
-	if !m.reviewWatcher.Running() {
-		m.reviewWatcher.Start()
-		m = m.appendActivity(m.styles.Success.Render("Review watcher started"))
-	}
-
-	return m, nil
+	// Return both the start message (to store cancel func) and the review command
+	return m, tea.Batch(
+		func() tea.Msg { return reviewStartMsg{cancel: cancel} },
+		reviewCmd,
+	)
 }

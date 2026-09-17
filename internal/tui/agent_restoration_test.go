@@ -114,7 +114,7 @@ func TestStatusOverlayAgentSelection(t *testing.T) {
 		},
 	}
 	manager := agent.NewManager(cfg)
-	m := newModel(nil, manager, cfg, nil, nil)
+	m := newModel(nil, manager, cfg, nil, nil, "")
 	m.width = 120
 	m.height = 40
 
@@ -181,7 +181,7 @@ func TestStatusRunningAgentsDeterministicOrder(t *testing.T) {
 		},
 	}
 	manager := agent.NewManager(cfg)
-	m := newModel(nil, manager, cfg, nil, nil)
+	m := newModel(nil, manager, cfg, nil, nil, "")
 	m.width = 120
 	m.height = 40
 
