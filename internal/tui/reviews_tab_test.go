@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -250,6 +251,36 @@ func TestReviewsTabCopyableContentEmptyAndError(t *testing.T) {
 			t.Errorf("expected error indicator, got %q", content)
 		}
 	})
+}
+
+// TestReviewsTabViewCopyDrift asserts that View() with its ANSI styling
+// stripped is byte-identical to CopyableContent(). Both now share the same
+// row/header formatters and message strings (buildTable + the reviews*Message
+// constants), so this guards against the two ever drifting apart — the
+// duplication hazard called out in review: edit one and copy would silently
+// show different text than the view.
+func TestReviewsTabViewCopyDrift(t *testing.T) {
+	ansi := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	strip := func(s string) string { return ansi.ReplaceAllString(s, "") }
+
+	cases := map[string]*fakeReviewStore{
+		"empty": {records: nil},
+		"populated": {records: []review.Record{
+			{Repo: "owner/repo-b", PR: 2, Status: review.StatusDone, LastReviewedAt: "2024-03-15T10:30:00Z"},
+			{Repo: "owner/repo-a", PR: 1, Status: review.StatusWatching, LastReviewedAt: ""},
+		}},
+	}
+
+	for name, store := range cases {
+		t.Run(name, func(t *testing.T) {
+			rt := NewReviewsTab("reviews", store, testReviewsStyles())
+			gotView := strip(rt.View())
+			gotCopy := rt.CopyableContent()
+			if gotView != gotCopy {
+				t.Errorf("View() (ANSI-stripped) and CopyableContent() drifted:\nview: %q\ncopy: %q", gotView, gotCopy)
+			}
+		})
+	}
 }
 
 // TestReviewsTabResizeNoPanic verifies Resize with a variety of dimensions

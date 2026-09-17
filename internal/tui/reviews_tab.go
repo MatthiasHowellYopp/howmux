@@ -14,6 +14,19 @@ import (
 // emptyTimestampPlaceholder is rendered in place of an empty LastReviewedAt.
 const emptyTimestampPlaceholder = "—"
 
+// Message strings shared by the styled View() and the plain-text
+// CopyableContent() so the two can never silently diverge (edit once, both
+// use it).
+const (
+	reviewsEmptyMessage = "No watched PRs. Run 'howmux review <PR-URL>' to enroll one."
+	reviewsErrorFormat  = "Failed to read PR review state: %v"
+)
+
+// identityStyle is a no-op style function used by the plain-text
+// (CopyableContent) rebuild so it can share the row/header formatters with the
+// styled View() without applying any ANSI styling.
+func identityStyle(s string) string { return s }
+
 // ReviewsTab implements the Tab interface for displaying the current state of
 // every PR tracked by the review state store (.howmux/reviews/). It is a
 // read-only, on-demand view: View() calls store.List() fresh every time it is
@@ -58,7 +71,18 @@ func (rt *ReviewsTab) IsClosable() bool {
 	return false // There is exactly one reviews view per session, nothing to close back to.
 }
 
-// View returns the tab's rendered content
+// View returns the tab's rendered content.
+//
+// Cost note: View() is invoked by Bubble Tea on every render (keypress,
+// resize, and any tick from other tabs re-renders the whole model), and each
+// call reads the store fresh — os.ReadDir + os.ReadFile + JSON-unmarshal per
+// tracked PR (#67's List), on the event-loop goroutine. This is a deliberate
+// "no cache, no staleness window" tradeoff that is fine for a low-volume,
+// local-FS tab: with a handful of PRs the per-frame I/O is negligible. It has
+// a ceiling, though — with many tracked PRs or a slow/network FS it would add
+// disk latency to every frame. If PR counts ever grow, cache the List() result
+// and invalidate it on a poll tick (or on copy) to drop the per-frame I/O
+// without reintroducing a real staleness window.
 func (rt *ReviewsTab) View() string {
 	records, err := rt.store.List()
 	if err != nil {
@@ -75,17 +99,16 @@ func (rt *ReviewsTab) View() string {
 // renderEmpty renders the placeholder shown when no PRs are currently
 // tracked. This is a distinct, expected steady state — not an error.
 func (rt *ReviewsTab) renderEmpty() string {
-	msg := "No watched PRs. Run 'howmux review <PR-URL>' to enroll one."
 	if rt.styles != nil {
-		return rt.styles.Prompt.Render(msg)
+		return rt.styles.Prompt.Render(reviewsEmptyMessage)
 	}
-	return msg
+	return reviewsEmptyMessage
 }
 
 // renderError renders the message shown when store.List() fails (e.g. a
 // transient I/O error reading the reviews directory).
 func (rt *ReviewsTab) renderError(err error) string {
-	msg := fmt.Sprintf("Failed to read PR review state: %v", err)
+	msg := fmt.Sprintf(reviewsErrorFormat, err)
 	if rt.styles != nil {
 		return rt.styles.Error.Render(msg)
 	}
@@ -100,40 +123,48 @@ const (
 	reviewsColStatus = 12
 )
 
-// renderTable renders one row per record, sorted by repo then PR number for
-// stable, deterministic output across renders.
-func (rt *ReviewsTab) renderTable(records []review.Record) string {
-	sorted := sortedRecords(records)
-
-	var b strings.Builder
-	header := fmt.Sprintf("%-*s %-*s %-*s %s",
+// reviewsHeader returns the plain (unstyled) header row. Shared by the styled
+// View() (which styles it) and CopyableContent() (which does not).
+func reviewsHeader() string {
+	return fmt.Sprintf("%-*s %-*s %-*s %s",
 		reviewsColRepo, "REPO",
 		reviewsColPR, "PR",
 		reviewsColStatus, "STATUS",
 		"LAST REVIEWED")
-	if rt.styles != nil {
-		b.WriteString(rt.styles.Prompt.Render(header))
-	} else {
-		b.WriteString(header)
-	}
+}
+
+// buildTable is the single source of truth for the table body. It writes the
+// header (via headerStyle) and one row per sorted record, styling only the
+// STATUS column via statusStyle. Passing identity functions produces the
+// plain-text form used by CopyableContent(); passing the real style functions
+// produces the styled View() form. This keeps the row/header layout and loop
+// in one place so the styled and plain outputs cannot drift.
+func buildTable(records []review.Record, headerStyle func(string) string, statusStyle func(review.Status, string) string) string {
+	sorted := sortedRecords(records)
+
+	var b strings.Builder
+	b.WriteString(headerStyle(reviewsHeader()))
 
 	for _, rec := range sorted {
 		b.WriteString("\n")
-		b.WriteString(rt.renderRow(rec))
+		repoCol := fmt.Sprintf("%-*s", reviewsColRepo, rec.Repo)
+		prCol := fmt.Sprintf("%-*s", reviewsColPR, fmt.Sprintf("#%d", rec.PR))
+		statusCol := statusStyle(rec.Status, fmt.Sprintf("%-*s", reviewsColStatus, string(rec.Status)))
+		lastReviewed := formatLastReviewedAt(rec.LastReviewedAt)
+		b.WriteString(fmt.Sprintf("%s %s %s %s", repoCol, prCol, statusCol, lastReviewed))
 	}
 
 	return b.String()
 }
 
-// renderRow renders a single styled row.
-func (rt *ReviewsTab) renderRow(rec review.Record) string {
-	prCol := fmt.Sprintf("%-*s", reviewsColPR, fmt.Sprintf("#%d", rec.PR))
-	statusText := fmt.Sprintf("%-*s", reviewsColStatus, string(rec.Status))
-	statusCol := rt.styleStatus(rec.Status, statusText)
-	lastReviewed := formatLastReviewedAt(rec.LastReviewedAt)
-
-	repoCol := fmt.Sprintf("%-*s", reviewsColRepo, rec.Repo)
-	return fmt.Sprintf("%s %s %s %s", repoCol, prCol, statusCol, lastReviewed)
+// renderTable renders the styled table: the header uses styles.Prompt and the
+// STATUS column is colored by styleStatus.
+func (rt *ReviewsTab) renderTable(records []review.Record) string {
+	headerStyle := identityStyle
+	if rt.styles != nil {
+		headerStyle = func(s string) string { return rt.styles.Prompt.Render(s) }
+	}
+	return buildTable(records, headerStyle, rt.styleStatus)
 }
 
 // styleStatus colors the STATUS column: StatusDone -> Success, StatusReviewing
@@ -200,36 +231,22 @@ func (rt *ReviewsTab) Resize(width, height int) {
 
 // CopyableContent independently rebuilds the same rows as unstyled plain
 // text, mirroring LogTab.CopyableContent()'s pattern of a parallel plain-text
-// builder rather than stripping ANSI codes from View().
+// builder rather than stripping ANSI codes from View(). It shares the row/
+// header formatters and message strings with View() (via buildTable and the
+// reviews*Message constants) so the copied text can never drift from what is
+// displayed; it just passes identity style functions so nothing is colored.
 func (rt *ReviewsTab) CopyableContent() string {
 	records, err := rt.store.List()
 	if err != nil {
-		return fmt.Sprintf("Failed to read PR review state: %v", err)
+		return fmt.Sprintf(reviewsErrorFormat, err)
 	}
 
 	if len(records) == 0 {
-		return "No watched PRs. Run 'howmux review <PR-URL>' to enroll one."
+		return reviewsEmptyMessage
 	}
 
-	sorted := sortedRecords(records)
-
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("%-*s %-*s %-*s %s",
-		reviewsColRepo, "REPO",
-		reviewsColPR, "PR",
-		reviewsColStatus, "STATUS",
-		"LAST REVIEWED"))
-
-	for _, rec := range sorted {
-		b.WriteString("\n")
-		prCol := fmt.Sprintf("%-*s", reviewsColPR, fmt.Sprintf("#%d", rec.PR))
-		statusCol := fmt.Sprintf("%-*s", reviewsColStatus, string(rec.Status))
-		repoCol := fmt.Sprintf("%-*s", reviewsColRepo, rec.Repo)
-		lastReviewed := formatLastReviewedAt(rec.LastReviewedAt)
-		b.WriteString(fmt.Sprintf("%s %s %s %s", repoCol, prCol, statusCol, lastReviewed))
-	}
-
-	return b.String()
+	plainStatus := func(_ review.Status, text string) string { return text }
+	return buildTable(records, identityStyle, plainStatus)
 }
 
 // CaptureFocusState returns the current focus state for the reviews tab. This
