@@ -33,11 +33,12 @@ func identityStyle(s string) string { return s }
 // invoked — no caching, no background polling, no tea.Tick loop. This tab
 // never calls Save or Remove on the store.
 type ReviewsTab struct {
-	id     string
-	store  review.StoreInterface
-	styles *Styles
-	width  int
-	height int
+	id            string
+	store         review.StoreInterface
+	styles        *Styles
+	width         int
+	height        int
+	selectedIndex int // index into the sorted, rendered row slice; -1 when no rows exist
 }
 
 // NewReviewsTab creates a new reviews tab backed by the given
@@ -163,15 +164,16 @@ func reviewsHeader() string {
 
 // buildTable is the single source of truth for the table body. It writes the
 // header (via headerStyle) and one row per record, styling only the STATUS
-// column via statusStyle. records must already be sorted (via sortedRecords)
-// by the caller, and spoolInfo[i] must correspond to records[i] — buildTable
-// no longer sorts internally, since two independent call sites each calling
-// sortedRecords could otherwise drift relative to a separately-computed
-// spoolInfo slice. Passing identity functions produces the plain-text form
-// used by CopyableContent(); passing the real style functions produces the
-// styled View() form. This keeps the row/header layout and loop in one place
-// so the styled and plain outputs cannot drift.
-func buildTable(records []review.Record, spoolInfo []review.SpoolInfo, headerStyle func(string) string, statusStyle func(review.Status, string) string) string {
+// column via statusStyle and the whole row via rowStyle. records must already
+// be sorted (via sortedRecords) by the caller, and spoolInfo[i] must
+// correspond to records[i] — buildTable no longer sorts internally, since two
+// independent call sites each calling sortedRecords could otherwise drift
+// relative to a separately-computed spoolInfo slice. Passing identity
+// functions produces the plain-text form used by CopyableContent(); passing
+// the real style functions produces the styled View() form. This keeps the
+// row/header layout and loop in one place so the styled and plain outputs
+// cannot drift.
+func buildTable(records []review.Record, spoolInfo []review.SpoolInfo, headerStyle func(string) string, statusStyle func(review.Status, string) string, rowStyle func(int, string) string) string {
 	var b strings.Builder
 	b.WriteString(headerStyle(reviewsHeader()))
 
@@ -198,16 +200,19 @@ func buildTable(records []review.Record, spoolInfo []review.SpoolInfo, headerSty
 
 		decisionStateCol := info.DecisionState
 
-		b.WriteString(fmt.Sprintf("%s %s %s %s %s %s %s", repoCol, prCol, statusCol, lastReviewed, spoolPathCol, verdictCol, decisionStateCol))
+		line := fmt.Sprintf("%s %s %s %s %s %s %s", repoCol, prCol, statusCol, lastReviewed, spoolPathCol, verdictCol, decisionStateCol)
+		b.WriteString(rowStyle(i, line))
 	}
 
 	return b.String()
 }
 
-// renderTable renders the styled table: the header uses styles.Prompt and the
-// STATUS column is colored by styleStatus. Sorts records once and resolves
-// spool info against that sorted slice so index i stays aligned between the
-// two slices passed into buildTable.
+// renderTable renders the styled table: the header uses styles.Prompt, the
+// STATUS column is colored by styleStatus, and the row at rt.selectedIndex is
+// highlighted using styles.AutocompleteSelected (the same selection style used
+// by the autocomplete dropdown). Sorts records once and resolves spool info
+// against that sorted slice so index i stays aligned between the two slices
+// passed into buildTable.
 func (rt *ReviewsTab) renderTable(records []review.Record) string {
 	sorted := sortedRecords(records)
 	spoolInfo := rt.resolveSpoolInfo(sorted)
@@ -216,7 +221,13 @@ func (rt *ReviewsTab) renderTable(records []review.Record) string {
 	if rt.styles != nil {
 		headerStyle = func(s string) string { return rt.styles.Prompt.Render(s) }
 	}
-	return buildTable(sorted, spoolInfo, headerStyle, rt.styleStatus)
+	rowStyle := func(i int, line string) string {
+		if rt.styles == nil || i != rt.selectedIndex {
+			return line
+		}
+		return rt.styles.AutocompleteSelected.Render(line)
+	}
+	return buildTable(sorted, spoolInfo, headerStyle, rt.styleStatus, rowStyle)
 }
 
 // resolveSpoolInfo resolves review.SpoolInfo for each record in sorted, in
@@ -298,11 +309,52 @@ func sortedRecords(records []review.Record) []review.Record {
 	return sorted
 }
 
-// Update handles messages for the reviews tab. There is no internal state to
-// update in response to tea.Msg — resize is handled via Resize, and every
-// View() call reads fresh data directly from the store, so no tea.Tick poll
-// loop is needed.
+// rowCount returns the number of rows that will be rendered for the current
+// store state, ignoring List() errors (an error means renderError() is shown
+// and there are no selectable rows). Used by Update() to bounds-check cursor
+// movement without duplicating the err/empty branching in View().
+func (rt *ReviewsTab) rowCount() int {
+	records, err := rt.store.List()
+	if err != nil {
+		return 0
+	}
+	return len(records)
+}
+
+// moveCursor shifts selectedIndex by delta, clamped to [0, n-1] where n is the
+// current row count. When there are no rows, selectedIndex is set to -1
+// (disabled) regardless of delta's sign.
+func (rt *ReviewsTab) moveCursor(delta int) {
+	n := rt.rowCount()
+	if n == 0 {
+		rt.selectedIndex = -1
+		return
+	}
+	next := rt.selectedIndex + delta
+	if next < 0 {
+		next = 0
+	}
+	if next > n-1 {
+		next = n - 1
+	}
+	rt.selectedIndex = next
+}
+
+// Update handles messages for the reviews tab. Arrow-key navigation moves the
+// row cursor (selectedIndex); all other messages are no-ops, matching the
+// tab's existing "no background state to update" design — resize is handled
+// via Resize, and every View() call reads fresh data directly from the store.
 func (rt *ReviewsTab) Update(msg tea.Msg) (Tab, tea.Cmd) {
+	keyMsg, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return rt, nil
+	}
+	switch keyMsg.String() {
+	case "up":
+		rt.moveCursor(-1)
+	case "down":
+		rt.moveCursor(1)
+	}
 	return rt, nil
 }
 
@@ -332,7 +384,8 @@ func (rt *ReviewsTab) CopyableContent() string {
 	spoolInfo := rt.resolveSpoolInfo(sorted)
 
 	plainStatus := func(_ review.Status, text string) string { return text }
-	return buildTable(sorted, spoolInfo, identityStyle, plainStatus)
+	plainRow := func(_ int, line string) string { return line }
+	return buildTable(sorted, spoolInfo, identityStyle, plainStatus, plainRow)
 }
 
 // CaptureFocusState returns the current focus state for the reviews tab. This
