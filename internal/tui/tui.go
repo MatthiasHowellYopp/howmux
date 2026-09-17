@@ -165,7 +165,18 @@ func newModel(w *watcher.Watcher, m *agent.Manager, cfg *config.Config, logFile 
 	if cfg.PollInterval > 0 {
 		reviewPollInterval = cfg.PollInterval
 	}
-	reviewWatcher := review.NewWatcher(reviewStore, reviewPollInterval, 2, cfg.Repo)
+	reviewer, err := ResolveReviewer(cfg)
+	if err != nil {
+		// No override configured and gh login resolution failed: the watcher
+		// would otherwise compare against an identity that can never match a
+		// real reviewer (see issue #89). Log clearly and fall back to an
+		// empty reviewer so IsReviewRequestedFor never spuriously matches,
+		// rather than crashing the whole TUI over a re-review convenience
+		// feature. Rule 2 (never-reviewed) still works with an empty
+		// reviewer; only re-request detection (Rule 3) is disabled.
+		logging.Error("failed to resolve reviewer identity for PR review watcher; re-request detection disabled", "error", err)
+	}
+	reviewWatcher := review.NewWatcher(reviewStore, reviewPollInterval, 2, reviewer)
 
 	return model{
 		watcher:          w,
