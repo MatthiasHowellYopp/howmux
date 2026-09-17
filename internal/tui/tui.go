@@ -148,6 +148,14 @@ func newModel(w *watcher.Watcher, m *agent.Manager, cfg *config.Config, logFile 
 	mainTab := NewMainTab()
 	tabManager.AddTab(mainTab)
 
+	// Reviews tab: a permanent, non-closable, read-only view over the PR
+	// review state store. It gets its own review.NewDefaultStore() instance —
+	// separate from the store used by reviewWatcher below — since it only
+	// ever calls List() and shares no mutable state with the watcher's poll
+	// loop (see issue #66 design spec, Concurrency Analysis).
+	reviewsTab := NewReviewsTab("reviews", review.NewDefaultStore(), styles)
+	tabManager.AddTab(reviewsTab)
+
 	// Initialize footer system
 	footerManager := NewFooterManager(styles, cfg, w, autocompleteInput, tabManager)
 
