@@ -372,6 +372,147 @@ func TestReviewsTabUpdateNoOp(t *testing.T) {
 	}
 }
 
+// withFakeSpoolInfoFunc temporarily swaps spoolInfoForFunc for a fake that
+// never touches the real ~/PR-Review directory, restoring the original after
+// the test completes. byPath maps a record's SpoolPath to the SpoolInfo the
+// fake should return for it; any spoolPath not present in the map returns
+// the zero-value SpoolInfo (Found: false, DecisionState: "").
+func withFakeSpoolInfoFunc(t *testing.T, byPath map[string]review.SpoolInfo) {
+	t.Helper()
+	original := spoolInfoForFunc
+	spoolInfoForFunc = func(spoolPath, homeDir string) review.SpoolInfo {
+		if info, ok := byPath[spoolPath]; ok {
+			return info
+		}
+		return review.SpoolInfo{}
+	}
+	t.Cleanup(func() { spoolInfoForFunc = original })
+}
+
+// TestReviewsTabSpoolColumns covers all 5 AC3 decision-state cases end-to-end
+// through View() and CopyableContent(), using the spoolInfoForFunc seam so no
+// real filesystem access under ~/PR-Review happens.
+func TestReviewsTabSpoolColumns(t *testing.T) {
+	cases := []struct {
+		name          string
+		spoolPath     string
+		info          review.SpoolInfo
+		wantVerdict   string
+		wantDecision  string
+		wantSpoolPath string // "" means expect emptyTimestampPlaceholder
+	}{
+		{
+			name:      "pending",
+			spoolPath: "/home/user/PR-Review/pending/owner-repo-1.md",
+			info: review.SpoolInfo{
+				Found:         true,
+				InDoneDir:     false,
+				Verdict:       "APPROVE",
+				Decision:      "",
+				DecisionState: review.ClassifySpoolState(true, false, ""),
+			},
+			wantVerdict:   "APPROVE",
+			wantDecision:  "pending",
+			wantSpoolPath: "/home/user/PR-Review/pending/owner-repo-1.md",
+		},
+		{
+			name:      "decided",
+			spoolPath: "/home/user/PR-Review/pending/owner-repo-2.md",
+			info: review.SpoolInfo{
+				Found:         true,
+				InDoneDir:     false,
+				Verdict:       "REQUEST_CHANGES",
+				Decision:      "post",
+				DecisionState: review.ClassifySpoolState(true, false, "post"),
+			},
+			wantVerdict:   "REQUEST_CHANGES",
+			wantDecision:  "decided: post",
+			wantSpoolPath: "/home/user/PR-Review/pending/owner-repo-2.md",
+		},
+		{
+			name:      "posted",
+			spoolPath: "/home/user/PR-Review/pending/owner-repo-3.md",
+			info: review.SpoolInfo{
+				Found:         true,
+				InDoneDir:     true,
+				Verdict:       "APPROVE",
+				Decision:      "post",
+				DecisionState: review.ClassifySpoolState(true, true, "post"),
+			},
+			wantVerdict:   "APPROVE",
+			wantDecision:  "posted",
+			wantSpoolPath: "/home/user/PR-Review/pending/owner-repo-3.md",
+		},
+		{
+			name:      "no spool - empty SpoolPath",
+			spoolPath: "",
+			info: review.SpoolInfo{
+				Found:         false,
+				DecisionState: review.ClassifySpoolState(false, false, ""),
+			},
+			wantVerdict:   "",
+			wantDecision:  "no spool",
+			wantSpoolPath: "",
+		},
+		{
+			name:      "no spool - nonexistent file",
+			spoolPath: "/home/user/PR-Review/pending/owner-repo-5.md",
+			info: review.SpoolInfo{
+				Found:         false,
+				DecisionState: review.ClassifySpoolState(false, false, ""),
+			},
+			wantVerdict:   "",
+			wantDecision:  "no spool",
+			wantSpoolPath: "/home/user/PR-Review/pending/owner-repo-5.md",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			withFakeSpoolInfoFunc(t, map[string]review.SpoolInfo{
+				tc.spoolPath: tc.info,
+			})
+
+			records := []review.Record{
+				{
+					Repo:           "owner/repo",
+					PR:             1,
+					Status:         review.StatusReviewed,
+					LastReviewedAt: "2024-03-15T10:30:00Z",
+					SpoolPath:      tc.spoolPath,
+				},
+			}
+			store := &fakeReviewStore{records: records}
+			rt := NewReviewsTab("reviews", store, testReviewsStyles())
+
+			view := rt.View()
+			content := rt.CopyableContent()
+
+			for _, rendered := range []string{view, content} {
+				if !strings.Contains(rendered, tc.wantDecision) {
+					t.Errorf("expected decision state %q in rendered output, got %q", tc.wantDecision, rendered)
+				}
+
+				if tc.wantVerdict == "" {
+					if !strings.Contains(rendered, emptyTimestampPlaceholder) {
+						t.Errorf("expected empty-verdict placeholder %q in rendered output, got %q", emptyTimestampPlaceholder, rendered)
+					}
+				} else if !strings.Contains(rendered, tc.wantVerdict) {
+					t.Errorf("expected verdict %q in rendered output, got %q", tc.wantVerdict, rendered)
+				}
+
+				if tc.wantSpoolPath == "" {
+					if !strings.Contains(rendered, emptyTimestampPlaceholder) {
+						t.Errorf("expected empty-spoolpath placeholder %q in rendered output, got %q", emptyTimestampPlaceholder, rendered)
+					}
+				} else if !strings.Contains(rendered, truncate(tc.wantSpoolPath, reviewsColSpoolPath)) {
+					t.Errorf("expected spool path %q in rendered output, got %q", truncate(tc.wantSpoolPath, reviewsColSpoolPath), rendered)
+				}
+			}
+		})
+	}
+}
+
 // TestReviewsTabManagerIntegration verifies the tab can be added to a
 // TabManager and behaves as a permanent, non-closable tab.
 func TestReviewsTabManagerIntegration(t *testing.T) {
