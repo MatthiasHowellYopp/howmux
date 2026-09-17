@@ -85,15 +85,36 @@ func (rt *ReviewsTab) IsClosable() bool {
 // without reintroducing a real staleness window.
 func (rt *ReviewsTab) View() string {
 	records, err := rt.store.List()
-	if err != nil {
-		return rt.renderError(err)
+
+	var content string
+	switch {
+	case err != nil:
+		content = rt.renderError(err)
+	case len(records) == 0:
+		content = rt.renderEmpty()
+	default:
+		content = rt.renderTable(records)
 	}
 
-	if len(records) == 0 {
-		return rt.renderEmpty()
-	}
+	return rt.padToHeight(content)
+}
 
-	return rt.renderTable(records)
+// padToHeight appends blank lines so the rendered content fills the tab's
+// content area (rt.height). Non-main tabs are composed as `content + "\n" +
+// footer` (see renderTabContentWithFooter): MainTab, LogTab and AgentTab all
+// fill the viewport to its height so the footer pins to the bottom of the
+// screen, but ReviewsTab builds a plain string, so without this pad its footer
+// would float up directly under the last row. Only View() pads;
+// CopyableContent() stays unpadded so copied text has no trailing blank lines.
+func (rt *ReviewsTab) padToHeight(content string) string {
+	if rt.height <= 0 {
+		return content
+	}
+	lines := strings.Count(content, "\n") + 1
+	if lines >= rt.height {
+		return content
+	}
+	return content + strings.Repeat("\n", rt.height-lines)
 }
 
 // renderEmpty renders the placeholder shown when no PRs are currently

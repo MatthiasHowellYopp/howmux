@@ -32,6 +32,30 @@ type IssueDetails struct {
 	State string `json:"state"`
 }
 
+// execCurrentUserFunc is the injectable seam for GetCurrentUser, following
+// the same package-level function-var pattern used for other testable gh
+// invocations in this codebase (see internal/review/watcher.go). Tests
+// replace this var; production code leaves it as the real gh invocation.
+var execCurrentUserFunc = func() ([]byte, error) {
+	cmd := exec.Command("gh", "api", "user", "--jq", ".login")
+	return cmd.Output()
+}
+
+// GetCurrentUser resolves the currently authenticated GitHub user's login by
+// running `gh api user --jq .login`. It is routed through execCurrentUserFunc
+// so tests can substitute a fake without invoking the real gh CLI.
+func GetCurrentUser() (string, error) {
+	output, err := execCurrentUserFunc()
+	if err != nil {
+		return "", fmt.Errorf("gh api user failed: %w", err)
+	}
+	login := strings.TrimSpace(string(output))
+	if login == "" {
+		return "", fmt.Errorf("gh api user returned an empty login")
+	}
+	return login, nil
+}
+
 func GetToken() (string, error) {
 	cmd := exec.Command("gh", "auth", "token")
 	output, err := cmd.Output()

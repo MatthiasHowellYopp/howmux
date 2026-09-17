@@ -41,6 +41,7 @@ type Config struct {
 	ConsoleLogging      bool          `yaml:"console_logging"`
 	Theme               string        `yaml:"theme"`
 	EnableCopilotReview bool          `yaml:"enable_copilot_review"`
+	Reviewer            string        `yaml:"reviewer"` // Optional: overrides the resolved gh login used for IsReviewRequestedFor matching
 	Session             SessionConfig `yaml:"session"`
 	Sandbox             SandboxConfig `yaml:"sandbox"`
 	Logging             LoggingConfig `yaml:"logging"`
