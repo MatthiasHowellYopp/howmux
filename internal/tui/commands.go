@@ -539,6 +539,8 @@ func getTabTypeName(tabType TabType) string {
 		return "Planning"
 	case TabTypeLog:
 		return "Log Viewer"
+	case TabTypeReviews:
+		return "Reviews"
 	default:
 		return "Unknown"
 	}

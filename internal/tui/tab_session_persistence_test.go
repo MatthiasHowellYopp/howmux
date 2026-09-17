@@ -453,7 +453,7 @@ func TestMultipleRapidModeSwitchesWithContinuousData(t *testing.T) {
 
 	// Verify tabs are still present and functional
 	tabs := m.tabManager.GetTabs()
-	expectedTabCount := 1 + len(agents) // Main + agent tabs
+	expectedTabCount := 2 + len(agents) // Main + Reviews + agent tabs
 	if len(tabs) != expectedTabCount {
 		t.Errorf("Tab count changed during rapid switching: expected %d, got %d",
 			expectedTabCount, len(tabs))

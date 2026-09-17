@@ -20,17 +20,17 @@ func TestAgentLifecycleIntegration(t *testing.T) {
 	// Create a mock TUI model
 	model := newModel(nil, manager, cfg, nil, nil, "")
 
-	// Initially should have only the main tab
-	if len(model.tabManager.GetTabs()) != 1 {
-		t.Errorf("Expected 1 tab initially, got %d", len(model.tabManager.GetTabs()))
+	// Initially should have the main tab and the reviews tab
+	if len(model.tabManager.GetTabs()) != 2 {
+		t.Errorf("Expected 2 tabs initially, got %d", len(model.tabManager.GetTabs()))
 	}
 
 	// Test that updateAgentTabs doesn't crash with empty agent list
 	model = model.updateAgentTabs()
 
-	// Should still have only main tab
-	if len(model.tabManager.GetTabs()) != 1 {
-		t.Errorf("Expected 1 tab after updateAgentTabs, got %d", len(model.tabManager.GetTabs()))
+	// Should still have only main + reviews tabs
+	if len(model.tabManager.GetTabs()) != 2 {
+		t.Errorf("Expected 2 tabs after updateAgentTabs, got %d", len(model.tabManager.GetTabs()))
 	}
 
 	// Verify knownAgents is initialized
@@ -42,8 +42,8 @@ func TestAgentLifecycleIntegration(t *testing.T) {
 	agentTab := NewAgentTab("test-agent-123", manager, model.styles)
 	model.tabManager.AddTab(agentTab)
 
-	if len(model.tabManager.GetTabs()) != 2 {
-		t.Errorf("Expected 2 tabs after manual tab addition, got %d", len(model.tabManager.GetTabs()))
+	if len(model.tabManager.GetTabs()) != 3 {
+		t.Errorf("Expected 3 tabs after manual tab addition, got %d", len(model.tabManager.GetTabs()))
 	}
 
 	// Test tab removal
@@ -52,7 +52,7 @@ func TestAgentLifecycleIntegration(t *testing.T) {
 		t.Error("Failed to remove agent tab manually")
 	}
 
-	if len(model.tabManager.GetTabs()) != 1 {
-		t.Errorf("Expected 1 tab after manual removal, got %d", len(model.tabManager.GetTabs()))
+	if len(model.tabManager.GetTabs()) != 2 {
+		t.Errorf("Expected 2 tabs after manual removal, got %d", len(model.tabManager.GetTabs()))
 	}
 }

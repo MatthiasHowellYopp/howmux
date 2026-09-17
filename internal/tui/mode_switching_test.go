@@ -142,13 +142,13 @@ func TestSwitchToConsolePreservesAgentOutput(t *testing.T) {
 
 	// Verify agent tab was created and has output
 	tabs := m.tabManager.GetTabs()
-	if len(tabs) != 2 { // Main + Agent tab
-		t.Fatalf("Expected 2 tabs, got %d", len(tabs))
+	if len(tabs) != 3 { // Main + Reviews + Agent tab
+		t.Fatalf("Expected 3 tabs, got %d", len(tabs))
 	}
 
-	agentTab := tabs[1]
+	agentTab := tabs[2]
 	if agentTab.Type() != TabTypeAgent {
-		t.Error("Second tab should be an agent tab")
+		t.Error("Third tab should be an agent tab")
 	}
 
 	// Switch to planning mode first
@@ -223,16 +223,16 @@ func TestTabStatePreservedDuringModeTransitions(t *testing.T) {
 	m.tabManager.RestoreOrFocusAgentTab(testAgent2.ID, m.manager, m.styles)
 
 	// Set active tab to agent tab
-	m.tabManager.SetActiveTab(2) // Third tab (second agent)
+	m.tabManager.SetActiveTab(3) // Fourth tab (second agent)
 	initialActiveIndex := m.tabManager.GetActiveTabIndex()
 	initialTabCount := len(m.tabManager.GetTabs())
 
 	// Verify initial state
-	if initialTabCount != 3 { // Main + 2 agent tabs
-		t.Fatalf("Expected 3 tabs initially, got %d", initialTabCount)
+	if initialTabCount != 4 { // Main + Reviews + 2 agent tabs
+		t.Fatalf("Expected 4 tabs initially, got %d", initialTabCount)
 	}
-	if initialActiveIndex != 2 {
-		t.Fatalf("Expected active tab index 2, got %d", initialActiveIndex)
+	if initialActiveIndex != 3 {
+		t.Fatalf("Expected active tab index 3, got %d", initialActiveIndex)
 	}
 
 	// Mock planning session
