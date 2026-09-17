@@ -167,18 +167,35 @@ func derivePendingToDone(spoolPath string) string {
 // ClassifySpoolState implements the AC3 decision-state mapping as a pure
 // function so it is unit-testable independent of any filesystem access.
 //
-// Precedence order: found, then inDoneDir, then decision.
-//   - found=false                                        -> "no spool"
-//   - found=true, inDoneDir=true                          -> "posted" (regardless of decision)
-//   - found=true, inDoneDir=false, decision==""           -> "pending"
-//   - found=true, inDoneDir=false, decision!=""           -> "decided: <decision>" (verbatim, including unrecognized values)
+// Precedence order: found, then inDoneDir, then decision. The decision is
+// matched case-insensitively (real archived files carry e.g. "POST").
+//   - found=false                                    -> "no spool"
+//   - found=true, inDoneDir=false, decision==""       -> "pending"
+//   - found=true, inDoneDir=false, decision!=""       -> "decided: <decision>" (verbatim)
+//   - found=true, inDoneDir=true: the file was drained to done/ — surface WHY,
+//     not a blanket "posted". The finalize pipeline archives discard/revise/
+//     rereview to done/ as well as post, so collapsing all of them to
+//     "posted" would mislabel a discarded review as posted (see #82 review):
+//   - decision post     -> "posted"
+//   - decision discard  -> "discarded"
+//   - other non-empty   -> "done: <decision>" (e.g. revise/rereview/unknown)
+//   - empty             -> "done"
 func ClassifySpoolState(found bool, inDoneDir bool, decision string) string {
 	if !found {
 		return "no spool"
 	}
 
 	if inDoneDir {
-		return "posted"
+		switch strings.ToLower(strings.TrimSpace(decision)) {
+		case "post":
+			return "posted"
+		case "discard":
+			return "discarded"
+		case "":
+			return "done"
+		default:
+			return "done: " + decision
+		}
 	}
 
 	if decision == "" {

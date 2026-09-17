@@ -227,6 +227,16 @@ func (rt *ReviewsTab) renderTable(records []review.Record) string {
 // rather than failing the whole tab render (Record.SpoolPath is always
 // already absolute per validateSpoolPath's contract in runner.go, so an empty
 // homeDir does not prevent resolution).
+//
+// Cost note (extends the View() I/O note): this runs inside View() — invoked
+// every render (keypress/resize/tick) — and adds, per record, one spool
+// os.ReadFile, plus a second done/ read for any archived PR whose pending/
+// path no longer exists (that miss-then-fallback doubles reads for posted
+// PRs). Combined with the store.List() scan already in View(), a render is
+// ~1 dir scan + N record reads + up to 2N spool reads. This is the deliberate
+// no-cache/no-staleness tradeoff, fine for a low-volume local-FS tab; if PR
+// counts grow, a per-tick cache (invalidated on the same cadence) would remove
+// the per-frame I/O without a real staleness window.
 func (rt *ReviewsTab) resolveSpoolInfo(sorted []review.Record) []review.SpoolInfo {
 	homeDir, err := userHomeDirFunc()
 	if err != nil {

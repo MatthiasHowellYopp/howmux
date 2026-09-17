@@ -158,18 +158,39 @@ func TestClassifySpoolState(t *testing.T) {
 			want:      "no spool",
 		},
 		{
-			name:      "found in done dir with empty decision -> posted",
+			name:      "found in done dir with decision=post -> posted",
 			found:     true,
 			inDoneDir: true,
-			decision:  "",
+			decision:  "post",
 			want:      "posted",
 		},
 		{
-			name:      "found in done dir with garbage decision -> posted (inDoneDir takes priority)",
+			name:      "found in done dir with decision=POST (case-insensitive) -> posted",
 			found:     true,
 			inDoneDir: true,
-			decision:  "garbage",
+			decision:  "POST",
 			want:      "posted",
+		},
+		{
+			name:      "found in done dir with decision=discard -> discarded (not posted)",
+			found:     true,
+			inDoneDir: true,
+			decision:  "discard",
+			want:      "discarded",
+		},
+		{
+			name:      "found in done dir with empty decision -> done",
+			found:     true,
+			inDoneDir: true,
+			decision:  "",
+			want:      "done",
+		},
+		{
+			name:      "found in done dir with revise decision -> done: revise",
+			found:     true,
+			inDoneDir: true,
+			decision:  "revise",
+			want:      "done: revise",
 		},
 		{
 			name:      "found in pending with blank decision -> pending",
@@ -304,7 +325,8 @@ func TestReadSpoolInfoResolvesToDoneWhenMoved(t *testing.T) {
 	if got.Verdict != "REQUEST_CHANGES" {
 		t.Errorf("Verdict = %q, want %q", got.Verdict, "REQUEST_CHANGES")
 	}
-	// Being in done/ means "posted" regardless of the decision value.
+	// In done/ with decision "post" -> "posted". (Other decisions map to
+	// "discarded" / "done: <decision>"; see TestClassifySpoolState.)
 	if got.DecisionState != "posted" {
 		t.Errorf("DecisionState = %q, want %q", got.DecisionState, "posted")
 	}
