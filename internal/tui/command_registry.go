@@ -106,6 +106,11 @@ func NewCommandRegistry(agentManager *agent.Manager) *CommandRegistry {
 		Subcommands: []string{"post", "revise", "rereview", "discard"},
 	})
 
+	registry.register(&Command{
+		Name:        "finalize",
+		Description: "Preview and post decided PR reviews via finalize-reviews.sh (dry-run, then confirm)",
+	})
+
 	// Build flattened command list
 	registry.buildFlattenedCommands()
 

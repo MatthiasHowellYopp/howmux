@@ -999,6 +999,58 @@ func (m model) handleDecide(args []string) (model, tea.Cmd) {
 	return m, nil
 }
 
+// handleFinalize implements the "finalize" REPL command (bare form only —
+// this issue does not add a "finalize <PR>" per-review form, since
+// finalize-reviews.sh itself has no such mode; it always drains the whole
+// spool). It guards against re-entrancy, resets the shared OutputCapture
+// for a fresh run, opens (or reuses) the live preview window, transitions
+// m.finalizeState to finalizeDryRunRunning, and kicks off the dry-run
+// subprocess plus the output poll loop in a single batched tea.Cmd — see
+// issue #87's design spec, "Triggering a run".
+func (m model) handleFinalize(args []string) (model, tea.Cmd) {
+	if m.finalizeState != finalizeIdle {
+		m = m.appendActivity(m.styles.Warning.Render("Finalize already in progress"))
+		return m, nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.finalizeCancel = cancel
+	m.finalizeCapture = agent.NewOutputCapture(finalizeCaptureBufferSize)
+	m.finalizeLastGen = 0
+
+	var windowCmd tea.Cmd
+	m, windowCmd = m.openFinalizePreviewWindow()
+
+	m.finalizeState = finalizeDryRunRunning
+	m = m.appendActivity(m.styles.Activity.Render("Running finalize-reviews.sh --dry-run..."))
+
+	return m, tea.Batch(
+		windowCmd,
+		runFinalizeCmd(ctx, true, m.finalizeCapture, cancel),
+		pollFinalizeOutputCmd(),
+	)
+}
+
+// openFinalizePreviewWindow opens (or reuses, by the fixed tab ID
+// finalizeWindowTabID) the live-capture ReviewContentTab window that shows
+// finalize-reviews.sh's streamed output, matching the reuse-by-fixed-ID
+// pattern openReviewContentMsg's handler in tui.go already uses for #84's
+// windows. It records the tab's ID on m.finalizeWindowTabID so the
+// finalizeTickMsg handler can look it up regardless of which tab is
+// currently active.
+func (m model) openFinalizePreviewWindow() (model, tea.Cmd) {
+	const id = "finalize-preview"
+	if existingIdx := m.tabManager.FindTabByID(id); existingIdx >= 0 {
+		m.finalizeWindowTabID = id
+		return m.switchActiveTab(existingIdx)
+	}
+
+	contentTab := NewLiveReviewContentTab(id, "Finalize Preview", m.finalizeCapture, m.styles)
+	m.tabManager.AddTab(contentTab)
+	m.finalizeWindowTabID = id
+	return m.switchActiveTab(len(m.tabManager.GetTabs()) - 1)
+}
+
 func (m model) handleReview(args []string) (model, tea.Cmd) {
 	// Preflight check - blocks before any enrollment/checkout/review
 	// Fix #4: Use os.UserHomeDir() instead of os.Getenv("HOME") for Windows compatibility

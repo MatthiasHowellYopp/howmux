@@ -151,6 +151,10 @@ The review loop polls enrolled PRs periodically and triggers reviews when:
 - A review is requested from you
 - A new commit is pushed after the last review
 
+### Finalizing Reviews
+
+Once you've set a decision on a review with `decide` (`post`, `revise`, `rereview`, or `discard`), run `finalize` to actually drain the review spool. `finalize` shells out to `finalize-reviews.sh` with `--dry-run` first, streaming its output into a preview window so you can see exactly what would happen — which files get posted, revised, re-reviewed, or discarded — without anything being sent yet. Once the dry-run finishes, howmux asks for confirmation (`y`/`N`) before running the script again for real. Decline and nothing is posted; confirm and the live run streams into the same window, after which the Reviews tab's decision status updates to reflect what was drained.
+
 ## CLI Usage
 
 ```bash
@@ -181,6 +185,7 @@ howmux
 | `plan [desc]` | Start interactive planning session |
 | `review [PR_URL]` | Start PR review workflow (URL to enroll/review now, bare to start loop) |
 | `decide <post\|revise\|rereview\|discard>` | Set the decision on the currently selected review |
+| `finalize` | Preview and post decided PR reviews via finalize-reviews.sh (dry-run, then confirm) |
 | `theme` | Show current theme |
 | `theme <name>` | Switch to theme |
 | `about` | Show version information and check for updates |

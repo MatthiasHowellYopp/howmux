@@ -184,6 +184,42 @@ func TestDecideCommandRegistration(t *testing.T) {
 	}
 }
 
+// TestFinalizeCommandRegistration verifies "finalize" is registered with no
+// subcommands and HasArgs: false (matching "status"'s zero-arg
+// registration — see command_registry.go), and appears in autocomplete
+// matches for its own prefix.
+func TestFinalizeCommandRegistration(t *testing.T) {
+	cfg := &config.Config{}
+	manager := agent.NewManager(cfg)
+	registry := NewCommandRegistry(manager)
+
+	cmd, exists := registry.GetCommand("finalize")
+	if !exists {
+		t.Fatal("expected 'finalize' command to be registered")
+	}
+	if cmd.HasArgs {
+		t.Error("expected 'finalize' to have HasArgs: false (bare form only)")
+	}
+	if len(cmd.Subcommands) != 0 {
+		t.Errorf("expected 'finalize' to have no subcommands, got %v", cmd.Subcommands)
+	}
+
+	if !registry.IsValidCommand("finalize") {
+		t.Error("expected bare 'finalize' to be a valid command")
+	}
+
+	matches := registry.GetFlattenedMatches("fin")
+	found := false
+	for _, m := range matches {
+		if m == "finalize" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected 'finalize' in GetFlattenedMatches(\"fin\"), got %v", matches)
+	}
+}
+
 // TestNotesAndBodyEditKeys_NotRegisteredAsCommands confirms "n" (notes
 // editing, issue #86 Task 2) and "e" (body editing, issue #86 Task 4) stay
 // key-binding-only features, never accidentally registered as typed REPL
