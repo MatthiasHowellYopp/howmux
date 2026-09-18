@@ -684,3 +684,194 @@ func TestFinalizeRetryPreflight_RoundTrip_IsLiveNotCached(t *testing.T) {
 		t.Errorf("expected checkFinalizeAssetsFunc to have been called exactly twice (live re-check, not cached), got %d", callCount)
 	}
 }
+
+// driveToAwaitingConfirmation is a small shared helper for the
+// TestFinalizeConfirm_* tests below: it runs "finalize" -> a fake
+// finalizeDryRunMsg through model.Update and returns the resulting model,
+// already sitting in finalizeAwaitingConfirmation with a populated
+// finalizeWindowTabID (mirroring the first half of
+// TestHandleFinalize_HappyPath). t.Fatal/t.Skip as appropriate on setup
+// failure so callers don't need to repeat the boilerplate.
+func driveToAwaitingConfirmation(t *testing.T, dryRunOutput string) model {
+	t.Helper()
+	restore := installFakeFinalizeScript(t, dryRunOutput, "echo unused-live-output")
+	t.Cleanup(restore)
+
+	m := newFinalizeTestModel()
+	if err := review.CheckFinalizeAssets(); err != nil {
+		t.Skipf("Skipping test - finalize assets not available: %v", err)
+	}
+
+	m, cmd := m.handleFinalize(nil)
+	msg := drainBatchForType[finalizeDryRunMsg](t, cmd)
+	updated, _ := m.Update(msg)
+	m = updated.(model)
+
+	if m.finalizeState != finalizeAwaitingConfirmation {
+		t.Fatalf("expected finalizeAwaitingConfirmation, got %v", m.finalizeState)
+	}
+	return m
+}
+
+// TestFinalizeConfirm_NavigationKeyDoesNotCancel is the core regression
+// guard for issue #102's silent-cancel-on-navigation trap: while
+// finalizeAwaitingConfirmation, pressing a navigation/other key must leave
+// the pending confirmation untouched and must not emit a "cancelled"
+// activity line.
+func TestFinalizeConfirm_NavigationKeyDoesNotCancel(t *testing.T) {
+	keys := []struct {
+		name string
+		msg  tea.KeyPressMsg
+	}{
+		{"left-bracket", tea.KeyPressMsg{Code: '[', Text: "["}},
+		{"right-bracket", tea.KeyPressMsg{Code: ']', Text: "]"}},
+		{"f2", tea.KeyPressMsg{Code: tea.KeyF2}},
+		{"arrow-up", tea.KeyPressMsg{Code: tea.KeyUp}},
+		{"unrelated-letter", pressKey('z')},
+	}
+
+	for _, k := range keys {
+		t.Run(k.name, func(t *testing.T) {
+			m := driveToAwaitingConfirmation(t, "echo dry-run-output")
+
+			updated, _ := m.Update(k.msg)
+			m = updated.(model)
+
+			if m.finalizeState != finalizeAwaitingConfirmation {
+				t.Errorf("expected finalizeAwaitingConfirmation to survive key %q, got %v", k.name, m.finalizeState)
+			}
+			if activityContains(m, "cancelled") {
+				t.Errorf("expected no 'cancelled' activity line after key %q, got %v", k.name, m.activityLines)
+			}
+		})
+	}
+}
+
+// TestFinalizeConfirm_LowercaseNCancels presses "n" while awaiting
+// confirmation and asserts the cancel path: idle state, a cancelled
+// activity line, the transient prompt cleared, and no live-run cmd.
+func TestFinalizeConfirm_LowercaseNCancels(t *testing.T) {
+	m := driveToAwaitingConfirmation(t, "echo dry-run-output")
+
+	updated, cmd := m.Update(pressKey('n'))
+	m = updated.(model)
+
+	if m.finalizeState != finalizeIdle {
+		t.Fatalf("expected finalizeIdle after 'n', got %v", m.finalizeState)
+	}
+	if !activityContains(m, "cancelled") {
+		t.Errorf("expected a 'cancelled' activity line, got %v", m.activityLines)
+	}
+	if cmd != nil {
+		t.Error("expected no tea.Cmd after cancelling with 'n' (no live run launched)")
+	}
+	if got := m.footerManager.transientMessage; got != "" {
+		t.Errorf("expected the transient prompt to be cleared after 'n', got %q", got)
+	}
+}
+
+// TestFinalizeConfirm_UppercaseNCancels is the uppercase counterpart to
+// TestFinalizeConfirm_LowercaseNCancels — "N" must normalize the same way
+// "n" does (matching the existing "yes"/"y" case-insensitive precedent).
+func TestFinalizeConfirm_UppercaseNCancels(t *testing.T) {
+	m := driveToAwaitingConfirmation(t, "echo dry-run-output")
+
+	updated, cmd := m.Update(pressKey('N'))
+	m = updated.(model)
+
+	if m.finalizeState != finalizeIdle {
+		t.Fatalf("expected finalizeIdle after 'N', got %v", m.finalizeState)
+	}
+	if !activityContains(m, "cancelled") {
+		t.Errorf("expected a 'cancelled' activity line, got %v", m.activityLines)
+	}
+	if cmd != nil {
+		t.Error("expected no tea.Cmd after cancelling with 'N' (no live run launched)")
+	}
+	if got := m.footerManager.transientMessage; got != "" {
+		t.Errorf("expected the transient prompt to be cleared after 'N', got %q", got)
+	}
+}
+
+// TestFinalizeConfirm_EscCancels drives to finalizeAwaitingConfirmation,
+// switches the active tab to the Finalize Preview tab itself, then sends
+// Esc. Before issue #102's Task 1 reordering, the generic
+// TabTypeReviewContent-closes-on-Esc handler would have matched first and
+// closed the window instead of cancelling finalize — this test proves the
+// confirm-gate now runs first: finalize goes idle, the activity log shows
+// the cancel line, AND the preview window is still open (not closed as a
+// side effect of the old bug).
+func TestFinalizeConfirm_EscCancels(t *testing.T) {
+	m := driveToAwaitingConfirmation(t, "echo dry-run-output")
+
+	previewIdx := m.tabManager.FindTabByID(m.finalizeWindowTabID)
+	if previewIdx < 0 {
+		t.Fatalf("expected a finalize preview tab to exist with ID %q", m.finalizeWindowTabID)
+	}
+	var switchCmd tea.Cmd
+	m, switchCmd = m.switchActiveTab(previewIdx)
+	_ = switchCmd
+
+	activeTab := m.tabManager.GetActiveTab()
+	if activeTab == nil || activeTab.ID() != m.finalizeWindowTabID {
+		t.Fatalf("expected the Finalize Preview tab to be active, got %v", activeTab)
+	}
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m = updated.(model)
+
+	if m.finalizeState != finalizeIdle {
+		t.Fatalf("expected finalizeIdle after Esc (confirm-gate should handle it), got %v", m.finalizeState)
+	}
+	if m.tabManager.FindTabByID(m.finalizeWindowTabID) < 0 {
+		t.Error("expected the Finalize Preview tab to still be open after Esc — the confirm-gate must intercept Esc before the generic window-closer")
+	}
+	if !activityContains(m, "cancelled") {
+		t.Errorf("expected a 'cancelled' activity line, got %v", m.activityLines)
+	}
+}
+
+// TestFinalizeConfirm_YKeyStillPosts: TestHandleFinalize_HappyPath already
+// asserts finalizeState == finalizeLiveRunning immediately after the 'y'
+// keypress (see the assertion right after `updated, cmd = m.Update(pressKey('y'))`
+// in that test), so this task item is already covered and no new test is
+// added here.
+
+// TestFinalizeConfirm_PromptVisibleInFooterDuringAwaitingConfirmation
+// verifies the footer's transient-message co-location added by issue
+// #102: the "post live? (y/N)" prompt is visible in the status row for
+// both TabTypeReviewContent (the Finalize Preview tab's own type) and
+// TabTypeMain while awaiting confirmation, updates to reflect "Posting
+// live" after 'y', and is cleared entirely on a terminal transition.
+func TestFinalizeConfirm_PromptVisibleInFooterDuringAwaitingConfirmation(t *testing.T) {
+	m := driveToAwaitingConfirmation(t, "echo dry-run-output")
+
+	reviewFooter := m.footerManager.RenderFooter(TabTypeReviewContent)
+	if !strings.Contains(reviewFooter.StatusRow, "post live? (y/N)") {
+		t.Errorf("expected TabTypeReviewContent status row to contain the prompt, got %q", reviewFooter.StatusRow)
+	}
+	mainFooter := m.footerManager.RenderFooter(TabTypeMain)
+	if !strings.Contains(mainFooter.StatusRow, "post live? (y/N)") {
+		t.Errorf("expected TabTypeMain status row to also contain the prompt, got %q", mainFooter.StatusRow)
+	}
+
+	updated, _ := m.Update(pressKey('y'))
+	m = updated.(model)
+	if m.finalizeState != finalizeLiveRunning {
+		t.Fatalf("expected finalizeLiveRunning after 'y', got %v", m.finalizeState)
+	}
+	postingFooter := m.footerManager.RenderFooter(TabTypeMain)
+	if !strings.Contains(postingFooter.StatusRow, "Posting live") {
+		t.Errorf("expected status row to reflect 'Posting live' after 'y', got %q", postingFooter.StatusRow)
+	}
+	if strings.Contains(postingFooter.StatusRow, "post live? (y/N)") {
+		t.Errorf("expected the stale prompt to be replaced, not lingering, got %q", postingFooter.StatusRow)
+	}
+
+	m2 := driveToAwaitingConfirmation(t, "echo dry-run-output-2")
+	updated, _ = m2.Update(pressKey('n'))
+	m2 = updated.(model)
+	if got := m2.footerManager.transientMessage; got != "" {
+		t.Errorf("expected the transient message to be cleared after cancel, got %q", got)
+	}
+}

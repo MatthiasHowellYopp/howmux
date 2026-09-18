@@ -610,6 +610,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.finalizeState = finalizeAwaitingConfirmation
+		m.footerManager.SetTransientMessage("Dry-run complete — post live? (y/N)")
 		m = m.appendActivity(m.styles.Warning.Render("Dry-run complete — review the preview window, then post live? (y/N)"))
 		return m, nil
 
@@ -625,6 +626,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.finalizeState = finalizeIdle
 		m.finalizeCancel = nil
+		m.footerManager.SetTransientMessage("")
 		m = m.appendActivity(m.styles.Success.Render("Finalize complete — spool drained."))
 		return m, nil
 
@@ -648,6 +650,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.finalizeState = finalizeIdle
 		m.finalizeCancel = nil
+		m.footerManager.SetTransientMessage("")
 		m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("Finalize (%s) failed: %v", phaseLabel, msg.err)))
 		// On a *live* run, the script may have already posted some reviews
 		// before erroring mid-drain (each file is processed in its own
@@ -1106,6 +1109,101 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleCopy()
 		}
 
+		// Finalize confirmation-keypress interception (issue #87, relocated
+		// and hardened by issue #102): while
+		// m.finalizeState == finalizeAwaitingConfirmation, the next
+		// keypress is gated exactly like m.confirmingExit's own y/N block
+		// further below — "y"/"yes" triggers the live run, "n"/"no"/"esc"
+		// cancels back to idle, and anything else (navigation keys like
+		// "[", "]", "f2", arrow keys, or any other key) is ignored outright
+		// with no state change and no activity line (issue #102: these keys
+		// used to fall into the old two-arm switch's default/cancel case and
+		// silently cancelled the pending confirmation). This must be
+		// checked before m.confirmingExit's block, before Reviews-tab
+		// row-shortcut forwarding, AND — as of issue #102 — before all
+		// three esc-handling blocks immediately below (overlay dismissal,
+		// planning-tab focus return, and TabTypeReviewContent window-close).
+		// Without running ahead of the TabTypeReviewContent-closes-on-Esc
+		// handler specifically, pressing Esc while the Finalize Preview tab
+		// is the active tab would close that window via the generic
+		// handler instead of cancelling finalize here, since the generic
+		// handler would otherwise match first.
+		//
+		// Because none of the keys this block explicitly handles (y/yes/
+		// n/no/esc) return early in the default arm, and the default arm
+		// falls through with no return, navigation keys such as "[", "]",
+		// "f2", and the arrow keys still reach their normal handlers in the
+		// switch further below in this function — this block only
+		// intercepts the decision keys, not every keypress.
+		//
+		// Invariant: this block and m.confirmingExit's block below are
+		// mutually exclusive by construction — both gate on being
+		// idle-ish top-level states (finalizeAwaitingConfirmation is only
+		// reached via handleFinalize/finalizeDryRunMsg, which never runs
+		// while a "stop all and exit?" prompt is pending, and tryExit's
+		// own agent/planning-tab checks are independent of finalize
+		// state), so the same keypress can never be interpreted by both.
+		// A future change to either gate must preserve this invariant
+		// rather than letting both fire on one keypress.
+		if m.finalizeState == finalizeAwaitingConfirmation {
+			input := strings.ToLower(strings.TrimSpace(msg.String()))
+			switch input {
+			case "y", "yes":
+				// Create a NEW context for the live run — the dry-run's
+				// context is already done; do not reuse it.
+				ctx, cancel := context.WithCancel(context.Background())
+				m.finalizeCancel = cancel
+
+				// Visibly demarcate the live-run output from the dry-run
+				// preview within the same window (see design spec,
+				// "Window Content Model") by appending a separator line
+				// directly to the shared OutputCapture, so
+				// AppendFromCapture's "just re-render the whole buffer"
+				// logic stays uniform with no special-casing.
+				if m.finalizeCapture != nil {
+					m.finalizeCapture.AddLine("─── Posting live ───")
+				}
+				// Reset the comparison baseline (not the counter itself)
+				// so the poll loop's next tick treats the live run's
+				// fresh output as new, mirroring how LogTab never resets
+				// its ring buffer, only its last-seen counter.
+				m.finalizeLastGen = 0
+
+				m.finalizeState = finalizeLiveRunning
+				m.footerManager.SetTransientMessage("Posting live via finalize-reviews.sh...")
+				m = m.appendActivity(m.styles.Activity.Render("Posting live via finalize-reviews.sh..."))
+
+				return m, tea.Batch(
+					runFinalizeCmd(ctx, false, m.finalizeCapture, cancel),
+					pollFinalizeOutputCmd(),
+				)
+			case "n", "no", "esc":
+				m.finalizeState = finalizeIdle
+				// Calling an already-fired CancelFunc is always safe/no-op
+				// per the context package's own contract — the dry-run's
+				// subprocess has already exited by this point since we
+				// only reach finalizeAwaitingConfirmation after
+				// finalizeDryRunMsg.
+				if m.finalizeCancel != nil {
+					m.finalizeCancel()
+					m.finalizeCancel = nil
+				}
+				m.footerManager.SetTransientMessage("")
+				m = m.appendActivity(m.styles.Warning.Render("Live posting cancelled — nothing was posted."))
+				return m, nil
+			default:
+				// Navigation/other key while awaiting confirmation: ignore
+				// entirely. No state change, no activity line — this is
+				// the fix for the silent-cancel-on-navigation trap (issue
+				// #102). Deliberately no return here: falling through lets
+				// this keypress still reach its normal handler further
+				// below in Update (tab switching via "[", "]", "f2",
+				// viewport scrolling via the arrow keys, etc.), so
+				// navigation continues to work exactly as it did before
+				// finalizeAwaitingConfirmation existed.
+			}
+		}
+
 		// Priority handling for overlay dismissal
 		if m.activeOverlay != overlayNone && msg.String() == "esc" {
 			m = m.clearOverlay()
@@ -1182,70 +1280,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Block other input when overlay is active
 		if m.activeOverlay != overlayNone {
 			return m, nil
-		}
-
-		// Finalize confirmation-keypress interception (issue #87): while
-		// m.finalizeState == finalizeAwaitingConfirmation, the next
-		// keypress is gated exactly like m.confirmingExit's own y/N block
-		// immediately below — "y"/"yes" triggers the live run, anything
-		// else cancels back to idle. This must be checked before
-		// m.confirmingExit's block AND before Reviews-tab row-shortcut
-		// forwarding.
-		//
-		// Invariant: this block and m.confirmingExit's block below are
-		// mutually exclusive by construction — both gate on being
-		// idle-ish top-level states (finalizeAwaitingConfirmation is only
-		// reached via handleFinalize/finalizeDryRunMsg, which never runs
-		// while a "stop all and exit?" prompt is pending, and tryExit's
-		// own agent/planning-tab checks are independent of finalize
-		// state), so the same keypress can never be interpreted by both.
-		// A future change to either gate must preserve this invariant
-		// rather than letting both fire on one keypress.
-		if m.finalizeState == finalizeAwaitingConfirmation {
-			input := strings.ToLower(strings.TrimSpace(msg.String()))
-			switch input {
-			case "y", "yes":
-				// Create a NEW context for the live run — the dry-run's
-				// context is already done; do not reuse it.
-				ctx, cancel := context.WithCancel(context.Background())
-				m.finalizeCancel = cancel
-
-				// Visibly demarcate the live-run output from the dry-run
-				// preview within the same window (see design spec,
-				// "Window Content Model") by appending a separator line
-				// directly to the shared OutputCapture, so
-				// AppendFromCapture's "just re-render the whole buffer"
-				// logic stays uniform with no special-casing.
-				if m.finalizeCapture != nil {
-					m.finalizeCapture.AddLine("─── Posting live ───")
-				}
-				// Reset the comparison baseline (not the counter itself)
-				// so the poll loop's next tick treats the live run's
-				// fresh output as new, mirroring how LogTab never resets
-				// its ring buffer, only its last-seen counter.
-				m.finalizeLastGen = 0
-
-				m.finalizeState = finalizeLiveRunning
-				m = m.appendActivity(m.styles.Activity.Render("Posting live via finalize-reviews.sh..."))
-
-				return m, tea.Batch(
-					runFinalizeCmd(ctx, false, m.finalizeCapture, cancel),
-					pollFinalizeOutputCmd(),
-				)
-			default:
-				m.finalizeState = finalizeIdle
-				// Calling an already-fired CancelFunc is always safe/no-op
-				// per the context package's own contract — the dry-run's
-				// subprocess has already exited by this point since we
-				// only reach finalizeAwaitingConfirmation after
-				// finalizeDryRunMsg.
-				if m.finalizeCancel != nil {
-					m.finalizeCancel()
-					m.finalizeCancel = nil
-				}
-				m = m.appendActivity(m.styles.Warning.Render("Live posting cancelled — nothing was posted."))
-				return m, nil
-			}
 		}
 
 		if m.confirmingExit {
