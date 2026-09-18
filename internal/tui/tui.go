@@ -1355,16 +1355,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.tabManager.CloseCurrentTab()
 			return m, nil
 		case "up", "down", "pgup", "pgdown", "home", "end":
+			// Dropdown navigation takes precedence over any tab-specific
+			// viewport/row-navigation handling whenever the footer input is
+			// focused and currently showing matched suggestions —
+			// independent of which tab is active. Previously this only
+			// worked on TabTypeMain (and, without the HasMatchedSuggestions
+			// check, on TabTypePlanning), so arrows appeared to do nothing
+			// on the Reviews tab (and any future tab) while the dropdown
+			// was open.
+			if (msg.String() == "up" || msg.String() == "down") &&
+				m.input.Focused() && m.input.HasMatchedSuggestions() {
+				var cmd tea.Cmd
+				m.input, cmd = m.input.Update(msg)
+				return m, cmd
+			}
 			// Handle console scroll events when in main tab
 			activeTab := m.tabManager.GetActiveTab()
 			if activeTab != nil && activeTab.Type() == TabTypeMain {
-				// Route up/down to textinput when suggestions are active
-				if (msg.String() == "up" || msg.String() == "down") && m.input.HasMatchedSuggestions() {
-					var cmd tea.Cmd
-					m.input, cmd = m.input.Update(msg)
-					return m, cmd
-				}
-
 				// Handle console scrolling
 				switch msg.String() {
 				case "up":
@@ -1381,15 +1388,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.consoleViewport.GotoBottom()
 				}
 				return m, nil
-			}
-			// Forward to tab manager for non-main tabs
-			// But if footer has focus in planning tab, route up/down to footer for dropdown
-			if activeTab != nil && activeTab.Type() == TabTypePlanning && m.input.Focused() {
-				if msg.String() == "up" || msg.String() == "down" {
-					var cmd tea.Cmd
-					m.input, cmd = m.input.Update(msg)
-					return m, cmd
-				}
 			}
 			// During viewport navigation, ensure focus is consistently on the
 			// footer via the single focus helper. Routing through setPlanningFocus
