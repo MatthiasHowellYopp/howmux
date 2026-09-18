@@ -252,6 +252,23 @@ type model struct {
 	finalizeLastGen     uint64
 	finalizeWindowTabID string
 
+	// finalizePreflightState/finalizePreflightErr (issue #88) cache the
+	// last-known result of review.CheckFinalizeAssets — whether
+	// finalize-reviews.sh and pr_review_finalize.py currently resolve on
+	// $PATH. This is a distinct concern from the five fields above:
+	// finalizeState tracks the dry-run/confirm/live-run subprocess
+	// lifecycle, while these two track asset availability, checked before
+	// that lifecycle is ever allowed to start (see handleFinalize and
+	// finalize_preflight.go). finalizePreflightErr holds the full error
+	// text from review.CheckFinalizeAssets ("" when OK/unknown). Both
+	// fields are mutated only inside model.Update (handleFinalize's
+	// synchronous path and the finalizePreflightResultMsg case), never
+	// inside the runFinalizePreflightCmd goroutine closure, which only
+	// ever returns a tea.Msg for Bubble Tea's runtime to deliver back onto
+	// this goroutine.
+	finalizePreflightState finalizePreflightState
+	finalizePreflightErr   string
+
 	// Overlay system
 	activeOverlay  overlayType
 	overlayContent overlayContent
@@ -642,6 +659,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m = m.appendActivity(m.styles.Warning.Render("Some reviews may already have posted — re-run finalize to complete the rest (it skips already-drained files)."))
 		}
 		return m, nil
+
+	case finalizePreflightResultMsg:
+		// Async retry path: the Reviews tab's "F" key emitted
+		// finalizeRetryPreflightMsg, which the case below turned into
+		// runFinalizePreflightCmd(); this is that command's result
+		// arriving back on the Update goroutine. Delegates to the same
+		// applyFinalizePreflightResult helper handleFinalize's synchronous
+		// path uses, so the two paths can never disagree about what
+		// "current preflight state" means (see issue #88's design spec,
+		// "Where the preflight runs").
+		m = m.applyFinalizePreflightResult(msg.err)
+		return m, nil
+
+	case finalizeRetryPreflightMsg:
+		// Emitted by ReviewsTab.Update's "F" key handler (see issue #88's
+		// design spec, "Retry mechanism"). Re-runs the preflight
+		// asynchronously — unlike handleFinalize's synchronous call, this
+		// is a user-initiated background re-check, not gating an in-flight
+		// command dispatch, so it goes through the tea.Cmd round trip
+		// instead of blocking Update.
+		return m, runFinalizePreflightCmd()
 
 	case finalizeTickMsg:
 		// Poll tick for streaming finalize-reviews.sh output into the

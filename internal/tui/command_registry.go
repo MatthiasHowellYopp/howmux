@@ -108,7 +108,7 @@ func NewCommandRegistry(agentManager *agent.Manager) *CommandRegistry {
 
 	registry.register(&Command{
 		Name:        "finalize",
-		Description: "Preview and post decided PR reviews via finalize-reviews.sh (dry-run, then confirm)",
+		Description: "Preview and post decided PR reviews via finalize-reviews.sh (dry-run, then confirm) — checks finalize-reviews.sh/pr_review_finalize.py are on PATH first",
 	})
 
 	// Build flattened command list
