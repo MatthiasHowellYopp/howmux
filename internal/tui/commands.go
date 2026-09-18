@@ -397,6 +397,85 @@ type execDoneMsg struct {
 	err error
 }
 
+// bodyEditCommandFunc is the subprocess-execution seam handleBodyEditLaunch
+// invokes through to build the $EDITOR exec.Cmd, mirroring
+// execCommandFunc's role in internal/review/decisionwriter.go. It is
+// package-level so tests can substitute a fake command (e.g. "/bin/true" or
+// "/bin/false") instead of spawning a real editor, and assert the argv
+// (editor binary + args, temp file path) that was actually built.
+var bodyEditCommandFunc = exec.Command
+
+// handleBodyEditLaunch implements the "e" key's $EDITOR-launch flow for a
+// selected review's full body, structurally mirroring handlePlanSubprocess:
+// suspend output capture, write state that must survive the subprocess
+// (here: the body, into a temp file — there is no console-chrome state to
+// snapshot for body editing), build the exec.Cmd, and return a
+// tea.ExecProcess whose callback reports back via editorDoneMsg (a distinct
+// message from execDoneMsg — see editorDoneMsg's doc comment in tui.go).
+//
+// $EDITOR is read fresh from the environment on every invocation (not
+// cached), matching how other CLI tools resolve it. If $EDITOR is unset, an
+// activity-line error is appended and nil is returned immediately — no
+// subprocess is launched, no temp file is created, and
+// SuspendOutputCapture is never called, so the TUI's state is completely
+// unaffected by a no-op "e" press when $EDITOR isn't configured.
+//
+// $EDITOR is split on whitespace before building the command, so values
+// like "code -w" (editor + flags) work the same way most CLI tools that
+// shell out to $EDITOR already support — the first field is the binary,
+// the rest are prepended arguments, with the temp file path appended last.
+//
+// The temp file written here doubles as the "backup" of the pre-edit body:
+// nothing is written to the spool file itself until BodyWriter.SetBody is
+// called with a validated, non-empty temp-file path (see the editorDoneMsg
+// case arm in tui.go), so a crashed or misbehaving editor can never
+// corrupt the real spool file, only the disposable temp file.
+func (m model) handleBodyEditLaunch(rec review.Record) (model, tea.Cmd) {
+	editor := strings.TrimSpace(os.Getenv("EDITOR"))
+	if editor == "" {
+		m = m.appendActivity(m.styles.Error.Render("$EDITOR is not set — cannot edit review body"))
+		return m, nil
+	}
+
+	homeDir, err := userHomeDirFunc()
+	if err != nil {
+		homeDir = ""
+	}
+	body, _ := review.ReadSpoolBody(rec.SpoolPath, homeDir)
+
+	tempFile, err := os.CreateTemp("", "howmux-review-*.md")
+	if err != nil {
+		m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("Failed to create temp file for editing: %v", err)))
+		return m, nil
+	}
+	tempPath := tempFile.Name()
+
+	if _, err := tempFile.WriteString(body); err != nil {
+		_ = tempFile.Close()
+		_ = os.Remove(tempPath)
+		m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("Failed to write review body to temp file: %v", err)))
+		return m, nil
+	}
+	if err := tempFile.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("Failed to write review body to temp file: %v", err)))
+		return m, nil
+	}
+
+	m.manager.SuspendOutputCapture()
+
+	editorFields := strings.Fields(editor)
+	editorBin := editorFields[0]
+	args := append(append([]string{}, editorFields[1:]...), tempPath)
+	cmd := bodyEditCommandFunc(editorBin, args...)
+
+	m = m.appendActivity(m.styles.Success.Render(fmt.Sprintf("Opening $EDITOR for PR #%d review body...", rec.PR)))
+
+	return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
+		return editorDoneMsg{tempPath: tempPath, rec: rec, err: err}
+	})
+}
+
 type reviewStartMsg struct {
 	cancel context.CancelFunc
 }

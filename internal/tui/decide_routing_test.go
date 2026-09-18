@@ -429,3 +429,187 @@ func TestAC5a_FooterUnfocused_ReviewsTabActive_KeyTriggersDecision(t *testing.T)
 		})
 	}
 }
+
+// newDecideRoutingTestModelWithNotesAndBody extends newDecideRoutingTestModel
+// with the notesInput/notesWriter/bodyWriter fields Task 1/4 added to model,
+// so tests can drive the "n"/"e" keys' full round trip (gating check through
+// to startNotesEditMsg/gateFailedMsg/startBodyEditMsg handling) the same way
+// newFullDecideRoutingTestModel extends it with tabFocusStates/footerManager
+// for switchActiveTab. The routing decision itself (footer-focus vs.
+// tab-forwarding, in model.Update's "default:" arm) never dereferences these
+// three fields — only the messages "n"/"e" emit, once handled, do — but
+// tests exercising the full round trip (not just the routing gate) need
+// them populated to avoid a nil-pointer panic.
+func newDecideRoutingTestModelWithNotesAndBody() model {
+	m := newDecideRoutingTestModel()
+	m.notesInput = NewNotesInput()
+	m.notesWriter = review.NewNotesWriter()
+	m.bodyWriter = review.NewBodyWriter()
+	return m
+}
+
+// TestAC5a_FooterFocused_ReviewsTabActive_NKeyTypesIntoInput proves "n" is
+// gated identically to "p"/"r"/"R"/"d" by footer focus: with the footer
+// focused and the Reviews tab active, a bare "n" keypress must type into
+// the footer input, not enter notes-edit mode or emit any Reviews-tab
+// message at all.
+func TestAC5a_FooterFocused_ReviewsTabActive_NKeyTypesIntoInput(t *testing.T) {
+	m := newDecideRoutingTestModelWithNotesAndBody()
+	addReviewsTabWithRecord(m, review.Record{Repo: "owner/repo", PR: 3, SpoolPath: "/tmp/spool.md"})
+	m.input.SetFocus(true)
+	if !m.input.Focused() {
+		t.Fatalf("test setup broken: input should be focused")
+	}
+	beforeValue := m.input.Value()
+
+	result, cmd := m.Update(pressKey('n'))
+	resultModel, ok := result.(model)
+	if !ok {
+		t.Fatalf("Update did not return a model")
+	}
+
+	wantValue := beforeValue + "n"
+	if resultModel.input.Value() != wantValue {
+		t.Errorf("expected input value to grow by %q, got %q (want %q)", "n", resultModel.input.Value(), wantValue)
+	}
+	if resultModel.notesEditActive {
+		t.Errorf("expected notesEditActive to remain false when the footer is focused")
+	}
+	if cmd != nil {
+		if _, isStart := cmd().(startNotesEditMsg); isStart {
+			t.Errorf("expected no startNotesEditMsg when the footer is focused")
+		}
+	}
+	if len(resultModel.activityLines) != 0 {
+		t.Errorf("expected no activity line to be appended when footer is focused, got: %v", resultModel.activityLines)
+	}
+}
+
+// TestAC5a_FooterFocused_ReviewsTabActive_EKeyTypesIntoInput is "n"'s
+// counterpart for "e": with the footer focused, "e" must type into the
+// footer input rather than launch the $EDITOR flow.
+func TestAC5a_FooterFocused_ReviewsTabActive_EKeyTypesIntoInput(t *testing.T) {
+	m := newDecideRoutingTestModelWithNotesAndBody()
+	addReviewsTabWithRecord(m, review.Record{Repo: "owner/repo", PR: 3, SpoolPath: "/tmp/spool.md"})
+	m.input.SetFocus(true)
+	if !m.input.Focused() {
+		t.Fatalf("test setup broken: input should be focused")
+	}
+	beforeValue := m.input.Value()
+
+	result, cmd := m.Update(pressKey('e'))
+	resultModel, ok := result.(model)
+	if !ok {
+		t.Fatalf("Update did not return a model")
+	}
+
+	wantValue := beforeValue + "e"
+	if resultModel.input.Value() != wantValue {
+		t.Errorf("expected input value to grow by %q, got %q (want %q)", "e", resultModel.input.Value(), wantValue)
+	}
+	if cmd != nil {
+		if _, isStart := cmd().(startBodyEditMsg); isStart {
+			t.Errorf("expected no startBodyEditMsg when the footer is focused")
+		}
+	}
+	if len(resultModel.activityLines) != 0 {
+		t.Errorf("expected no activity line to be appended when footer is focused, got: %v", resultModel.activityLines)
+	}
+}
+
+// TestAC5a_FooterUnfocused_ReviewsTabActive_NKeyTriggersGatedNotesEdit is
+// the counterpart proving "n" reaches ReviewsTab.Update and its
+// revise/rereview gating check when the footer does NOT have focus — same
+// AC5a guard as p/r/R/d, exercised end to end through both possible
+// outcomes (gate passes → startNotesEditMsg; gate fails → gateFailedMsg).
+func TestAC5a_FooterUnfocused_ReviewsTabActive_NKeyTriggersGatedNotesEdit(t *testing.T) {
+	t.Run("gate passes", func(t *testing.T) {
+		spoolPath := writeFakeSpoolWithDecision(t, "revise")
+		m := newDecideRoutingTestModelWithNotesAndBody()
+		addReviewsTabWithRecord(m, review.Record{Repo: "owner/repo", PR: 8, SpoolPath: spoolPath})
+		m.input.SetFocus(false)
+
+		result, cmd := m.Update(pressKey('n'))
+		resultModel, ok := result.(model)
+		if !ok {
+			t.Fatalf("Update did not return a model")
+		}
+		if cmd == nil {
+			t.Fatalf("expected a tea.Cmd emitting startNotesEditMsg, got nil")
+		}
+		msg := cmd()
+		if _, isStart := msg.(startNotesEditMsg); !isStart {
+			t.Fatalf("expected startNotesEditMsg, got %T (%v)", msg, msg)
+		}
+		finalResult, _ := resultModel.Update(msg)
+		finalModel, ok := finalResult.(model)
+		if !ok {
+			t.Fatalf("Update did not return a model")
+		}
+		if !finalModel.notesEditActive {
+			t.Errorf("expected notesEditActive to be true after the gate passes")
+		}
+	})
+
+	t.Run("gate fails", func(t *testing.T) {
+		spoolPath := writeFakeSpoolWithDecision(t, "post")
+		m := newDecideRoutingTestModelWithNotesAndBody()
+		addReviewsTabWithRecord(m, review.Record{Repo: "owner/repo", PR: 8, SpoolPath: spoolPath})
+		m.input.SetFocus(false)
+
+		result, cmd := m.Update(pressKey('n'))
+		resultModel, ok := result.(model)
+		if !ok {
+			t.Fatalf("Update did not return a model")
+		}
+		if cmd == nil {
+			t.Fatalf("expected a tea.Cmd emitting gateFailedMsg, got nil")
+		}
+		msg := cmd()
+		if _, isGate := msg.(gateFailedMsg); !isGate {
+			t.Fatalf("expected gateFailedMsg, got %T (%v)", msg, msg)
+		}
+		finalResult, _ := resultModel.Update(msg)
+		finalModel, ok := finalResult.(model)
+		if !ok {
+			t.Fatalf("Update did not return a model")
+		}
+		if finalModel.notesEditActive {
+			t.Errorf("expected notesEditActive to remain false when the gate fails")
+		}
+		if len(finalModel.activityLines) == 0 {
+			t.Fatalf("expected a visible activity-line error, got none")
+		}
+	})
+}
+
+// TestAC5a_FooterUnfocused_ReviewsTabActive_EKeyTriggersBodyEdit is "n"'s
+// counterpart for "e": with the footer unfocused, "e" reaches
+// ReviewsTab.Update's "e" case and emits startBodyEditMsg for the selected
+// row (no gating check applies to body editing, per the design spec).
+func TestAC5a_FooterUnfocused_ReviewsTabActive_EKeyTriggersBodyEdit(t *testing.T) {
+	spoolPath := writeFakeSpoolWithDecision(t, "post")
+	m := newDecideRoutingTestModelWithNotesAndBody()
+	addReviewsTabWithRecord(m, review.Record{Repo: "owner/repo", PR: 12, SpoolPath: spoolPath})
+	m.input.SetFocus(false)
+
+	result, cmd := m.Update(pressKey('e'))
+	resultModel, ok := result.(model)
+	if !ok {
+		t.Fatalf("Update did not return a model")
+	}
+	if cmd == nil {
+		t.Fatalf("expected a tea.Cmd emitting startBodyEditMsg, got nil")
+	}
+	msg := cmd()
+	started, isStart := msg.(startBodyEditMsg)
+	if !isStart {
+		t.Fatalf("expected startBodyEditMsg, got %T (%v)", msg, msg)
+	}
+	if started.pr != 12 || started.repo != "owner/repo" {
+		t.Errorf("expected startBodyEditMsg for owner/repo#12, got %+v", started)
+	}
+	if resultModel.input.Focused() {
+		t.Errorf("expected footer to remain unfocused")
+	}
+}
