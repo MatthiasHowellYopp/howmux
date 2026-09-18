@@ -68,10 +68,23 @@ if [ "$HAS_DECISION_KEY" != "1" ]; then
     exit 4
 fi
 
-# Rewrite only the decision: line's value, bounded to the front-matter
-# block (address range 1,CLOSING_LINE), so a `decision:`-looking string in
-# the body (after the closing fence) is never touched.
-sed -i.bak "1,${CLOSING_LINE}s/^decision:.*/decision: ${DECISION}/" "$SPOOL_PATH"
-rm -f "${SPOOL_PATH}.bak"
+# Rewrite only the decision: line's value, bounded to the interior of the
+# front-matter block. The rewrite is crash-safe: sed writes to a temp file in
+# the same directory, then an atomic rename replaces the spool file, so an
+# interruption can never leave a truncated spool (this file is shared with
+# pr_review_finalize.py). The address range 2,$((CLOSING_LINE-1)) matches the
+# HAS_DECISION_KEY validation region exactly (strictly inside the fences), so
+# a `decision:`-looking string on a fence line or in the body is never touched.
+INTERIOR_END=$((CLOSING_LINE - 1))
+TMP_FILE=$(mktemp "${SPOOL_PATH}.XXXXXX")
+trap 'rm -f "$TMP_FILE"' EXIT
+# Seed the temp file from the original with cp -p so it inherits the spool
+# file's mode (portable across GNU and BSD/macOS; mktemp alone would leave it
+# 0600 and the atomic mv would carry that over). Then rewrite in place on the
+# temp and atomically rename over the original.
+cp -p "$SPOOL_PATH" "$TMP_FILE"
+sed "2,${INTERIOR_END}s/^decision:.*/decision: ${DECISION}/" "$SPOOL_PATH" > "$TMP_FILE"
+mv "$TMP_FILE" "$SPOOL_PATH"
+trap - EXIT
 
 exit 0

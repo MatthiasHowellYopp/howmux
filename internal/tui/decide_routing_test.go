@@ -89,9 +89,9 @@ func TestSwitchActiveTab_ReviewsTab_KeypressReachesDecideSelectedCmd(t *testing.
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.key), func(t *testing.T) {
-			withRoutingFakeDecisionScript(t)
+			spoolPath := withRoutingFakeDecisionScript(t)
 			m := newFullDecideRoutingTestModel()
-			addReviewsTabWithRecord(m, review.Record{Repo: "owner/repo", PR: 42, SpoolPath: "/tmp/spool.md"})
+			addReviewsTabWithRecord(m, review.Record{Repo: "owner/repo", PR: 42, SpoolPath: spoolPath})
 
 			reviewsIdx := m.findReviewsTabIndex()
 			if reviewsIdx < 0 {
@@ -192,9 +192,9 @@ func TestSwitchActiveTab_ReviewsTab_EnterReachesOpenSelectedReviewCmd(t *testing
 // togglePlanningFocus's discoverable toggle for planning tabs) and then
 // type and execute a `decide post` command exactly as before.
 func TestToggleReviewsFocus_UserCanStillFocusFooterAndRunDecideCommand(t *testing.T) {
-	withRoutingFakeDecisionScript(t)
+	spoolPath := withRoutingFakeDecisionScript(t)
 	m := newFullDecideRoutingTestModel()
-	addReviewsTabWithRecord(m, review.Record{Repo: "owner/repo", PR: 9, SpoolPath: "/tmp/spool.md"})
+	addReviewsTabWithRecord(m, review.Record{Repo: "owner/repo", PR: 9, SpoolPath: spoolPath})
 
 	reviewsIdx := m.findReviewsTabIndex()
 	if reviewsIdx < 0 {
@@ -310,7 +310,7 @@ func TestModelUpdate_DecideRequestMsg_EmptySpoolPath(t *testing.T) {
 // withFakeDecisionScript (commands_decide_test.go) — same rationale
 // (execCommandFunc/scriptPathFunc are private to internal/review, so the
 // real filesystem path is the only available seam from this package).
-func withRoutingFakeDecisionScript(t *testing.T) {
+func withRoutingFakeDecisionScript(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	scriptsDir := filepath.Join(dir, ".howmux", "scripts")
@@ -322,7 +322,18 @@ func withRoutingFakeDecisionScript(t *testing.T) {
 	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("failed to write fake script: %v", err)
 	}
+	// SetDecision resolves+stats the spool file before shelling out; provide
+	// a real pending/ spool and return its path for use as a record SpoolPath.
+	pendingDir := filepath.Join(dir, "PR-Review", "pending")
+	if err := os.MkdirAll(pendingDir, 0o755); err != nil {
+		t.Fatalf("failed to create fake pending dir: %v", err)
+	}
+	spoolPath := filepath.Join(pendingDir, "pr-review-owner-repo.md")
+	if err := os.WriteFile(spoolPath, []byte("---\ndecision:\n---\nbody\n"), 0o644); err != nil {
+		t.Fatalf("failed to write fake spool: %v", err)
+	}
 	t.Chdir(dir)
+	return spoolPath
 }
 
 // TestAC5a_FooterFocused_ReviewsTabActive_PrintableKeyTypesIntoInput is the
@@ -373,9 +384,9 @@ func TestAC5a_FooterUnfocused_ReviewsTabActive_KeyTriggersDecision(t *testing.T)
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.key), func(t *testing.T) {
-			withRoutingFakeDecisionScript(t)
+			spoolPath := withRoutingFakeDecisionScript(t)
 			m := newDecideRoutingTestModel()
-			addReviewsTabWithRecord(m, review.Record{Repo: "owner/repo", PR: 8, SpoolPath: "/tmp/spool.md"})
+			addReviewsTabWithRecord(m, review.Record{Repo: "owner/repo", PR: 8, SpoolPath: spoolPath})
 			m.input.SetFocus(false)
 			if m.input.Focused() {
 				t.Fatalf("test setup broken: input should not be focused")
