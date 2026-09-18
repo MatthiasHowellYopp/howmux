@@ -3,6 +3,7 @@ package review
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -396,5 +397,215 @@ func TestReadSpoolInfoPathWithoutPendingSegmentNotFound(t *testing.T) {
 	want := SpoolInfo{Found: false, DecisionState: "no spool"}
 	if got != want {
 		t.Errorf("ReadSpoolInfo() = %#v, want %#v", got, want)
+	}
+}
+
+// --- ReadSpoolBody ---
+//
+// These tests extend coverage to the new body-reading function added
+// alongside the resolveSpoolPath refactor. They mirror the fixture setup of
+// the equivalent TestReadSpoolInfo* tests above wherever a direct analogue
+// exists, so the two functions' resolution behavior can be visually compared
+// test-by-test.
+
+func TestReadSpoolBodyPendingFileReturnsBodyAfterFrontMatter(t *testing.T) {
+	tmp := t.TempDir()
+	pendingDir := filepath.Join(tmp, "pending")
+	if err := os.MkdirAll(pendingDir, 0o755); err != nil {
+		t.Fatalf("failed to set up test pending dir: %v", err)
+	}
+
+	spoolPath := filepath.Join(pendingDir, "owner-repo-17.md")
+	content := "---\nverdict: APPROVE\ndecision:\n---\n\n# Review\n\nbody text here\n"
+	if err := os.WriteFile(spoolPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("failed to write test spool file: %v", err)
+	}
+
+	body, info := ReadSpoolBody(spoolPath, tmp)
+
+	if !info.Found {
+		t.Errorf("info.Found = false, want true")
+	}
+	if info.InDoneDir {
+		t.Errorf("info.InDoneDir = true, want false")
+	}
+	if info.Verdict != "APPROVE" {
+		t.Errorf("info.Verdict = %q, want %q", info.Verdict, "APPROVE")
+	}
+
+	wantBody := "# Review\n\nbody text here\n"
+	if body != wantBody {
+		t.Errorf("body = %q, want %q", body, wantBody)
+	}
+}
+
+func TestReadSpoolBodyFallsBackToDoneDir(t *testing.T) {
+	tmp := t.TempDir()
+	pendingDir := filepath.Join(tmp, "pending")
+	doneDir := filepath.Join(tmp, "done")
+	if err := os.MkdirAll(pendingDir, 0o755); err != nil {
+		t.Fatalf("failed to set up test pending dir: %v", err)
+	}
+	if err := os.MkdirAll(doneDir, 0o755); err != nil {
+		t.Fatalf("failed to set up test done dir: %v", err)
+	}
+
+	// Record.SpoolPath still points at pending/, but the file itself has
+	// been moved to done/ by the external finalize pipeline.
+	filename := "owner-repo-17.md"
+	spoolPath := filepath.Join(pendingDir, filename)
+	donePath := filepath.Join(doneDir, filename)
+
+	content := "---\nverdict: REQUEST_CHANGES\ndecision: post\n---\n\nbody in done dir\n"
+	if err := os.WriteFile(donePath, []byte(content), 0o644); err != nil {
+		t.Fatalf("failed to write test done spool file: %v", err)
+	}
+
+	body, info := ReadSpoolBody(spoolPath, tmp)
+
+	if !info.Found {
+		t.Errorf("info.Found = false, want true")
+	}
+	if !info.InDoneDir {
+		t.Errorf("info.InDoneDir = false, want true")
+	}
+
+	wantBody := "body in done dir\n"
+	if body != wantBody {
+		t.Errorf("body = %q, want %q", body, wantBody)
+	}
+}
+
+func TestReadSpoolBodyMissingFileReturnsNotFound(t *testing.T) {
+	tmp := t.TempDir()
+	pendingDir := filepath.Join(tmp, "pending")
+	doneDir := filepath.Join(tmp, "done")
+	if err := os.MkdirAll(pendingDir, 0o755); err != nil {
+		t.Fatalf("failed to set up test pending dir: %v", err)
+	}
+	if err := os.MkdirAll(doneDir, 0o755); err != nil {
+		t.Fatalf("failed to set up test done dir: %v", err)
+	}
+
+	spoolPath := filepath.Join(pendingDir, "does-not-exist.md")
+
+	body, info := ReadSpoolBody(spoolPath, tmp)
+
+	if body != "" {
+		t.Errorf("body = %q, want empty", body)
+	}
+	want := SpoolInfo{Found: false, DecisionState: "no spool"}
+	if info != want {
+		t.Errorf("info = %#v, want %#v", info, want)
+	}
+}
+
+func TestReadSpoolBodyEmptySpoolPathReturnsNotFoundWithoutFilesystemAccess(t *testing.T) {
+	// spoolPath == "" must short-circuit with zero filesystem calls, mirroring
+	// TestReadSpoolInfoEmptyPath. The nonsensical homeDir helps show (in
+	// spirit) that no I/O occurs; the real guarantee is that this test never
+	// creates any files on disk.
+	body, info := ReadSpoolBody("", "/nonexistent/should/never/be/touched")
+
+	if body != "" {
+		t.Errorf("body = %q, want empty", body)
+	}
+	want := SpoolInfo{Found: false, DecisionState: "no spool"}
+	if info != want {
+		t.Errorf("info = %#v, want %#v", info, want)
+	}
+}
+
+func TestReadSpoolBodyNoFrontMatterFenceReturnsWholeFileAsBody(t *testing.T) {
+	tmp := t.TempDir()
+	pendingDir := filepath.Join(tmp, "pending")
+	if err := os.MkdirAll(pendingDir, 0o755); err != nil {
+		t.Fatalf("failed to set up test pending dir: %v", err)
+	}
+
+	spoolPath := filepath.Join(pendingDir, "legacy.md")
+	content := "This is a legacy spool file with no front-matter fence at all.\n"
+	if err := os.WriteFile(spoolPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("failed to write test spool file: %v", err)
+	}
+
+	body, info := ReadSpoolBody(spoolPath, tmp)
+
+	if body != content {
+		t.Errorf("body = %q, want %q (whole file, no fence present)", body, content)
+	}
+	if !info.Found {
+		t.Errorf("info.Found = false, want true (file exists, just has no parsable front-matter)")
+	}
+	if info.Verdict != "" {
+		t.Errorf("info.Verdict = %q, want empty", info.Verdict)
+	}
+	if info.Decision != "" {
+		t.Errorf("info.Decision = %q, want empty", info.Decision)
+	}
+	if info.DecisionState != "pending" {
+		t.Errorf("info.DecisionState = %q, want %q", info.DecisionState, "pending")
+	}
+}
+
+func TestReadSpoolBodyTrimsSingleLeadingNewlineAfterFence(t *testing.T) {
+	tmp := t.TempDir()
+	pendingDir := filepath.Join(tmp, "pending")
+	if err := os.MkdirAll(pendingDir, 0o755); err != nil {
+		t.Fatalf("failed to set up test pending dir: %v", err)
+	}
+
+	spoolPath := filepath.Join(pendingDir, "owner-repo-17.md")
+	content := "---\nverdict: APPROVE\n---\n\n# Review\nmore body\n"
+	if err := os.WriteFile(spoolPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("failed to write test spool file: %v", err)
+	}
+
+	body, _ := ReadSpoolBody(spoolPath, tmp)
+
+	if !strings.HasPrefix(body, "# Review") {
+		t.Errorf("body = %q, want prefix %q (leading blank line after fence trimmed)", body, "# Review")
+	}
+	if strings.HasPrefix(body, "\n") {
+		t.Errorf("body = %q, should not start with a leading newline", body)
+	}
+}
+
+func TestReadSpoolBodyUnreadableFileDegradesToNotFound(t *testing.T) {
+	tmp := t.TempDir()
+	pendingDir := filepath.Join(tmp, "pending")
+	if err := os.MkdirAll(pendingDir, 0o755); err != nil {
+		t.Fatalf("failed to set up test pending dir: %v", err)
+	}
+
+	// A directory at the expected spool path: os.Stat succeeds (so
+	// resolveSpoolPath reports found=true), but os.ReadFile fails because
+	// it's a directory, not a regular file — a deterministic way to hit the
+	// "found but unreadable" branch without relying on permission bits,
+	// which behave inconsistently across platforms/CI (e.g. root).
+	spoolPath := filepath.Join(pendingDir, "actually-a-dir.md")
+	if err := os.MkdirAll(spoolPath, 0o755); err != nil {
+		t.Fatalf("failed to set up directory-as-spool-path fixture: %v", err)
+	}
+
+	var body string
+	var info SpoolInfo
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("ReadSpoolBody panicked on unreadable file: %v", r)
+			}
+		}()
+		body, info = ReadSpoolBody(spoolPath, tmp)
+	}()
+
+	if body != "" {
+		t.Errorf("body = %q, want empty", body)
+	}
+	if info.Found {
+		t.Errorf("info.Found = true, want false (unreadable file should degrade gracefully)")
+	}
+	if info.DecisionState != "no spool" {
+		t.Errorf("info.DecisionState = %q, want %q", info.DecisionState, "no spool")
 	}
 }

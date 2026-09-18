@@ -11,6 +11,7 @@ const (
 	TabTypePlanning
 	TabTypeLog
 	TabTypeReviews
+	TabTypeReviewContent
 )
 
 // String returns the string representation of the TabType
@@ -26,6 +27,8 @@ func (t TabType) String() string {
 		return "Log"
 	case TabTypeReviews:
 		return "Reviews"
+	case TabTypeReviewContent:
+		return "ReviewContent"
 	default:
 		return "Unknown"
 	}
