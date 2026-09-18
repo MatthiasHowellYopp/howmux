@@ -425,6 +425,15 @@ var bodyEditCommandFunc = exec.Command
 // shell out to $EDITOR already support — the first field is the binary,
 // the rest are prepended arguments, with the temp file path appended last.
 //
+// Limitation (by design): this whitespace split does NOT handle a $EDITOR
+// whose binary path or an argument contains spaces (e.g.
+// "/Applications/My Editor.app/Contents/MacOS/editor") or shell-quoted
+// arguments — the first whitespace-delimited fragment is taken as the
+// binary, so such a value fails with "executable file not found" on that
+// fragment. This matches how many CLI tools treat $EDITOR; users with a
+// spaced editor path should point $EDITOR at a space-free wrapper/symlink.
+// Full shell-word parsing is intentionally out of scope here.
+//
 // The temp file written here doubles as the "backup" of the pre-edit body:
 // nothing is written to the spool file itself until BodyWriter.SetBody is
 // called with a validated, non-empty temp-file path (see the editorDoneMsg
