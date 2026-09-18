@@ -632,6 +632,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.finalizeState = finalizeIdle
 		m.finalizeCancel = nil
 		m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("Finalize (%s) failed: %v", phaseLabel, msg.err)))
+		// On a *live* run, the script may have already posted some reviews
+		// before erroring mid-drain (each file is processed in its own
+		// idempotent pass by pr_review_finalize.py). Point the user at the
+		// safe recovery without changing any state: re-running finalize
+		// skips already-drained files and completes the rest. Dry-run
+		// failures post nothing, so the hint would be misleading there.
+		if !msg.dryRun {
+			m = m.appendActivity(m.styles.Warning.Render("Some reviews may already have posted — re-run finalize to complete the rest (it skips already-drained files)."))
+		}
 		return m, nil
 
 	case finalizeTickMsg:

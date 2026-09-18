@@ -204,6 +204,11 @@ func TestHandleFinalize_DryRunErrorPath(t *testing.T) {
 	if activityContains(m, "post live") {
 		t.Errorf("expected no confirmation prompt to have been appended, got %v", m.activityLines)
 	}
+	// A dry-run posts nothing, so the partial-post recovery hint (which is
+	// only correct for live runs) must NOT appear here.
+	if activityContains(m, "may already have posted") {
+		t.Errorf("did not expect a partial-post hint on a dry-run failure, got %v", m.activityLines)
+	}
 }
 
 // TestHandleFinalize_LiveErrorPath drives: "finalize" -> finalizeDryRunMsg
@@ -236,6 +241,11 @@ func TestHandleFinalize_LiveErrorPath(t *testing.T) {
 	}
 	if !activityContains(m, "Finalize (live) failed") {
 		t.Errorf("expected a live failure activity line, got %v", m.activityLines)
+	}
+	// A live run can post some reviews before erroring mid-drain, so the
+	// error handler appends a safe-recovery hint (re-run is idempotent).
+	if !activityContains(m, "may already have posted") {
+		t.Errorf("expected a partial-post recovery hint on a live failure, got %v", m.activityLines)
 	}
 
 	found := false
