@@ -389,7 +389,8 @@ func (rt *ReviewsTab) SelectedKey() string {
 
 // Update handles messages for the reviews tab. Arrow-key navigation moves the
 // row cursor (selectedIndex); Enter opens the selected PR's review content in
-// a new window (see openSelectedReviewCmd); all other messages are no-ops,
+// a new window (see openSelectedReviewCmd); p/r/R/d set a decision on the
+// selected review (see decideSelectedCmd); all other messages are no-ops,
 // matching the tab's existing "no background state to update" design —
 // resize is handled via Resize, and every View() call reads fresh data
 // directly from the store.
@@ -405,8 +406,39 @@ func (rt *ReviewsTab) Update(msg tea.Msg) (Tab, tea.Cmd) {
 		rt.moveCursor(1)
 	case "enter":
 		return rt, rt.openSelectedReviewCmd()
+	case "p":
+		return rt, rt.decideSelectedCmd("post")
+	case "r":
+		return rt, rt.decideSelectedCmd("revise")
+	case "R":
+		return rt, rt.decideSelectedCmd("rereview")
+	case "d":
+		return rt, rt.decideSelectedCmd("discard")
 	}
 	return rt, nil
+}
+
+// SelectedRecord resolves the currently selected row to its review.Record by
+// looking it up in rt.store.List() via recordKey. It returns (rec, false) if
+// nothing is selected, if the store read fails, or if the selected key no
+// longer matches any record (e.g. a race between selection and an external
+// prune) — never a panic. This is the single shared lookup both
+// decideSelectedCmd (below) and handleDecide (commands.go) use, so the
+// store.List()+recordKey matching logic exists in exactly one place.
+func (rt *ReviewsTab) SelectedRecord() (review.Record, bool) {
+	if rt.selectedKey == "" {
+		return review.Record{}, false
+	}
+	records, err := rt.store.List()
+	if err != nil {
+		return review.Record{}, false
+	}
+	for _, rec := range records {
+		if recordKey(rec) == rt.selectedKey {
+			return rec, true
+		}
+	}
+	return review.Record{}, false
 }
 
 // openSelectedReviewCmd returns a tea.Cmd that emits openReviewContentMsg
@@ -439,6 +471,23 @@ func (rt *ReviewsTab) openSelectedReviewCmd() tea.Cmd {
 	return nil
 }
 
+// decideSelectedCmd returns a tea.Cmd that emits decideRequestMsg for the
+// currently selected PR with the given decision, or nil if nothing is
+// selected or the store read fails — structured identically to
+// openSelectedReviewCmd (same no-op contract on an empty selection or a
+// store.List() error), via the shared SelectedRecord lookup above.
+func (rt *ReviewsTab) decideSelectedCmd(decision string) tea.Cmd {
+	if rt.selectedKey == "" {
+		return nil
+	}
+	rec, ok := rt.SelectedRecord()
+	if !ok {
+		return nil
+	}
+	msg := decideRequestMsg{repo: rec.Repo, pr: rec.PR, spoolPath: rec.SpoolPath, decision: decision}
+	return func() tea.Msg { return msg }
+}
+
 // Resize updates the tab dimensions
 func (rt *ReviewsTab) Resize(width, height int) {
 	rt.width = width
@@ -469,16 +518,29 @@ func (rt *ReviewsTab) CopyableContent() string {
 	return buildTable(sorted, spoolInfo, identityStyle, plainStatus, plainRow)
 }
 
-// CaptureFocusState returns the current focus state for the reviews tab. This
-// tab has no internal focusable widget (no text input, no interactive
-// selection), so it always uses footer input, matching MainTab.
+// CaptureFocusState returns the current focus state for the reviews tab.
+// Unlike MainTab, the Reviews tab has an interactive row-selection surface
+// (up/down/enter/p/r/R/d, see Update below), so row-navigation mode —
+// FocusTargetRows — is what this tab reports, not FocusTargetFooter. This
+// makes row-navigation the default/entered state every time the tab becomes
+// active via switchActiveTab (F2/[/]): switchActiveTab only force-focuses
+// the footer when the previously captured target is FocusTargetFooter, so
+// reporting FocusTargetRows here means the footer starts (and stays)
+// unfocused on this tab until the user explicitly toggles to it (see the
+// "tab" key case in tui.go, mirroring togglePlanningFocus's pattern for
+// TabTypePlanning). Footer focus becomes the deliberate exception rather
+// than the default, matching this tab's design intent.
 func (rt *ReviewsTab) CaptureFocusState() FocusTarget {
-	return FocusTargetFooter
+	return FocusTargetRows
 }
 
-// RestoreFocusState restores the focus state for the reviews tab. The reviews
-// tab doesn't manage focus directly — handled by the parent model, matching
-// MainTab.
+// RestoreFocusState restores the focus state for the reviews tab. The
+// reviews tab has no separate internal widget to focus/blur for either
+// target (FocusTargetRows or FocusTargetFooter) — its own key handling in
+// Update always runs whenever the footer isn't focused, needing no explicit
+// "enter row mode" step. Focus is fully arbitrated by the parent model via
+// m.input.SetFocus (see switchActiveTab and the "tab" key case in tui.go),
+// matching MainTab's existing no-op contract here.
 func (rt *ReviewsTab) RestoreFocusState(target FocusTarget) tea.Cmd {
 	return nil
 }

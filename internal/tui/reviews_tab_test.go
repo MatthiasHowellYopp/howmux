@@ -345,14 +345,22 @@ func TestReviewsTabResizeNoPanic(t *testing.T) {
 	}
 }
 
-// TestReviewsTabFocusState verifies focus state mirrors MainTab: footer
-// focus, no-op restore.
+// TestReviewsTabFocusState verifies the tab reports row-navigation mode
+// (FocusTargetRows) as its captured focus state — not FocusTargetFooter —
+// so switchActiveTab leaves the footer unfocused by default when the
+// Reviews tab becomes active (see AC2 fix, issue #85 qa-attempt:2).
+// RestoreFocusState remains a no-op for both targets: this tab has no
+// internal widget to focus/blur, all focus arbitration lives in the parent
+// model (see setReviewsFocus/toggleReviewsFocus in tui.go).
 func TestReviewsTabFocusState(t *testing.T) {
 	store := &fakeReviewStore{}
 	rt := NewReviewsTab("reviews", store, testReviewsStyles())
 
-	if rt.CaptureFocusState() != FocusTargetFooter {
-		t.Errorf("expected FocusTargetFooter, got %v", rt.CaptureFocusState())
+	if rt.CaptureFocusState() != FocusTargetRows {
+		t.Errorf("expected FocusTargetRows, got %v", rt.CaptureFocusState())
+	}
+	if cmd := rt.RestoreFocusState(FocusTargetRows); cmd != nil {
+		t.Error("expected RestoreFocusState to be a no-op returning nil")
 	}
 	if cmd := rt.RestoreFocusState(FocusTargetFooter); cmd != nil {
 		t.Error("expected RestoreFocusState to be a no-op returning nil")
@@ -967,5 +975,176 @@ func TestReviewsTabEnterWithStoreListErrorReturnsNilCmd(t *testing.T) {
 	_, cmd := rt.Update(enterKeyMsg())
 	if cmd != nil {
 		t.Error("expected nil cmd from Update on enter when store.List() errors")
+	}
+}
+
+// decideKeyMsg builds a tea.KeyMsg for the given single character, mirroring
+// upKeyMsg/downKeyMsg/enterKeyMsg's pattern above but for printable-rune
+// keys, which ReviewsTab.Update matches via keyMsg.String() returning that
+// exact rune. Bubble Tea reports the shifted form of a letter as its
+// uppercase rune, which is what makes "R" distinguishable from "r" — this
+// helper exercises that by taking the exact rune to send.
+func decideKeyMsg(r rune) tea.KeyMsg {
+	return tea.KeyPressMsg{Code: r, Text: string(r)}
+}
+
+// TestReviewsTabDecideKeysWithSelection verifies p/r/R/d each emit a
+// decideRequestMsg carrying the correct decision string and the selected
+// record's repo/pr/spoolPath.
+func TestReviewsTabDecideKeysWithSelection(t *testing.T) {
+	cases := []struct {
+		key          rune
+		wantDecision string
+	}{
+		{key: 'p', wantDecision: "post"},
+		{key: 'r', wantDecision: "revise"},
+		{key: 'R', wantDecision: "rereview"},
+		{key: 'd', wantDecision: "discard"},
+	}
+
+	for _, tc := range cases {
+		t.Run(string(tc.key), func(t *testing.T) {
+			records := []review.Record{
+				{Repo: "owner/repo-a", PR: 1, SpoolPath: "/tmp/spool-a.md"},
+				{Repo: "owner/repo-b", PR: 2, SpoolPath: "/tmp/spool-b.md"},
+			}
+			store := &fakeReviewStore{records: records}
+			rt := NewReviewsTab("reviews", store, testReviewsStyles())
+			_ = rt.View() // seed order; selection -> owner/repo-a#1
+
+			tab, cmd := rt.Update(decideKeyMsg(tc.key))
+			rt = tab.(*ReviewsTab)
+			if cmd == nil {
+				t.Fatalf("key %q: expected non-nil tea.Cmd with a selection", tc.key)
+			}
+
+			msg := cmd()
+			decideMsg, ok := msg.(decideRequestMsg)
+			if !ok {
+				t.Fatalf("key %q: expected decideRequestMsg, got %T (%v)", tc.key, msg, msg)
+			}
+			if decideMsg.repo != "owner/repo-a" || decideMsg.pr != 1 || decideMsg.spoolPath != "/tmp/spool-a.md" {
+				t.Errorf("key %q: decideRequestMsg = %+v, want repo=owner/repo-a pr=1 spoolPath=/tmp/spool-a.md", tc.key, decideMsg)
+			}
+			if decideMsg.decision != tc.wantDecision {
+				t.Errorf("key %q: decision = %q, want %q", tc.key, decideMsg.decision, tc.wantDecision)
+			}
+		})
+	}
+}
+
+// TestReviewsTabDecideKeysWithNoSelectionReturnsNilCmd verifies p/r/R/d on an
+// empty store (no selection) are no-ops, mirroring
+// TestReviewsTabEnterWithNoSelectionReturnsNilCmd's pattern for enter.
+func TestReviewsTabDecideKeysWithNoSelectionReturnsNilCmd(t *testing.T) {
+	for _, key := range []rune{'p', 'r', 'R', 'd'} {
+		t.Run(string(key), func(t *testing.T) {
+			store := &fakeReviewStore{records: nil}
+			rt := NewReviewsTab("reviews", store, testReviewsStyles())
+			_ = rt.View() // seed; selection stays empty
+
+			_, cmd := rt.Update(decideKeyMsg(key))
+			if cmd != nil {
+				t.Errorf("key %q: expected nil cmd with no selection", key)
+			}
+		})
+	}
+}
+
+// TestReviewsTabDecideKeysWithStoreListErrorReturnsNilCmd verifies p/r/R/d
+// degrade to a no-op when store.List() errors at keypress time, mirroring
+// TestReviewsTabEnterWithStoreListErrorReturnsNilCmd's pattern for enter.
+func TestReviewsTabDecideKeysWithStoreListErrorReturnsNilCmd(t *testing.T) {
+	for _, key := range []rune{'p', 'r', 'R', 'd'} {
+		t.Run(string(key), func(t *testing.T) {
+			records := []review.Record{
+				{Repo: "owner/repo-a", PR: 1, SpoolPath: "/tmp/spool-a.md"},
+			}
+			store := &fakeReviewStore{records: records}
+			rt := NewReviewsTab("reviews", store, testReviewsStyles())
+			_ = rt.View() // seed selection while List() still succeeds
+
+			store.records = nil
+			store.listErr = errors.New("disk fell over")
+
+			_, cmd := rt.Update(decideKeyMsg(key))
+			if cmd != nil {
+				t.Errorf("key %q: expected nil cmd when store.List() errors", key)
+			}
+		})
+	}
+}
+
+// TestReviewsTabDecideKeyCaseSensitivity is an explicit regression test for
+// the one part of this design most likely to silently misbehave: confirming
+// lowercase "r" routes to "revise" and uppercase "R" routes to "rereview",
+// rather than assuming tea.KeyMsg.String()'s shift handling works as
+// expected.
+func TestReviewsTabDecideKeyCaseSensitivity(t *testing.T) {
+	records := []review.Record{
+		{Repo: "owner/repo-a", PR: 1, SpoolPath: "/tmp/spool-a.md"},
+	}
+
+	t.Run("lowercase r routes to revise", func(t *testing.T) {
+		store := &fakeReviewStore{records: records}
+		rt := NewReviewsTab("reviews", store, testReviewsStyles())
+		_ = rt.View()
+
+		_, cmd := rt.Update(decideKeyMsg('r'))
+		if cmd == nil {
+			t.Fatal("expected non-nil cmd")
+		}
+		msg := cmd().(decideRequestMsg)
+		if msg.decision != "revise" {
+			t.Errorf("lowercase 'r' decision = %q, want %q", msg.decision, "revise")
+		}
+	})
+
+	t.Run("uppercase R routes to rereview", func(t *testing.T) {
+		store := &fakeReviewStore{records: records}
+		rt := NewReviewsTab("reviews", store, testReviewsStyles())
+		_ = rt.View()
+
+		_, cmd := rt.Update(decideKeyMsg('R'))
+		if cmd == nil {
+			t.Fatal("expected non-nil cmd")
+		}
+		msg := cmd().(decideRequestMsg)
+		if msg.decision != "rereview" {
+			t.Errorf("uppercase 'R' decision = %q, want %q", msg.decision, "rereview")
+		}
+	})
+}
+
+// TestReviewsTabDecideSelectionFollowsPRAcrossResort mirrors
+// TestReviewsTabSelectionFollowsPRAcrossResort: after selecting a row and
+// then re-sorting the underlying store, pressing a decide key must still
+// target the originally-selected PR, not whatever now occupies its old row
+// index.
+func TestReviewsTabDecideSelectionFollowsPRAcrossResort(t *testing.T) {
+	store := &fakeReviewStore{records: []review.Record{
+		{Repo: "foo/bar", PR: 10, Status: review.StatusWatching, SpoolPath: "/tmp/bar.md"},
+		{Repo: "foo/baz", PR: 20, Status: review.StatusWatching, SpoolPath: "/tmp/baz.md"},
+	}}
+	rt := NewReviewsTab("reviews", store, testReviewsStyles())
+	_ = rt.View() // seed order: [foo/bar#10, foo/baz#20], selection -> foo/bar#10
+
+	// Select the second row (foo/baz#20).
+	rt.moveCursor(1)
+	if rt.SelectedKey() != "foo/baz#20" {
+		t.Fatalf("SelectedKey() = %q, want foo/baz#20", rt.SelectedKey())
+	}
+
+	// A new PR enrolls that sorts to the TOP (aaa/zzz < foo/*).
+	store.records = append(store.records, review.Record{Repo: "aaa/zzz", PR: 1, Status: review.StatusWatching, SpoolPath: "/tmp/zzz.md"})
+	_ = rt.View() // re-render, re-sorts, selection must still follow foo/baz#20
+
+	_, cmd := rt.Update(decideKeyMsg('p'))
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd")
+	}
+	msg := cmd().(decideRequestMsg)
+	if msg.repo != "foo/baz" || msg.pr != 20 || msg.spoolPath != "/tmp/baz.md" {
+		t.Errorf("decideRequestMsg = %+v, want repo=foo/baz pr=20 spoolPath=/tmp/baz.md (selection must follow its PR across resort)", msg)
 	}
 }

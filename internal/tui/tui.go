@@ -53,6 +53,19 @@ type openReviewContentMsg struct {
 	spoolPath string
 }
 
+// decideRequestMsg is emitted by ReviewsTab.Update's p/r/R/d key handlers
+// (mirroring openReviewContentMsg's pattern for enter) to ask the
+// top-level model to set the decision on the currently selected review.
+// ReviewsTab has no reference to DecisionWriter or the model (by design,
+// matching every other cross-tab action) — see openSelectedReviewCmd's
+// doc comment for why this message/tea.Cmd round trip is the mechanism.
+type decideRequestMsg struct {
+	repo      string
+	pr        int
+	spoolPath string
+	decision  string // one of "post", "revise", "rereview", "discard"
+}
+
 type overlayType int
 
 const (
@@ -109,6 +122,13 @@ type model struct {
 
 	// Context cancellation for async operations (Finding #2)
 	reviewCancel context.CancelFunc // Cancel function for in-flight review
+
+	// decisionWriter sets the decision: field on a PR-review spool file
+	// (see internal/review/decisionwriter.go). Shared by handleDecide (REPL
+	// dispatch, commands.go) and the future decideRequestMsg handler
+	// (key-menu dispatch, Task 7) via the applyDecision helper below, so
+	// both entry points shell out through the exact same collaborator.
+	decisionWriter *review.DecisionWriter
 
 	// Overlay system
 	activeOverlay  overlayType
@@ -232,6 +252,7 @@ func newModel(w *watcher.Watcher, m *agent.Manager, cfg *config.Config, logFile 
 		footerManager:  footerManager,
 		tabFocusStates: make(map[string]FocusTarget),
 		initialCommand: initialCommand,
+		decisionWriter: review.NewDecisionWriter(),
 	}
 }
 
@@ -460,6 +481,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m, cmd = m.switchActiveTab(len(m.tabManager.GetTabs()) - 1)
 		return m, cmd
+
+	case decideRequestMsg:
+		// Emitted by ReviewsTab.Update's p/r/R/d key handlers (via
+		// decideSelectedCmd) — the key-menu counterpart to the "decide"
+		// REPL command handled by handleDecide (commands.go). Both entry
+		// points delegate to the shared applyDecision helper so key-driven
+		// and command-driven decisions produce identical activity-line
+		// feedback from exactly one code path (issue #85, Task 7).
+		//
+		// decideSelectedCmd already resolved repo/pr/spoolPath from the
+		// selected record before emitting this message, so no tab lookup
+		// is needed here — but the same empty-spool-path check handleDecide
+		// performs (step 4) still applies uniformly, since msg.spoolPath
+		// could in principle be "" for the same reason a selected record's
+		// SpoolPath could be empty (never reviewed yet).
+		if msg.spoolPath == "" {
+			m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("PR #%d has no review yet — nothing to decide", msg.pr)))
+			return m, nil
+		}
+		rec := review.Record{Repo: msg.repo, PR: msg.pr, SpoolPath: msg.spoolPath}
+		m = m.applyDecision(rec, msg.decision)
+		return m, nil
 
 	case focusTransferMsg:
 		// Handle focus coordination between planning tab and footer input.
@@ -913,6 +956,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, m.togglePlanningFocus()
 			}
+			// On the Reviews tab, Tab toggles focus between row-navigation
+			// mode (the default — up/down/enter/p/r/R/d reach
+			// ReviewsTab.Update) and the footer input (so the user can type
+			// a `decide <value>` or other command), mirroring
+			// togglePlanningFocus's footer<->message pattern but for this
+			// tab's row/footer duality. Without this, there would be no
+			// discoverable way back to the footer once row-navigation mode
+			// is the entered default (see switchActiveTab / CaptureFocusState).
+			if activeTab != nil && activeTab.Type() == TabTypeReviews {
+				if m.input.Focused() && m.input.HasMatchedSuggestions() {
+					var cmd tea.Cmd
+					m.input, cmd = m.input.Update(msg)
+					return m, cmd
+				}
+				return m, m.toggleReviewsFocus()
+			}
 			// Forward to active tab for other handling
 			if activeTab != nil {
 				if cmd := m.tabManager.Update(msg); cmd != nil {
@@ -926,6 +985,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			activeTab := m.tabManager.GetActiveTab()
 			if activeTab != nil && activeTab.Type() == TabTypePlanning {
 				return m, m.togglePlanningFocus()
+			}
+			// Same rationale on the Reviews tab: Shift+Tab always toggles
+			// row-navigation<->footer focus, regardless of completion state.
+			if activeTab != nil && activeTab.Type() == TabTypeReviews {
+				return m, m.toggleReviewsFocus()
 			}
 			return m, nil
 		case "enter":
@@ -959,6 +1023,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Forward key messages to active tab - removed TabTypeAgent restriction
 			activeTab := m.tabManager.GetActiveTab()
 			if activeTab != nil {
+				// AC5a: on the Reviews tab, p/r/R/d are row-decision
+				// shortcuts (see ReviewsTab.Update) — but only when the
+				// footer input does NOT have focus. When the footer DOES
+				// have focus (the user is typing a command), those same
+				// keystrokes must type into the footer normally, matching
+				// how m.input.Focused() is re-checked live elsewhere in
+				// this same routing block (e.g. the "up/down/pgup/…"
+				// case) rather than trusting only the captured focus
+				// state. Skip forwarding to the tab in that case and fall
+				// through to the input-update path below.
+				if activeTab.Type() == TabTypeReviews && m.input.Focused() {
+					break
+				}
 				if cmd := m.tabManager.Update(msg); cmd != nil {
 					return m, cmd
 				}
@@ -1014,6 +1091,39 @@ func (m *model) togglePlanningFocus() tea.Cmd {
 		return m.setPlanningFocus(FocusTargetMessage)
 	}
 	return m.setPlanningFocus(FocusTargetFooter)
+}
+
+// setReviewsFocus is the Reviews-tab analog of setPlanningFocus: the single
+// source of truth for focus on the active Reviews tab, keeping m.input and
+// m.tabFocusStates[tabID] in sync. target must be FocusTargetFooter or
+// FocusTargetRows. Unlike setPlanningFocus, there is no tab-side widget to
+// restore (ReviewsTab.RestoreFocusState is a no-op — see reviews_tab.go), so
+// this only ever needs to drive m.input.
+func (m *model) setReviewsFocus(target FocusTarget) tea.Cmd {
+	activeTab := m.tabManager.GetActiveTab()
+	if activeTab == nil || activeTab.Type() != TabTypeReviews {
+		return nil
+	}
+
+	m.tabFocusStates[activeTab.ID()] = target
+
+	if target == FocusTargetFooter {
+		m.input.SetFocus(true)
+		return m.input.Focus()
+	}
+	// FocusTargetRows (or any other non-footer value): footer yields focus.
+	m.input.SetFocus(false)
+	return nil
+}
+
+// toggleReviewsFocus flips focus between the footer and row-navigation mode
+// on the active Reviews tab, returning the cmd to apply it. Used by
+// Tab/shift+tab — mirrors togglePlanningFocus's footer<->message pattern.
+func (m *model) toggleReviewsFocus() tea.Cmd {
+	if m.input.Focused() {
+		return m.setReviewsFocus(FocusTargetRows)
+	}
+	return m.setReviewsFocus(FocusTargetFooter)
 }
 
 func (m model) activateOverlay(overlay overlayType, title string, content []string) model {
@@ -1521,11 +1631,23 @@ func (m model) switchActiveTab(index int) (model, tea.Cmd) {
 			}
 		}
 
-		// Retrieve previous focus state or default to footer
+		// Retrieve previous focus state or default based on tab type. Most
+		// tabs (Main, Planning, Agent, Log) default to footer focus on first
+		// visit, matching historical behavior. The Reviews tab is the
+		// exception: it has its own row-navigation/decision-key surface
+		// (up/down/enter/p/r/R/d, see ReviewsTab.Update) that must be
+		// reachable on first visit too, not just on later re-visits once
+		// CaptureFocusState has had a chance to report FocusTargetRows —
+		// otherwise a user's very first F2/[/] into the Reviews tab would
+		// still land with the footer focused, reintroducing the AC2
+		// unreachability bug for that one visit.
 		previousFocus, exists := m.tabFocusStates[activeTab.ID()]
 		if !exists {
-			// Default: footer focus for new tabs
-			previousFocus = FocusTargetFooter
+			if activeTab.Type() == TabTypeReviews {
+				previousFocus = FocusTargetRows
+			} else {
+				previousFocus = FocusTargetFooter
+			}
 		}
 
 		logging.Debug("restoring focus state",
@@ -1611,6 +1733,12 @@ func (m model) executeCommand(input string) (model, tea.Cmd) {
 			args = parts[1:]
 		}
 		return m.handleReview(args)
+	case "decide":
+		args := []string{}
+		if len(parts) > 1 {
+			args = parts[1:]
+		}
+		return m.handleDecide(args)
 	default:
 		m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("Unknown command: %s", cmd)))
 		return m, nil

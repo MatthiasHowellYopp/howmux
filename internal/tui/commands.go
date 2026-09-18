@@ -198,6 +198,7 @@ func (m model) handleHelp() (model, tea.Cmd) {
 		"  plan classic [desc] - Start legacy subprocess planning session",
 		"  log [level] [size] - Open log viewer (level: debug/info/warn/error, size: buffer lines)",
 		"  logs           - View incident logs",
+		"  decide <value>  - Set decision on selected review (post|revise|rereview|discard)",
 		"  theme          - Show current theme",
 		"  theme <name>   - Switch to theme",
 		"  about          - Show version information and check for updates",
@@ -831,6 +832,83 @@ func (m model) handleLog(args []string) (model, tea.Cmd) {
 	m = m.appendActivity(m.styles.Success.Render(fmt.Sprintf("Log viewer opened: level=%s, buffer_size=%d", level, bufferSize)))
 
 	return m, tea.Batch(switchCmd, pollCmd)
+}
+
+// findReviewsTab locates the singleton Reviews tab by TYPE, not by "is it
+// currently active" — decide must work regardless of which tab is active
+// (matching how handleReview's bare form and handleStatus already operate
+// independent of the active tab), since ReviewsTab is a permanent,
+// non-closable tab (IsClosable() == false, added once in newModel) and
+// there is exactly one per session. Returns nil if no Reviews tab is found
+// (defensive only; should not occur in practice — mirrors the nil-check
+// style already used throughout tui.go, e.g. findReviewsTabIndex).
+func (m model) findReviewsTab() *ReviewsTab {
+	for _, tab := range m.tabManager.GetTabs() {
+		if tab.Type() == TabTypeReviews {
+			if rt, ok := tab.(*ReviewsTab); ok {
+				return rt
+			}
+		}
+	}
+	return nil
+}
+
+// applyDecision calls DecisionWriter.SetDecision for rec and decision, then
+// appends the resulting success or error activity line, using the same
+// m.styles.Error/Success + appendActivity pattern every other command in
+// this file already uses. This is the shared "apply decision + produce
+// activity line" logic both handleDecide (REPL dispatch, below) and the
+// future decideRequestMsg handler in model.Update (Task 7, key-menu
+// dispatch) call, so key-driven and command-driven decisions always produce
+// identical visual feedback from exactly one code path.
+func (m model) applyDecision(rec review.Record, decision string) model {
+	if err := m.decisionWriter.SetDecision(rec.SpoolPath, decision); err != nil {
+		return m.appendActivity(m.styles.Error.Render(fmt.Sprintf("Failed to set decision: %v", err)))
+	}
+	return m.appendActivity(m.styles.Success.Render(fmt.Sprintf("Set decision on PR #%d to '%s'", rec.PR, decision)))
+}
+
+// handleDecide implements the `decide post|revise|rereview|discard` REPL
+// command. It validates the argument, resolves the currently selected review
+// row from the singleton Reviews tab (regardless of which tab is currently
+// active — see findReviewsTab), and delegates to applyDecision. See the
+// design spec's "Input Validation Summary" and "Row-Selection Requirement
+// Summary" sections (issue #85) for why these checks are layered and why
+// selection is resolved by tab type rather than active-tab status.
+func (m model) handleDecide(args []string) (model, tea.Cmd) {
+	if len(args) != 1 {
+		m = m.appendActivity(m.styles.Error.Render("Usage: decide post|revise|rereview|discard"))
+		return m, nil
+	}
+
+	decision := args[0]
+	switch decision {
+	case "post", "revise", "rereview", "discard":
+		// valid
+	default:
+		m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("Invalid decision: %s (must be post, revise, rereview, or discard)", decision)))
+		return m, nil
+	}
+
+	rt := m.findReviewsTab()
+	if rt == nil {
+		m = m.appendActivity(m.styles.Error.Render("No review selected — switch to the Reviews tab and select a row first"))
+		return m, nil
+	}
+
+	rec, ok := rt.SelectedRecord()
+	if !ok {
+		m = m.appendActivity(m.styles.Error.Render("No review selected — switch to the Reviews tab and select a row first"))
+		return m, nil
+	}
+
+	if rec.SpoolPath == "" {
+		m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("PR #%d has no review yet — nothing to decide", rec.PR)))
+		return m, nil
+	}
+
+	m = m.applyDecision(rec, decision)
+	return m, nil
 }
 
 func (m model) handleReview(args []string) (model, tea.Cmd) {

@@ -100,6 +100,12 @@ func NewCommandRegistry(agentManager *agent.Manager) *CommandRegistry {
 		ArgPattern:  "[PR_URL]",
 	})
 
+	registry.register(&Command{
+		Name:        "decide",
+		Description: "Set the decision on the selected review (post|revise|rereview|discard)",
+		Subcommands: []string{"post", "revise", "rereview", "discard"},
+	})
+
 	// Build flattened command list
 	registry.buildFlattenedCommands()
 
