@@ -180,6 +180,7 @@ howmux
 | `stop <issue>` | Stop the agent working on a specific issue number |
 | `plan [desc]` | Start interactive planning session |
 | `review [PR_URL]` | Start PR review workflow (URL to enroll/review now, bare to start loop) |
+| `decide <post\|revise\|rereview\|discard>` | Set the decision on the currently selected review |
 | `theme` | Show current theme |
 | `theme <name>` | Switch to theme |
 | `about` | Show version information and check for updates |
@@ -208,6 +209,12 @@ Both modes preserve their state when you switch, allowing seamless workflow tran
 **Clipboard:**
 - `Ctrl+Y` — Copy the conversation/agent-output text to the clipboard (the full underlying text, not just the visible window)
 - `Ctrl+V` — Paste from the clipboard into the message input (planning tabs only, when the message input is focused)
+
+**Reviews Tab (row selected):**
+- `p` — Set decision to post
+- `r` — Set decision to revise
+- `R` — Set decision to rereview
+- `d` — Set decision to discard
 
 **Application:**
 - `Ctrl+C` — Quit (immediate exit with cleanup; always available as an escape hatch)

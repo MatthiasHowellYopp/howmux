@@ -113,3 +113,73 @@ func TestPlanClassicAutocomplete(t *testing.T) {
 		t.Errorf("Expected 'plan classic' for 'plan cl', got '%s'", match)
 	}
 }
+
+// TestDecideCommandRegistration verifies the "decide" command is registered
+// with exactly the four expected subcommands, in registration order, and
+// that IsValidCommand/GetSubcommands/GetFlattenedMatches all behave
+// consistently with the existing generic registry logic (no special-casing
+// needed for "decide").
+func TestDecideCommandRegistration(t *testing.T) {
+	cfg := &config.Config{}
+	manager := agent.NewManager(cfg)
+	registry := NewCommandRegistry(manager)
+
+	cmd, exists := registry.GetCommand("decide")
+	if !exists {
+		t.Fatal("expected 'decide' command to be registered")
+	}
+
+	wantSubs := []string{"post", "revise", "rereview", "discard"}
+	if len(cmd.Subcommands) != len(wantSubs) {
+		t.Fatalf("expected %d subcommands, got %d: %v", len(wantSubs), len(cmd.Subcommands), cmd.Subcommands)
+	}
+	for i, want := range wantSubs {
+		if cmd.Subcommands[i] != want {
+			t.Errorf("Subcommands[%d] = %q, want %q (order: %v)", i, cmd.Subcommands[i], want, cmd.Subcommands)
+		}
+	}
+
+	for _, sub := range wantSubs {
+		input := "decide " + sub
+		if !registry.IsValidCommand(input) {
+			t.Errorf("expected IsValidCommand(%q) to be true", input)
+		}
+	}
+
+	// Bare "decide" (no subcommand) is valid at the registry level, matching
+	// the existing len==1 branch behavior verified against "watch" bare
+	// (IsValidCommand("watch") == true) — the registry only checks
+	// vocabulary when a subcommand is actually present.
+	if !registry.IsValidCommand("decide") {
+		t.Error("expected bare 'decide' to be valid at the registry level")
+	}
+
+	if registry.IsValidCommand("decide bogus") {
+		t.Error("expected 'decide bogus' to be invalid")
+	}
+
+	gotSubs := registry.GetSubcommands("decide")
+	if len(gotSubs) != len(wantSubs) {
+		t.Fatalf("GetSubcommands(\"decide\") = %v, want %v", gotSubs, wantSubs)
+	}
+	for i, want := range wantSubs {
+		if gotSubs[i] != want {
+			t.Errorf("GetSubcommands(\"decide\")[%d] = %q, want %q", i, gotSubs[i], want)
+		}
+	}
+
+	matches := registry.GetFlattenedMatches("dec")
+	for _, sub := range wantSubs {
+		want := "decide " + sub
+		found := false
+		for _, m := range matches {
+			if m == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected %q in GetFlattenedMatches(\"dec\"), got %v", want, matches)
+		}
+	}
+}

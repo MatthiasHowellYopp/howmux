@@ -9,6 +9,7 @@ func TestFocusTargetString(t *testing.T) {
 	}{
 		{FocusTargetFooter, "footer"},
 		{FocusTargetMessage, "message"},
+		{FocusTargetRows, "rows"},
 	}
 
 	for _, tt := range tests {
@@ -25,6 +26,7 @@ func TestFocusTargetIsValid(t *testing.T) {
 	}{
 		{FocusTargetFooter, true},
 		{FocusTargetMessage, true},
+		{FocusTargetRows, true},
 		{FocusTarget("invalid"), false},
 		{FocusTarget(""), false},
 	}
