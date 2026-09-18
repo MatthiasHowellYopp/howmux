@@ -6,6 +6,7 @@ import (
 
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/matthiashowellyopp/howmux/internal/agent"
 )
@@ -72,18 +73,14 @@ func NewReviewContentTab(id, title, body string, found bool, styles *Styles) *Re
 
 	if !found {
 		rct.errMsg = fmt.Sprintf("Could not read review content for %s (spool file missing or unreadable).", title)
-		if styles != nil {
-			vp.SetContent(styles.Error.Render(rct.errMsg))
-		} else {
-			vp.SetContent(rct.errMsg)
-		}
 		rct.viewport = vp
+		rct.setWrappedContent(rct.renderedErrMsg())
 		return rct
 	}
 
 	rct.plainContent = body
-	vp.SetContent(body)
 	rct.viewport = vp
+	rct.setWrappedContent(body)
 	return rct
 }
 
@@ -134,7 +131,7 @@ func (rct *ReviewContentTab) AppendFromCapture() {
 	}
 	content := strings.Join(rct.liveCapture.GetLines(), "\n")
 	rct.plainContent = content
-	rct.viewport.SetContent(content)
+	rct.setWrappedContent(content)
 }
 
 // ID returns the tab identifier.
@@ -181,12 +178,55 @@ func (rct *ReviewContentTab) Update(msg tea.Msg) (Tab, tea.Cmd) {
 	return rct, cmd
 }
 
-// Resize updates the tab dimensions, matching LogTab.Resize.
+// Resize updates the tab dimensions, matching LogTab.Resize. It then
+// re-wraps whichever raw content field is populated (errMsg or
+// plainContent) at the new width, so a resize reflows content instead of
+// only changing where the still-unwrapped content gets clipped.
 func (rct *ReviewContentTab) Resize(width, height int) {
 	rct.width = width
 	rct.height = height
 	rct.viewport.SetWidth(width)
 	rct.viewport.SetHeight(height)
+
+	switch {
+	case rct.errMsg != "":
+		rct.setWrappedContent(rct.renderedErrMsg())
+	case rct.plainContent != "":
+		rct.setWrappedContent(rct.plainContent)
+	}
+	// else: a freshly-constructed NewLiveReviewContentTab tab before its
+	// first AppendFromCapture — nothing to (re)wrap yet, matches the
+	// existing "starts empty" contract (TestNewLiveReviewContentTab_StartsEmpty).
+}
+
+// wrapWidth returns the width to wrap content to: the viewport's current
+// width, treated as at least 1 to avoid lipgloss.Wrap degenerate behavior
+// at width <= 0 (mirrors Resize's existing expectation that 0/negative
+// dimensions must not panic).
+func (rct *ReviewContentTab) wrapWidth() int {
+	w := rct.viewport.Width()
+	if w <= 0 {
+		return 1
+	}
+	return w
+}
+
+// setWrappedContent wraps raw to the tab's current width and sets it as
+// the viewport content. All SetContent call sites route through this so
+// wrapping stays in one place and Resize can re-invoke it.
+func (rct *ReviewContentTab) setWrappedContent(raw string) {
+	rct.viewport.SetContent(lipgloss.Wrap(raw, rct.wrapWidth(), ""))
+}
+
+// renderedErrMsg returns rct.errMsg run through styles.Error if styles is
+// set, otherwise the raw message — the single place that decides how the
+// error message is styled before wrapping, used by both the constructor's
+// !found path and Resize's re-wrap.
+func (rct *ReviewContentTab) renderedErrMsg() string {
+	if rct.styles != nil {
+		return rct.styles.Error.Render(rct.errMsg)
+	}
+	return rct.errMsg
 }
 
 // CaptureFocusState / RestoreFocusState: this tab has no internal focusable

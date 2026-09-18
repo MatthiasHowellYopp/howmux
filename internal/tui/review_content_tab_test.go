@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/matthiashowellyopp/howmux/internal/agent"
 )
@@ -236,5 +237,135 @@ func TestReviewContentTab_AppendFromCaptureIsNoOpForStaticConstructor(t *testing
 
 	if got := rct.CopyableContent(); got != body {
 		t.Errorf("CopyableContent() = %q, want unchanged %q after AppendFromCapture() no-op", got, body)
+	}
+}
+
+// wrappedLineCount returns the number of newline-delimited lines in the
+// ANSI-stripped view output, used by the wrap tests below to assert on
+// visual line counts without being tripped up by styling escape codes.
+func wrappedLineCount(view string) int {
+	stripped := ansi.Strip(view)
+	return strings.Count(stripped, "\n") + 1
+}
+
+// TestReviewContentTabViewWrapsLongLineButCopyableContentStaysUnwrapped
+// verifies AC1: a long single line (with and without spaces to break on)
+// wraps across multiple visual lines at a known narrow width, while
+// CopyableContent() still returns the original unwrapped single-line
+// string exactly.
+func TestReviewContentTabViewWrapsLongLineButCopyableContentStaysUnwrapped(t *testing.T) {
+	longLine := strings.Repeat("a very long finding line with words to wrap ", 6)
+
+	rct := NewReviewContentTab("id", "Review: owner/repo #1", longLine, true, testReviewsStyles())
+	rct.Resize(40, 24)
+
+	view := rct.View()
+	stripped := ansi.Strip(view)
+	if !strings.Contains(stripped, "\n") {
+		t.Errorf("View() = %q, want wrapped output containing multiple lines", stripped)
+	}
+	if wrappedLineCount(view) <= 1 {
+		t.Errorf("wrappedLineCount(view) = %d, want > 1 at width 40 for a long line", wrappedLineCount(view))
+	}
+
+	copyable := rct.CopyableContent()
+	if copyable != longLine {
+		t.Errorf("CopyableContent() = %q, want unwrapped original %q", copyable, longLine)
+	}
+}
+
+// TestReviewContentTabViewWrapsLongUnbrokenToken verifies that a single
+// unbroken token (no spaces) longer than the width — e.g. a long file:line
+// prefix — still wraps mid-token via lipgloss.Wrap, matching AC1's
+// "onto the next line(s)" requirement even without word-boundary breaks.
+func TestReviewContentTabViewWrapsLongUnbrokenToken(t *testing.T) {
+	longToken := strings.Repeat("x", 200)
+
+	rct := NewReviewContentTab("id", "Review: owner/repo #1", longToken, true, testReviewsStyles())
+	rct.Resize(40, 24)
+
+	view := rct.View()
+	if wrappedLineCount(view) <= 1 {
+		t.Errorf("wrappedLineCount(view) = %d, want > 1 for a 200-char unbroken token at width 40", wrappedLineCount(view))
+	}
+
+	copyable := rct.CopyableContent()
+	if copyable != longToken {
+		t.Errorf("CopyableContent() = %q, want unwrapped original %q", copyable, longToken)
+	}
+}
+
+// TestReviewContentTabResizeReflowsWrappedLineCount verifies AC2: Resize
+// re-wraps stored content on every call, not just the first. Narrowing
+// increases the wrapped line count, widening decreases it, and narrowing
+// again increases it back up. Uses viewport.TotalLineCount() rather than
+// View() output because View() pads/clips to the viewport's fixed height,
+// which would mask the actual wrapped content line count once it exceeds
+// the viewport height.
+func TestReviewContentTabResizeReflowsWrappedLineCount(t *testing.T) {
+	longLine := strings.Repeat("word ", 60)
+	rct := NewReviewContentTab("id", "Review: owner/repo #1", longLine, true, testReviewsStyles())
+
+	rct.Resize(20, 24)
+	narrowCount := rct.viewport.TotalLineCount()
+
+	rct.Resize(200, 24)
+	wideCount := rct.viewport.TotalLineCount()
+
+	if wideCount >= narrowCount {
+		t.Errorf("after widening: wideCount=%d, want < narrowCount=%d", wideCount, narrowCount)
+	}
+
+	rct.Resize(20, 24)
+	narrowAgainCount := rct.viewport.TotalLineCount()
+
+	if narrowAgainCount <= wideCount {
+		t.Errorf("after re-narrowing: narrowAgainCount=%d, want > wideCount=%d", narrowAgainCount, wideCount)
+	}
+}
+
+// TestLiveReviewContentTabAppendFromCaptureWrapsLongLine verifies AC3: a
+// long line appended via AppendFromCapture wraps across multiple visual
+// lines after a narrow Resize, while CopyableContent() returns the
+// unwrapped original line.
+func TestLiveReviewContentTabAppendFromCaptureWrapsLongLine(t *testing.T) {
+	capture := agent.NewOutputCapture(100)
+	rct := NewLiveReviewContentTab("finalize-preview", "Finalize Preview", capture, testReviewsStyles())
+	rct.Resize(20, 24)
+
+	longLine := strings.Repeat("streamed output word ", 20)
+	capture.AddLine(longLine)
+	rct.AppendFromCapture()
+
+	view := rct.View()
+	if wrappedLineCount(view) <= 1 {
+		t.Errorf("wrappedLineCount(view) = %d, want > 1 after AppendFromCapture with a long line at width 20", wrappedLineCount(view))
+	}
+
+	copyable := rct.CopyableContent()
+	if copyable != longLine {
+		t.Errorf("CopyableContent() = %q, want unwrapped original %q", copyable, longLine)
+	}
+}
+
+// TestReviewContentTabViewWrapsErrorMessageButCopyableContentStaysUnwrapped
+// verifies AC4: the found=false error path wraps in View() at a narrow
+// width when the title is long enough to push the error message past that
+// width, while CopyableContent() still returns the exact raw error message.
+func TestReviewContentTabViewWrapsErrorMessageButCopyableContentStaysUnwrapped(t *testing.T) {
+	longTitle := "Review: a-very-long-organization-name/a-very-long-repository-name #123456"
+	rct := NewReviewContentTab("id", longTitle, "", false, testReviewsStyles())
+	rct.Resize(20, 24)
+
+	wantErrMsg := "Could not read review content for " + longTitle + " (spool file missing or unreadable)."
+
+	view := rct.View()
+	if wrappedLineCount(view) <= 1 {
+		t.Errorf("wrappedLineCount(view) = %d, want > 1 for the error message at width 20 with a long title", wrappedLineCount(view))
+	}
+
+	copyable := rct.CopyableContent()
+	if copyable != wantErrMsg {
+		t.Errorf("CopyableContent() = %q, want exact error message %q", copyable, wantErrMsg)
 	}
 }
