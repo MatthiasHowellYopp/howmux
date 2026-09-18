@@ -2,12 +2,14 @@ package tui
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/matthiashowellyopp/howmux/internal/agent"
 	"github.com/matthiashowellyopp/howmux/internal/config"
+	"github.com/matthiashowellyopp/howmux/internal/review"
 	"github.com/matthiashowellyopp/howmux/internal/session"
 	"github.com/matthiashowellyopp/howmux/internal/watcher"
 )
@@ -437,4 +439,164 @@ func TestModeSwitchingWithNoActivePlanningSessions(t *testing.T) {
 	if !foundWarning {
 		t.Error("Expected warning about no active planning session")
 	}
+}
+
+// TestBodyEditDoesNotAffectPlanningModeState proves that a body-edit round
+// trip (startBodyEditMsg → editorDoneMsg) leaves m.currentMode and
+// m.consoleState completely untouched, even though both body-edit and
+// planning-mode share the exact same tea.ExecProcess mechanism and the
+// same Manager.SuspendOutputCapture/ResumeOutputCapture pair. This is the
+// design spec's Task 7 regression requirement: editorDoneMsg's handler
+// intentionally never calls restoreConsoleState() or touches
+// m.currentMode (see editorDoneMsg's doc comment in tui.go) — this test
+// fails if a future change accidentally routes body-edit through
+// execDoneMsg's console-restoring code path instead of its own.
+func TestBodyEditDoesNotAffectPlanningModeState(t *testing.T) {
+	m := setupTestModel(t)
+
+	// Seed state that would be disturbed if editorDoneMsg accidentally
+	// shared execDoneMsg's restoreConsoleState() behavior.
+	m.currentMode = session.Planning
+	m.consoleState = &consoleState{
+		inputValue:    "in-progress planning input",
+		activityLines: []string{"pre-existing planning activity"},
+	}
+	m.activityLines = []string{"pre-existing planning activity"}
+	m.input.SetValue("in-progress planning input")
+
+	dir := t.TempDir()
+	spoolPath := filepath.Join(dir, "pr-review-owner-repo-55.md")
+	if err := os.WriteFile(spoolPath, []byte("---\ndecision:\ndecision_notes: \"\"\n---\noriginal body\n"), 0o644); err != nil {
+		t.Fatalf("failed to write spool file: %v", err)
+	}
+
+	tempFile, err := os.CreateTemp("", "howmux-review-*.md")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	if _, err := tempFile.WriteString("edited body\n"); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+	_ = tempFile.Close()
+
+	m.manager.SuspendOutputCapture()
+	rec := review.Record{Repo: "owner/repo", PR: 55, SpoolPath: spoolPath}
+	newM, _ := m.Update(editorDoneMsg{tempPath: tempFile.Name(), rec: rec, err: nil})
+	resultModel, ok := newM.(model)
+	if !ok {
+		t.Fatalf("Update did not return a model")
+	}
+
+	if resultModel.currentMode != session.Planning {
+		t.Errorf("expected currentMode to remain session.Planning (untouched by body edit), got %v", resultModel.currentMode)
+	}
+	if resultModel.consoleState == nil || resultModel.consoleState.inputValue != "in-progress planning input" {
+		t.Errorf("expected consoleState.inputValue to remain untouched by body edit, got %+v", resultModel.consoleState)
+	}
+	if resultModel.input.Value() != "in-progress planning input" {
+		t.Errorf("expected footer input value to remain untouched by body edit, got %q", resultModel.input.Value())
+	}
+}
+
+// TestPlanningModeSwitchDoesNotAffectBodyEditState is the converse of
+// TestBodyEditDoesNotAffectPlanningModeState: a full planning-mode
+// switchToPlanningMode/switchToConsoleMode round trip must not disturb any
+// body-edit-related model state. Body editing has no persistent model
+// fields of its own (no notesEditActive-style flag — the temp file and
+// review.Record travel through the message round trip, not through model
+// fields), so this test's job is to confirm that remains true: after a
+// full planning-mode cycle, model construction invariants for body editing
+// (a non-nil bodyWriter, ready to accept the next "e" press) still hold.
+func TestPlanningModeSwitchDoesNotAffectBodyEditState(t *testing.T) {
+	m := setupTestModel(t)
+	if m.bodyWriter == nil {
+		t.Fatalf("test setup broken: expected model construction to populate bodyWriter")
+	}
+
+	sessionManager := session.NewSessionManager()
+	sessionID, err := sessionManager.Create(session.Planning)
+	if err != nil {
+		t.Fatalf("Failed to create mock planning session: %v", err)
+	}
+	m.sessionManager = sessionManager
+
+	m, _ = m.switchToPlanningMode()
+	m.currentMode = session.Planning
+	m, _ = m.switchToConsoleMode()
+
+	if m.bodyWriter == nil {
+		t.Errorf("expected bodyWriter to remain non-nil after a planning-mode round trip")
+	}
+	if m.currentMode != session.Console {
+		t.Errorf("expected currentMode to be session.Console after the round trip, got %v", m.currentMode)
+	}
+
+	sessionManager.Delete(sessionID)
+}
+
+// TestBodyEditAndPlanningModeSuspendResumeAreIndependentRoundTrips proves
+// that Manager.SuspendOutputCapture/ResumeOutputCapture — called by both
+// handleBodyEditLaunch/editorDoneMsg (body editing) and
+// handlePlanSubprocess/execDoneMsg (planning mode) on the exact same
+// Manager — can each run a full suspend→resume cycle back to back on the
+// same model without one flow's cycle leaving state that breaks the
+// other's. Manager.terminalOutputPaused has no exported accessor from this
+// package (confirmed unobservable directly, matching body_edit_test.go's
+// own note on this), so this test's assertion is behavioral: both
+// editorDoneMsg and execDoneMsg must complete their handler without
+// panicking or returning an error state, and a second suspend/resume
+// cycle (of either kind) must succeed identically after the first — the
+// strongest test available without adding a new exported accessor to
+// internal/agent purely for this test, which would over-grow that
+// package's surface for a single assertion.
+func TestBodyEditAndPlanningModeSuspendResumeAreIndependentRoundTrips(t *testing.T) {
+	m := setupTestModel(t)
+
+	// Cycle 1: body-edit suspend/resume.
+	dir := t.TempDir()
+	spoolPath := filepath.Join(dir, "pr-review-owner-repo-1.md")
+	if err := os.WriteFile(spoolPath, []byte("---\ndecision:\ndecision_notes: \"\"\n---\nbody\n"), 0o644); err != nil {
+		t.Fatalf("failed to write spool file: %v", err)
+	}
+	tempFile, err := os.CreateTemp("", "howmux-review-*.md")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	if _, err := tempFile.WriteString("edited\n"); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+	_ = tempFile.Close()
+
+	m.manager.SuspendOutputCapture()
+	rec := review.Record{Repo: "owner/repo", PR: 1, SpoolPath: spoolPath}
+	newM, _ := m.Update(editorDoneMsg{tempPath: tempFile.Name(), rec: rec, err: nil})
+	m, ok := newM.(model)
+	if !ok {
+		t.Fatalf("Update did not return a model after editorDoneMsg")
+	}
+
+	// Cycle 2: planning-mode suspend/resume, on the same model/Manager,
+	// immediately after cycle 1 — proves the shared Suspend/Resume pair
+	// on Manager tolerates back-to-back use by both flows.
+	sessionManager := session.NewSessionManager()
+	sessionID, err := sessionManager.Create(session.Planning)
+	if err != nil {
+		t.Fatalf("Failed to create mock planning session: %v", err)
+	}
+	m.sessionManager = sessionManager
+	m.consoleState = &consoleState{inputValue: "before planning", activityLines: []string{"before"}}
+	m.manager.SuspendOutputCapture()
+	newM2, cmd := m.Update(execDoneMsg{err: nil})
+	m, ok = newM2.(model)
+	if !ok {
+		t.Fatalf("Update did not return a model after execDoneMsg")
+	}
+	if cmd == nil {
+		t.Errorf("expected a non-nil tea.Cmd from execDoneMsg handling")
+	}
+	if m.input.Value() != "before planning" {
+		t.Errorf("expected restoreConsoleState() to run normally on execDoneMsg after a prior body-edit cycle, got input %q", m.input.Value())
+	}
+
+	sessionManager.Delete(sessionID)
 }

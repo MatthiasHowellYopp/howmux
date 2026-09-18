@@ -29,6 +29,14 @@ tasks:
     cmds:
       - go test -v -race -coverprofile=coverage.out ./...
       - go tool cover -html=coverage.out -o coverage.html
+      - task: test:scripts
+
+  test:scripts:
+    desc: Run the standalone bash test suites for the spool mutation-boundary scripts
+    cmds:
+      - bash .howmux/scripts/set-review-decision_test.sh
+      - bash .howmux/scripts/set-review-notes_test.sh
+      - bash .howmux/scripts/set-review-body_test.sh
 
   dev:
     desc: Development build (faster, no optimization)

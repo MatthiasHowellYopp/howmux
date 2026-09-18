@@ -183,3 +183,34 @@ func TestDecideCommandRegistration(t *testing.T) {
 		}
 	}
 }
+
+// TestNotesAndBodyEditKeys_NotRegisteredAsCommands confirms "n" (notes
+// editing, issue #86 Task 2) and "e" (body editing, issue #86 Task 4) stay
+// key-binding-only features, never accidentally registered as typed REPL
+// commands — the same vocabulary/behavior split "decide" already
+// establishes (row-shortcut key vs. footer-typed command are two entry
+// points to the SAME action for p/r/R/d, but n/e have no footer/REPL
+// counterpart at all).
+func TestNotesAndBodyEditKeys_NotRegisteredAsCommands(t *testing.T) {
+	cfg := &config.Config{}
+	manager := agent.NewManager(cfg)
+	registry := NewCommandRegistry(manager)
+
+	if _, exists := registry.GetCommand("n"); exists {
+		t.Error("expected 'n' to NOT be a registered command — notes editing is key-binding-only")
+	}
+	if _, exists := registry.GetCommand("e"); exists {
+		t.Error("expected 'e' to NOT be a registered command — body editing is key-binding-only")
+	}
+
+	for _, cmd := range registry.GetAllCommands() {
+		if cmd.Name == "n" || cmd.Name == "e" {
+			t.Errorf("expected no registered command named %q", cmd.Name)
+		}
+		for _, sub := range cmd.Subcommands {
+			if sub == "n" || sub == "e" {
+				t.Errorf("expected no registered subcommand named %q under %q", sub, cmd.Name)
+			}
+		}
+	}
+}

@@ -225,6 +225,35 @@ func extractSpoolBody(data []byte) string {
 	return body
 }
 
+// CurrentDecisionNotes reads and returns the "decision_notes" front-matter
+// value from the spool file at spoolPath, following the exact same
+// pending -> done resolution order as ReadSpoolInfo (via the shared
+// resolveSpoolPath helper), so notes-editing always sees the same file
+// ReadSpoolInfo/ReadSpoolBody would. Returns "" if spoolPath is "", the file
+// cannot be located in either directory, the file is unreadable, or the key
+// is absent/blank — every failure mode degrades to "no current value" rather
+// than an error, matching ParseSpoolFrontMatter's own permissive contract.
+//
+// homeDir is accepted for the same signature-symmetry reason ReadSpoolInfo/
+// ReadSpoolBody accept it (currently unused by resolution, reserved for
+// future relative-path support).
+func CurrentDecisionNotes(spoolPath string, homeDir string) string {
+	_ = homeDir
+
+	path, found, _ := resolveSpoolPath(spoolPath)
+	if !found {
+		return ""
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+
+	fields := ParseSpoolFrontMatter(data)
+	return fields["decision_notes"]
+}
+
 // buildSpoolInfo parses the given spool file contents and assembles a
 // SpoolInfo for a file that was successfully located, either in pending/
 // (inDoneDir=false) or done/ (inDoneDir=true).

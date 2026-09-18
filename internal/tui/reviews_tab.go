@@ -390,10 +390,14 @@ func (rt *ReviewsTab) SelectedKey() string {
 // Update handles messages for the reviews tab. Arrow-key navigation moves the
 // row cursor (selectedIndex); Enter opens the selected PR's review content in
 // a new window (see openSelectedReviewCmd); p/r/R/d set a decision on the
-// selected review (see decideSelectedCmd); all other messages are no-ops,
-// matching the tab's existing "no background state to update" design —
-// resize is handled via Resize, and every View() call reads fresh data
-// directly from the store.
+// selected review (see decideSelectedCmd); n opens the decision_notes editor
+// for the selected review, gated to decisions of "revise"/"rereview" (see
+// startNotesEditCmd, handled by model.Update's startNotesEditMsg/gateFailedMsg
+// pair in tui.go); e launches $EDITOR on the selected review's full body (see
+// startBodyEditCmd, handled by model.Update's startBodyEditMsg/editorDoneMsg
+// pair in tui.go/commands.go); all other messages are no-ops, matching the
+// tab's existing "no background state to update" design — resize is handled
+// via Resize, and every View() call reads fresh data directly from the store.
 func (rt *ReviewsTab) Update(msg tea.Msg) (Tab, tea.Cmd) {
 	keyMsg, ok := msg.(tea.KeyMsg)
 	if !ok {
@@ -414,6 +418,10 @@ func (rt *ReviewsTab) Update(msg tea.Msg) (Tab, tea.Cmd) {
 		return rt, rt.decideSelectedCmd("rereview")
 	case "d":
 		return rt, rt.decideSelectedCmd("discard")
+	case "n":
+		return rt, rt.startNotesEditCmd()
+	case "e":
+		return rt, rt.startBodyEditCmd()
 	}
 	return rt, nil
 }
@@ -486,6 +494,77 @@ func (rt *ReviewsTab) decideSelectedCmd(decision string) tea.Cmd {
 	}
 	msg := decideRequestMsg{repo: rec.Repo, pr: rec.PR, spoolPath: rec.SpoolPath, decision: decision}
 	return func() tea.Msg { return msg }
+}
+
+// startBodyEditCmd returns a tea.Cmd that emits startBodyEditMsg for the
+// currently selected PR, or nil if nothing is selected or the store read
+// fails — structured identically to decideSelectedCmd/openSelectedReviewCmd
+// (same no-op contract on an empty selection or a store.List() error), via
+// the shared SelectedRecord lookup above. Unlike decideSelectedCmd's "n"
+// sibling (notes editing), body editing has no decision-state gating: any
+// selected row with (or without) a spool file may have its body edited —
+// the "no spool file" / "$EDITOR unset" cases are handled downstream by
+// model.Update's startBodyEditMsg handler (see tui.go), not here.
+func (rt *ReviewsTab) startBodyEditCmd() tea.Cmd {
+	if rt.selectedKey == "" {
+		return nil
+	}
+	rec, ok := rt.SelectedRecord()
+	if !ok {
+		return nil
+	}
+	msg := startBodyEditMsg{repo: rec.Repo, pr: rec.PR, spoolPath: rec.SpoolPath}
+	return func() tea.Msg { return msg }
+}
+
+// startNotesEditCmd returns a tea.Cmd that emits either startNotesEditMsg
+// (if the selected review's decision is "revise" or "rereview",
+// case-insensitively — matching ClassifySpoolState's existing
+// strings.ToLower convention) or gateFailedMsg (otherwise), or nil if
+// nothing is selected or the store read fails — same no-op contract on an
+// empty selection as decideSelectedCmd/openSelectedReviewCmd/
+// startBodyEditCmd, via the shared SelectedRecord lookup above.
+//
+// Unlike startBodyEditCmd (no decision-state gating), decision_notes
+// editing is deliberately restricted to reviews already marked "revise" or
+// "rereview" — notes exist to explain *why* a review was sent back, so
+// editing them only makes sense once one of those two decisions has been
+// set (see issue #86 design spec, "Where 'gated to revise/rereview' is
+// checked"). A row selected but not qualifying is a different condition
+// than "nothing is selected at all" (silent no-op elsewhere in this
+// codebase, e.g. decideSelectedCmd on empty selection) — it produces a
+// visible gateFailedMsg instead, so the user understands why "n" did
+// nothing.
+//
+// The current decision_notes value is read via review.CurrentDecisionNotes
+// on the resolved spool path, following ReadSpoolInfo's exact pending ->
+// done resolution order, so notes-editing always sees the same file
+// ReadSpoolInfo/ReadSpoolBody would.
+func (rt *ReviewsTab) startNotesEditCmd() tea.Cmd {
+	if rt.selectedKey == "" {
+		return nil
+	}
+	rec, ok := rt.SelectedRecord()
+	if !ok {
+		return nil
+	}
+
+	homeDir, err := userHomeDirFunc()
+	if err != nil {
+		homeDir = ""
+	}
+	info := spoolInfoForFunc(rec.SpoolPath, homeDir)
+
+	switch strings.ToLower(strings.TrimSpace(info.Decision)) {
+	case "revise", "rereview":
+		currentNotes := review.CurrentDecisionNotes(rec.SpoolPath, homeDir)
+		msg := startNotesEditMsg{repo: rec.Repo, pr: rec.PR, spoolPath: rec.SpoolPath, currentNotes: currentNotes}
+		return func() tea.Msg { return msg }
+	default:
+		reason := fmt.Sprintf("Set decision to revise or rereview before editing notes for PR #%d", rec.PR)
+		msg := gateFailedMsg{reason: reason}
+		return func() tea.Msg { return msg }
+	}
 }
 
 // Resize updates the tab dimensions

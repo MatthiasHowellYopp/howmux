@@ -66,6 +66,78 @@ type decideRequestMsg struct {
 	decision  string // one of "post", "revise", "rereview", "discard"
 }
 
+// gateFailedMsg is emitted by ReviewsTab.Update's "n" key handler when the
+// selected review's decision does not qualify for notes editing (must be
+// "revise" or "rereview", case-insensitive — see SpoolInfo.Decision). It
+// carries a plain, already-composed reason string rather than structured
+// fields, since the only consumer (model.Update's "case gateFailedMsg:"
+// arm) does nothing but render it as an activity-line error — matching the
+// "silent no-op reserved for nothing-selected, visible error for
+// selected-but-disqualified" convention documented on ReviewsTab.Update.
+type gateFailedMsg struct {
+	reason string
+}
+
+// startBodyEditMsg is emitted by ReviewsTab.Update's "e" key handler
+// (mirroring decideRequestMsg's/openReviewContentMsg's pattern) to ask the
+// top-level model to launch $EDITOR on the currently selected review's full
+// markdown body. ReviewsTab has no reference to the model's
+// SuspendOutputCapture/tea.ExecProcess machinery (by design, matching every
+// other cross-tab action), so this message/tea.Cmd round trip is the
+// mechanism — see handleBodyEditLaunch (commands.go) for the handler.
+type startBodyEditMsg struct {
+	repo      string
+	pr        int
+	spoolPath string
+}
+
+// editorDoneMsg is emitted by the tea.ExecProcess callback started in
+// handleBodyEditLaunch (commands.go) once the user's $EDITOR process exits.
+// It is intentionally a *distinct* message from the pre-existing
+// execDoneMsg (used by handlePlanSubprocess for the planning-mode kiro-cli
+// subprocess): execDoneMsg's resume handling always calls
+// restoreConsoleState() and reports planning-session-specific activity
+// lines, which would be wrong here — body editing has nothing to do with
+// console/planning state, only with a single review's spool file. Reusing
+// execDoneMsg for both would either corrupt planning-mode's resume
+// behavior or require conditionals inside that case arm; a new message
+// keeps the two suspend/resume flows fully independent despite sharing the
+// same tea.ExecProcess/SuspendOutputCapture/ResumeOutputCapture mechanics.
+//
+// tempPath is the temp file the editor was pointed at (removed
+// unconditionally by the handler, in every branch). rec identifies which
+// review's spool file the edited body belongs to, for the
+// BodyWriter.SetBody call. err is the *exec.Cmd exit error, nil on a clean
+// editor exit.
+type editorDoneMsg struct {
+	tempPath string
+	rec      review.Record
+	err      error
+}
+
+// startNotesEditMsg is emitted by ReviewsTab.Update's "n" key handler
+// (mirroring decideRequestMsg's pattern) to ask the top-level model to
+// enter decision_notes edit mode for the given review. currentNotes is the
+// decision_notes value already on the spool file, read up front so the
+// notes textinput can be pre-populated without the model re-resolving the
+// selection or re-parsing the spool file itself.
+type startNotesEditMsg struct {
+	repo         string
+	pr           int
+	spoolPath    string
+	currentNotes string
+}
+
+// saveNotesMsg is emitted on Enter while decision_notes edit mode is active
+// (mirroring startNotesEditMsg's pattern) to ask the top-level model to
+// persist the edited notes value via NotesWriter.SetNotes.
+type saveNotesMsg struct {
+	repo      string
+	pr        int
+	spoolPath string
+	notes     string
+}
+
 type overlayType int
 
 const (
@@ -129,6 +201,33 @@ type model struct {
 	// (key-menu dispatch, Task 7) via the applyDecision helper below, so
 	// both entry points shell out through the exact same collaborator.
 	decisionWriter *review.DecisionWriter
+
+	// notesInput is the decision_notes textinput, focusable independently
+	// of the footer's AutocompleteInput (m.input) — mirrors where m.input
+	// already lives on model rather than being threaded through the Tab
+	// interface (see issue #86 design spec, Solution Approach: Component
+	// ownership split).
+	notesInput *NotesInput
+	// notesEditActive is true while the decision_notes textinput is the
+	// active focus target — checked ahead of both footer-focus and
+	// Reviews-tab row-shortcut key routing (wiring lands in a later task;
+	// this field is unused by any Update code path yet).
+	notesEditActive bool
+	// notesEditTarget is the review being edited via notesInput, so
+	// save/cancel know which spool file to act on without re-resolving the
+	// Reviews tab's current selection.
+	notesEditTarget review.Record
+	// notesWriter sets the decision_notes: field on a PR-review spool file
+	// (see internal/review/noteswriter.go). Stub until a later task wires
+	// full save behavior.
+	notesWriter *review.NotesWriter
+
+	// bodyWriter replaces the markdown body of a PR-review spool file
+	// while preserving its front-matter block byte-for-byte (see
+	// internal/review/bodywriter.go). Invoked by the editorDoneMsg handler
+	// once the edited temp file has been read back and validated as
+	// non-empty.
+	bodyWriter *review.BodyWriter
 
 	// Overlay system
 	activeOverlay  overlayType
@@ -253,6 +352,9 @@ func newModel(w *watcher.Watcher, m *agent.Manager, cfg *config.Config, logFile 
 		tabFocusStates: make(map[string]FocusTarget),
 		initialCommand: initialCommand,
 		decisionWriter: review.NewDecisionWriter(),
+		notesInput:     NewNotesInput(),
+		notesWriter:    review.NewNotesWriter(),
+		bodyWriter:     review.NewBodyWriter(),
 	}
 }
 
@@ -503,6 +605,104 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		rec := review.Record{Repo: msg.repo, PR: msg.pr, SpoolPath: msg.spoolPath}
 		m = m.applyDecision(rec, msg.decision)
 		return m, nil
+
+	case gateFailedMsg:
+		// Emitted by ReviewsTab.Update's "n" key handler when the selected
+		// review's decision does not qualify for notes editing. Rendered
+		// as a visible activity-line error (not a silent no-op) so the
+		// user understands why "n" did nothing — see gateFailedMsg's doc
+		// comment for why this is a distinct case from the
+		// nothing-selected no-op convention.
+		m = m.appendActivity(m.styles.Error.Render(msg.reason))
+		return m, nil
+
+	case startNotesEditMsg:
+		// Emitted by ReviewsTab.Update's "n" key handler (via
+		// startNotesEditCmd) once the selected review's decision has
+		// passed the revise/rereview gate. Enters decision_notes edit
+		// mode: focuses m.notesInput, pre-populates it with the current
+		// decision_notes value already resolved by the emitter, and
+		// records which review is being edited so Enter/Esc know which
+		// spool file to act on. The footer transient message reuses the
+		// same mechanism as the Ctrl+Y copy-feedback indicator (issue #86
+		// design spec, "Visual feedback") and is cleared via
+		// SetTransientMessage("") on both the Enter-save and Esc-cancel
+		// paths below, so it never lingers past the edit.
+		m.notesEditTarget = review.Record{Repo: msg.repo, PR: msg.pr, SpoolPath: msg.spoolPath}
+		m.notesInput.SetValue(msg.currentNotes)
+		m.notesEditActive = true
+		if m.footerManager != nil {
+			m.footerManager.SetTransientMessage(fmt.Sprintf("Editing notes for %s #%d (Enter to save, Esc to cancel)", msg.repo, msg.pr))
+		}
+		return m, m.notesInput.Focus()
+
+	case startBodyEditMsg:
+		// Emitted by ReviewsTab.Update's "e" key handler (via
+		// startBodyEditCmd) — launches $EDITOR on the selected review's
+		// full markdown body. Delegates to handleBodyEditLaunch
+		// (commands.go), which mirrors handlePlanSubprocess's
+		// suspend/write-temp-file/tea.ExecProcess sequence.
+		rec := review.Record{Repo: msg.repo, PR: msg.pr, SpoolPath: msg.spoolPath}
+		return m.handleBodyEditLaunch(rec)
+
+	case editorDoneMsg:
+		// Resume half of the startBodyEditMsg round trip, once $EDITOR
+		// exits. Mirrors handlePlanSubprocess/execDoneMsg's
+		// suspend/resume pairing, but with its own, deliberately
+		// distinct contract (see editorDoneMsg's doc comment): no
+		// restoreConsoleState() call, since body editing never touched
+		// console/planning state.
+		//
+		// The temp file is removed unconditionally on every branch below
+		// (editor error, empty-file validation failure, or after a
+		// successful/failed BodyWriter.SetBody call) so a crashed or
+		// misbehaving editor never leaves stray files in os.TempDir().
+		//
+		// "Restore on invalid content" is implemented as *not writing*:
+		// the spool file is never touched until BodyWriter.SetBody is
+		// called with a validated, non-empty temp-file path — so an
+		// editor error or an emptied temp file simply skips that call
+		// entirely, leaving the spool file exactly as it was before the
+		// edit (a stronger guarantee than restoring from a backup, since
+		// nothing was ever written in the first place).
+		m.manager.ResumeOutputCapture()
+
+		if msg.err != nil {
+			m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("Editor exited with error for PR #%d: %v", msg.rec.PR, msg.err)))
+			if msg.tempPath != "" {
+				_ = os.Remove(msg.tempPath)
+			}
+			return m, tea.ClearScreen
+		}
+
+		data, readErr := os.ReadFile(msg.tempPath)
+		if readErr != nil {
+			m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("Failed to read edited body for PR #%d: %v", msg.rec.PR, readErr)))
+			if msg.tempPath != "" {
+				_ = os.Remove(msg.tempPath)
+			}
+			return m, tea.ClearScreen
+		}
+
+		if strings.TrimSpace(string(data)) == "" {
+			m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("Editor produced an empty file for PR #%d — review body not changed", msg.rec.PR)))
+			if msg.tempPath != "" {
+				_ = os.Remove(msg.tempPath)
+			}
+			return m, tea.ClearScreen
+		}
+
+		if err := m.bodyWriter.SetBody(msg.rec.SpoolPath, msg.tempPath); err != nil {
+			m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("Failed to update review body for PR #%d: %v", msg.rec.PR, err)))
+		} else {
+			m = m.appendActivity(m.styles.Success.Render(fmt.Sprintf("Updated review body for PR #%d", msg.rec.PR)))
+		}
+
+		if msg.tempPath != "" {
+			_ = os.Remove(msg.tempPath)
+		}
+
+		return m, tea.ClearScreen
 
 	case focusTransferMsg:
 		// Handle focus coordination between planning tab and footer input.
@@ -844,6 +1044,61 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.confirmingExit = false
 				m = m.appendActivity(m.styles.Warning.Render("Exit cancelled."))
 				return m, nil
+			}
+		}
+
+		// Notes-edit-mode interception: while m.notesEditActive is true, the
+		// decision_notes textinput (m.notesInput) is a third, even-higher-
+		// priority focus state layered above both footer-focus and
+		// Reviews-tab row-navigation (see issue #86 design spec, Solution
+		// Approach: "Component ownership split"). This must run before the
+		// existing Reviews-tab p/r/R/d forwarding block (the "default:" arm
+		// of the switch below) so that typing in the notes textinput never
+		// falls through to row-shortcut handling — a bare "p" or "r" typed
+		// here must reach the textinput, not set a decision or navigate
+		// rows.
+		if m.notesEditActive {
+			switch msg.String() {
+			case "esc":
+				// Cancel: no write attempted at all. Discard the typed
+				// value (the textinput is not persisted anywhere), blur,
+				// clear the footer transient message, and drop back to
+				// row-navigation. Re-opening notes-edit (pressing "n"
+				// again) re-reads decision_notes from the spool file, so
+				// the discarded edit never resurfaces.
+				m.notesInput.Blur()
+				m.notesEditActive = false
+				if m.footerManager != nil {
+					m.footerManager.SetTransientMessage("")
+				}
+				m = m.appendActivity(m.styles.Activity.Render("Notes edit cancelled"))
+				return m, nil
+			case "enter":
+				// Save: persist the typed value via NotesWriter.SetNotes.
+				// On failure, stay in edit mode with the typed text intact
+				// — a failed write must not silently discard user input
+				// (see design spec's Task 3 acceptance criteria) — and
+				// show an error activity line. On success, exit edit
+				// mode, blur, clear the transient message, and show a
+				// success activity line, mirroring applyDecision's
+				// success/error activity-line shape (commands.go).
+				notes := m.notesInput.Value()
+				target := m.notesEditTarget
+				if err := m.notesWriter.SetNotes(target.SpoolPath, notes); err != nil {
+					m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("Failed to save decision notes for PR #%d: %v", target.PR, err)))
+					return m, nil
+				}
+				m.notesInput.Blur()
+				m.notesEditActive = false
+				if m.footerManager != nil {
+					m.footerManager.SetTransientMessage("")
+				}
+				m = m.appendActivity(m.styles.Success.Render(fmt.Sprintf("Saved decision notes for PR #%d", target.PR)))
+				return m, nil
+			default:
+				var cmd tea.Cmd
+				m.notesInput, cmd = m.notesInput.Update(msg)
+				return m, cmd
 			}
 		}
 
