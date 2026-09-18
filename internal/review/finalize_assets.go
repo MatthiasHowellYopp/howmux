@@ -26,6 +26,15 @@ func RequiredFinalizeAssets() []string {
 // shape as CheckReviewAssets ("Missing N of M ...", one bullet per missing
 // entry, then a "how to fix" block), so a user who has already seen the
 // review preflight error recognizes the pattern immediately.
+//
+// Two-seam note: finalize-reviews.sh is resolved in two places. This is the
+// front-door superset — it preflights the script AND the transitive
+// pr_review_finalize.py before the finalize preview window opens, via
+// lookPathFunc ($PATH). The run-time last line is the tui package's
+// finalizeScriptPathFunc (finalize.go), which re-resolves finalize-reviews.sh
+// on $PATH at spawn time as a TOCTOU backstop. Both consult $PATH so they
+// cannot disagree; if you change how one resolves the script, update the
+// other to match.
 func CheckFinalizeAssets() error {
 	required := RequiredFinalizeAssets()
 	var missing []string
