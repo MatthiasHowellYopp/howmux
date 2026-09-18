@@ -20,6 +20,12 @@ const emptyTimestampPlaceholder = "—"
 const (
 	reviewsEmptyMessage = "No watched PRs. Run 'howmux review <PR-URL>' to enroll one."
 	reviewsErrorFormat  = "Failed to read PR review state: %v"
+
+	// finalizePreflightWarningHeader is the first line of the status block
+	// prepended by both View() (styled Error) and CopyableContent() (plain)
+	// when preflightState == finalizePreflightFailed. Shared as a constant so
+	// the two render paths cannot drift on wording.
+	finalizePreflightWarningHeader = "⚠ Finalize gate unavailable — press F to retry after fixing:"
 )
 
 // identityStyle is a no-op style function used by the plain-text
@@ -49,6 +55,15 @@ type ReviewsTab struct {
 	// cached so moveCursor() can step to an adjacent PR without re-reading the
 	// store on every keypress. Refreshed every renderTable().
 	lastOrder []string
+
+	// preflightState and preflightErr track the finalize gate's asset
+	// preflight result (see finalize_preflight.go), set via
+	// SetFinalizePreflightState by model.Update's finalizePreflightResultMsg
+	// arm (and directly from handleFinalize on the synchronous path).
+	// preflightErr holds the full error text from review.CheckFinalizeAssets;
+	// "" when preflightState is Unknown/OK.
+	preflightState finalizePreflightState
+	preflightErr   string
 }
 
 // recordKey is the stable identity of a row: "<repo>#<pr>".
@@ -87,6 +102,29 @@ func (rt *ReviewsTab) IsClosable() bool {
 	return false // There is exactly one reviews view per session, nothing to close back to.
 }
 
+// SetFinalizePreflightState sets the tab's cached finalize-gate preflight
+// result. Called from model.Update's finalizePreflightResultMsg arm (the
+// async retry path) and directly from handleFinalize (the synchronous
+// pre-dry-run path), so both converge on the same displayed/copyable state.
+// errText is the full error text from review.CheckFinalizeAssets; pass ""
+// when state is Unknown/OK.
+func (rt *ReviewsTab) SetFinalizePreflightState(state finalizePreflightState, errText string) {
+	rt.preflightState = state
+	rt.preflightErr = errText
+}
+
+// finalizePreflightBlock returns the status block prepended to View() (via
+// the styled variant) and CopyableContent() (via the plain variant) when
+// preflightState == finalizePreflightFailed, or "" otherwise (Unknown/OK
+// render nothing extra). Both callers pass rt.preflightErr verbatim so the
+// two render paths can never disagree on the error text.
+func finalizePreflightBlock(state finalizePreflightState, errText string) string {
+	if state != finalizePreflightFailed {
+		return ""
+	}
+	return finalizePreflightWarningHeader + "\n" + errText
+}
+
 // View returns the tab's rendered content.
 //
 // Cost note: View() is invoked by Bubble Tea on every render (keypress,
@@ -110,6 +148,24 @@ func (rt *ReviewsTab) View() string {
 		content = rt.renderEmpty()
 	default:
 		content = rt.renderTable(records)
+	}
+
+	if block := finalizePreflightBlock(rt.preflightState, rt.preflightErr); block != "" {
+		styled := block
+		if rt.styles != nil {
+			// Render line-by-line rather than the whole multi-line block in one
+			// Render() call: lipgloss pads every line of a multi-line render to
+			// the width of its widest line, which would make View()'s styled
+			// output differ (trailing spaces) from CopyableContent()'s plain
+			// block for the exact same text — breaking the "never drifts" Ctrl+Y
+			// guarantee this method exists to uphold.
+			lines := strings.Split(block, "\n")
+			for i, line := range lines {
+				lines[i] = rt.styles.Error.Render(line)
+			}
+			styled = strings.Join(lines, "\n")
+		}
+		content = styled + "\n\n" + content
 	}
 
 	return rt.padToHeight(content)
@@ -395,9 +451,14 @@ func (rt *ReviewsTab) SelectedKey() string {
 // startNotesEditCmd, handled by model.Update's startNotesEditMsg/gateFailedMsg
 // pair in tui.go); e launches $EDITOR on the selected review's full body (see
 // startBodyEditCmd, handled by model.Update's startBodyEditMsg/editorDoneMsg
-// pair in tui.go/commands.go); all other messages are no-ops, matching the
-// tab's existing "no background state to update" design — resize is handled
-// via Resize, and every View() call reads fresh data directly from the store.
+// pair in tui.go/commands.go); F re-runs the finalize-gate asset preflight
+// (emits finalizeRetryPreflightMsg, handled by model.Update which returns
+// runFinalizePreflightCmd() — the same message-round-trip pattern every
+// other key above already uses, since ReviewsTab has no direct reference to
+// run a tea.Cmd against checkFinalizeAssetsFunc itself); all other messages
+// are no-ops, matching the tab's existing "no background state to update"
+// design — resize is handled via Resize, and every View() call reads fresh
+// data directly from the store.
 func (rt *ReviewsTab) Update(msg tea.Msg) (Tab, tea.Cmd) {
 	keyMsg, ok := msg.(tea.KeyMsg)
 	if !ok {
@@ -422,6 +483,9 @@ func (rt *ReviewsTab) Update(msg tea.Msg) (Tab, tea.Cmd) {
 		return rt, rt.startNotesEditCmd()
 	case "e":
 		return rt, rt.startBodyEditCmd()
+	case "F":
+		msg := finalizeRetryPreflightMsg{}
+		return rt, func() tea.Msg { return msg }
 	}
 	return rt, nil
 }
@@ -579,22 +643,32 @@ func (rt *ReviewsTab) Resize(width, height int) {
 // header formatters and message strings with View() (via buildTable and the
 // reviews*Message constants) so the copied text can never drift from what is
 // displayed; it just passes identity style functions so nothing is colored.
+// It also prepends the same finalize-preflight status block View() renders
+// (unstyled here), under the identical condition (preflightState ==
+// finalizePreflightFailed), so Ctrl+Y while the Reviews tab is active
+// reproduces exactly what View() showed.
 func (rt *ReviewsTab) CopyableContent() string {
+	var content string
 	records, err := rt.store.List()
-	if err != nil {
-		return fmt.Sprintf(reviewsErrorFormat, err)
+	switch {
+	case err != nil:
+		content = fmt.Sprintf(reviewsErrorFormat, err)
+	case len(records) == 0:
+		content = reviewsEmptyMessage
+	default:
+		sorted := sortedRecords(records)
+		spoolInfo := rt.resolveSpoolInfo(sorted)
+
+		plainStatus := func(_ review.Status, text string) string { return text }
+		plainRow := func(_ int, line string) string { return line }
+		content = buildTable(sorted, spoolInfo, identityStyle, plainStatus, plainRow)
 	}
 
-	if len(records) == 0 {
-		return reviewsEmptyMessage
+	if block := finalizePreflightBlock(rt.preflightState, rt.preflightErr); block != "" {
+		content = block + "\n\n" + content
 	}
 
-	sorted := sortedRecords(records)
-	spoolInfo := rt.resolveSpoolInfo(sorted)
-
-	plainStatus := func(_ review.Status, text string) string { return text }
-	plainRow := func(_ int, line string) string { return line }
-	return buildTable(sorted, spoolInfo, identityStyle, plainStatus, plainRow)
+	return content
 }
 
 // CaptureFocusState returns the current focus state for the reviews tab.

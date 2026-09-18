@@ -1002,12 +1002,34 @@ func (m model) handleDecide(args []string) (model, tea.Cmd) {
 // handleFinalize implements the "finalize" REPL command (bare form only —
 // this issue does not add a "finalize <PR>" per-review form, since
 // finalize-reviews.sh itself has no such mode; it always drains the whole
-// spool). It guards against re-entrancy, resets the shared OutputCapture
-// for a fresh run, opens (or reuses) the live preview window, transitions
-// m.finalizeState to finalizeDryRunRunning, and kicks off the dry-run
-// subprocess plus the output poll loop in a single batched tea.Cmd — see
-// issue #87's design spec, "Triggering a run".
+// spool). It first runs the issue #88 asset preflight (see below) — the
+// primary gate for this command; the existing finalizeScriptPathFunc()
+// call inside runFinalizeCmd remains as a defense-in-depth safety net in
+// case the environment changes between preflight and dry-run. Assuming
+// the preflight passes, it guards against re-entrancy, resets the shared
+// OutputCapture for a fresh run, opens (or reuses) the live preview
+// window, transitions m.finalizeState to finalizeDryRunRunning, and kicks
+// off the dry-run subprocess plus the output poll loop in a single
+// batched tea.Cmd — see issue #87's design spec, "Triggering a run".
 func (m model) handleFinalize(args []string) (model, tea.Cmd) {
+	// Preflight check (issue #88) - blocks before the finalizeState guard
+	// or any subprocess dispatch. Calls review.CheckFinalizeAssets()
+	// directly (the real check), not the TUI-layer checkFinalizeAssetsFunc
+	// var — matching handleReview's existing synchronous
+	// review.CheckReviewAssets call above. On failure, renders the error
+	// via appendActivity (styled Error, two lines: header + error text,
+	// mirroring handleReview's rendering), stores the result via the
+	// shared applyFinalizePreflightResult helper (also used by the async
+	// retry path in model.Update), and returns without starting the dry
+	// run.
+	if err := review.CheckFinalizeAssets(); err != nil {
+		m = m.applyFinalizePreflightResult(err)
+		m = m.appendActivity(m.styles.Error.Render("Finalize preflight failed:"))
+		m = m.appendActivity(m.styles.Error.Render(err.Error()))
+		return m, nil
+	}
+	m = m.applyFinalizePreflightResult(nil)
+
 	if m.finalizeState != finalizeIdle {
 		m = m.appendActivity(m.styles.Warning.Render("Finalize already in progress"))
 		return m, nil

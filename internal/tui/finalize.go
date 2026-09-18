@@ -120,6 +120,15 @@ var finalizeCommandFunc = exec.CommandContext
 // matching custom-scripts.md's documented ~/.local/bin/ symlink setup.
 // Package-level so tests can override it without touching the real
 // filesystem/PATH.
+//
+// Two-seam note: finalize-reviews.sh is resolved in two places. This one is
+// the run-time last line — the TOCTOU backstop that catches a script that
+// vanished after preflight (it also produces the streamed-window failure).
+// The front-door check is review.CheckFinalizeAssets (finalize_assets.go),
+// which preflights the same script (plus the transitive pr_review_finalize.py)
+// via review.lookPathFunc before the preview window opens. Both consult $PATH
+// so they cannot disagree on resolvability; if you change how one resolves
+// the script (e.g. move off $PATH), update the other to match.
 var finalizeScriptPathFunc = defaultFinalizeScriptPath
 
 func defaultFinalizeScriptPath() (string, error) {
