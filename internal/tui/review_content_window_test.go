@@ -194,3 +194,168 @@ func TestEnterOnReviewsTabTwiceForSamePRReusesExistingWindow(t *testing.T) {
 		t.Errorf("expected active tab to be the reused TabTypeReviewContent, got %v", activeTab)
 	}
 }
+
+// TestMouseClickCloseButtonOnReviewContentTabClosesAndReturnsToReviewsTab
+// verifies that clicking the × close button on a Review content tab's
+// header (the mouse-click path, tea.MouseClickMsg) closes the tab and
+// returns focus to the Reviews tab, mirroring
+// TestEscOnReviewContentTabClosesAndReturnsToReviewsTab. Before the fix for
+// issue #106, the mouse-click path relied entirely on TabManager.CloseTab's
+// generic index-clamping and had no equivalent of ESC's explicit
+// findReviewsTabIndex() + switchActiveTab() redirect.
+func TestMouseClickCloseButtonOnReviewContentTabClosesAndReturnsToReviewsTab(t *testing.T) {
+	tmp := t.TempDir()
+	spoolPath := writeSpoolFixture(t, filepath.Join(tmp, "pending"), "owner-repo-123.md", "# Review body\n")
+
+	m := createTestModelWithReviewsTab(t, []review.Record{
+		{Repo: "owner/repo", PR: 123, SpoolPath: spoolPath},
+	})
+
+	updated := selectFirstRowAndPressEnter(t, m)
+	activeTab := updated.tabManager.GetActiveTab()
+	if activeTab == nil || activeTab.Type() != TabTypeReviewContent {
+		t.Fatalf("expected active tab to be TabTypeReviewContent before click, got %v", activeTab)
+	}
+	contentTabID := activeTab.ID()
+
+	tabs := updated.tabManager.GetTabs()
+	contentIdx := updated.tabManager.FindTabByID(contentTabID)
+	if contentIdx < 0 {
+		t.Fatalf("expected to find review content tab in TabManager")
+	}
+	clickPos := tabClickPos(tabs, contentIdx, true)
+
+	updatedModel, _ := updated.Update(tea.MouseClickMsg{X: clickPos, Y: 0})
+	afterClick := updatedModel.(model)
+
+	afterActiveTab := afterClick.tabManager.GetActiveTab()
+	if afterActiveTab == nil || afterActiveTab.Type() != TabTypeReviews {
+		t.Fatalf("expected active tab to be TabTypeReviews after clicking close, got %v", afterActiveTab)
+	}
+	if idx := afterClick.tabManager.FindTabByID(contentTabID); idx >= 0 {
+		t.Errorf("expected review content tab %q to be removed from TabManager after click-close, found at index %d", contentTabID, idx)
+	}
+}
+
+// TestMouseClickCloseButtonOnReviewContentTabWithLaterTabReturnsToReviewsTab
+// is the regression case that actually exposes the issue #106 bug: with a
+// second closable tab (a LogTab) open AFTER the review content tab,
+// click-closing the review content tab must still land on Reviews, not on
+// the later tab that slides into its old slot. Before the fix,
+// TabManager.CloseTab's generic clamping ("shift left by one if the active
+// index was after the closed one") left the active tab on whatever tab
+// took the closed tab's place — the LogTab in this case — instead of
+// Reviews.
+func TestMouseClickCloseButtonOnReviewContentTabWithLaterTabReturnsToReviewsTab(t *testing.T) {
+	tmp := t.TempDir()
+	spoolPath := writeSpoolFixture(t, filepath.Join(tmp, "pending"), "owner-repo-123.md", "# Review body\n")
+
+	m := createTestModelWithReviewsTab(t, []review.Record{
+		{Repo: "owner/repo", PR: 123, SpoolPath: spoolPath},
+	})
+
+	updated := selectFirstRowAndPressEnter(t, m)
+	activeTab := updated.tabManager.GetActiveTab()
+	if activeTab == nil || activeTab.Type() != TabTypeReviewContent {
+		t.Fatalf("expected active tab to be TabTypeReviewContent before click, got %v", activeTab)
+	}
+	contentTabID := activeTab.ID()
+
+	// Add a second closable tab AFTER the review content tab.
+	logTab := NewLogTab("log-1", "info", 100, updated.styles)
+	updated.tabManager.AddTab(logTab)
+
+	// Switch back to the review content tab so it's the one we click-close.
+	contentIdx := updated.tabManager.FindTabByID(contentTabID)
+	if contentIdx < 0 {
+		t.Fatalf("expected to find review content tab in TabManager")
+	}
+	var switchCmd tea.Cmd
+	updated, switchCmd = updated.switchActiveTab(contentIdx)
+	_ = switchCmd
+
+	tabs := updated.tabManager.GetTabs()
+	clickPos := tabClickPos(tabs, contentIdx, true)
+
+	updatedModel, _ := updated.Update(tea.MouseClickMsg{X: clickPos, Y: 0})
+	afterClick := updatedModel.(model)
+
+	afterActiveTab := afterClick.tabManager.GetActiveTab()
+	if afterActiveTab == nil || afterActiveTab.Type() != TabTypeReviews {
+		t.Fatalf("expected active tab to be TabTypeReviews after click-closing with a later tab present, got %v", afterActiveTab)
+	}
+	if idx := afterClick.tabManager.FindTabByID(contentTabID); idx >= 0 {
+		t.Errorf("expected review content tab %q to be removed from TabManager after click-close, found at index %d", contentTabID, idx)
+	}
+}
+
+// TestCtrlWOnReviewContentTabClosesAndReturnsToReviewsTab mirrors the two
+// mouse-click shapes above (lone review content tab, and with a later
+// closable tab present) but exercises the "ctrl+w" key path instead of a
+// mouse click.
+func TestCtrlWOnReviewContentTabClosesAndReturnsToReviewsTab(t *testing.T) {
+	t.Run("lone review content tab", func(t *testing.T) {
+		tmp := t.TempDir()
+		spoolPath := writeSpoolFixture(t, filepath.Join(tmp, "pending"), "owner-repo-123.md", "# Review body\n")
+
+		m := createTestModelWithReviewsTab(t, []review.Record{
+			{Repo: "owner/repo", PR: 123, SpoolPath: spoolPath},
+		})
+
+		updated := selectFirstRowAndPressEnter(t, m)
+		activeTab := updated.tabManager.GetActiveTab()
+		if activeTab == nil || activeTab.Type() != TabTypeReviewContent {
+			t.Fatalf("expected active tab to be TabTypeReviewContent before ctrl+w, got %v", activeTab)
+		}
+		contentTabID := activeTab.ID()
+
+		updatedModel, _ := updated.Update(tea.KeyPressMsg(tea.Key{Code: 'w', Mod: tea.ModCtrl}))
+		afterCtrlW := updatedModel.(model)
+
+		afterActiveTab := afterCtrlW.tabManager.GetActiveTab()
+		if afterActiveTab == nil || afterActiveTab.Type() != TabTypeReviews {
+			t.Fatalf("expected active tab to be TabTypeReviews after ctrl+w, got %v", afterActiveTab)
+		}
+		if idx := afterCtrlW.tabManager.FindTabByID(contentTabID); idx >= 0 {
+			t.Errorf("expected review content tab %q to be removed from TabManager after ctrl+w, found at index %d", contentTabID, idx)
+		}
+	})
+
+	t.Run("with later closable tab present", func(t *testing.T) {
+		tmp := t.TempDir()
+		spoolPath := writeSpoolFixture(t, filepath.Join(tmp, "pending"), "owner-repo-123.md", "# Review body\n")
+
+		m := createTestModelWithReviewsTab(t, []review.Record{
+			{Repo: "owner/repo", PR: 123, SpoolPath: spoolPath},
+		})
+
+		updated := selectFirstRowAndPressEnter(t, m)
+		activeTab := updated.tabManager.GetActiveTab()
+		if activeTab == nil || activeTab.Type() != TabTypeReviewContent {
+			t.Fatalf("expected active tab to be TabTypeReviewContent before ctrl+w, got %v", activeTab)
+		}
+		contentTabID := activeTab.ID()
+
+		logTab := NewLogTab("log-1", "info", 100, updated.styles)
+		updated.tabManager.AddTab(logTab)
+
+		contentIdx := updated.tabManager.FindTabByID(contentTabID)
+		if contentIdx < 0 {
+			t.Fatalf("expected to find review content tab in TabManager")
+		}
+		var switchCmd tea.Cmd
+		updated, switchCmd = updated.switchActiveTab(contentIdx)
+		_ = switchCmd
+
+		updatedModel, _ := updated.Update(tea.KeyPressMsg(tea.Key{Code: 'w', Mod: tea.ModCtrl}))
+		afterCtrlW := updatedModel.(model)
+
+		afterActiveTab := afterCtrlW.tabManager.GetActiveTab()
+		if afterActiveTab == nil || afterActiveTab.Type() != TabTypeReviews {
+			t.Fatalf("expected active tab to be TabTypeReviews after ctrl+w with a later tab present, got %v", afterActiveTab)
+		}
+		if idx := afterCtrlW.tabManager.FindTabByID(contentTabID); idx >= 0 {
+			t.Errorf("expected review content tab %q to be removed from TabManager after ctrl+w, found at index %d", contentTabID, idx)
+		}
+	})
+}
