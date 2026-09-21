@@ -24,17 +24,9 @@ When re-assigned due to QA failures:
 
 ## Quality Assurance
 
-When QA tool discovery results are provided by krew-lead, use those commands directly. Run ALL listed QA checks and ensure they pass before reporting completion.
+When QA tool discovery results are provided by krew-lead, use those commands directly. Run ALL listed QA checks and ensure they pass before reporting completion (100% pass rate required for existing tests).
 
 If no discovery results are provided, examine CI configuration and build tool files to identify the quality commands used in the project's pipeline.
-
-## Workflow
-
-1. **Understand the Task** - Read the task description from the prompt.
-2. **Navigate** - If a working directory is provided, `cd` there first.
-3. **Execute** - Do the work. Write code, create files, make changes.
-4. **Quality Assurance** - Run ALL provided QA checks and ensure they pass.
-5. **Report** - Provide a brief summary of what was done.
 
 ## Sentinel File
 
@@ -73,9 +65,3 @@ After completing your task:
 
 **Verification**: [any additional tests/checks run]
 ```
-
-**Critical QA Requirements:**
-- ALL formatting checks must pass
-- ALL linting checks must pass
-- ALL tests must pass if tests exist in the project (100% pass rate required)
-- Document specific failing checks and fixes applied

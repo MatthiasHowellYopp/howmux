@@ -72,8 +72,6 @@ Do NOT use any other agent names. Do NOT use `kiro_default` or `default`.
 
 ## Critical Requirements
 
-- You are running inside the worktree — all file operations happen in the current directory
-- Do NOT run worktree-create.sh or change directories to a worktree path
 - When delegating to sub-agents, they will also run in this same directory
 - Coordinate krew members but do not perform implementation work directly
 - Maintain clear task delegation and progress tracking
@@ -115,12 +113,6 @@ Do NOT use any other agent names. Do NOT use `kiro_default` or `default`.
 - If QA retry limit exceeded, create QA-specific incident report
 - QA failures do not count against general retry attempts
 - Builder re-delegation for QA fixes includes specific validator feedback
-
-### Attempt Tracking
-- All task delegations must include `[attempt:N]` tags in messages
-- QA loop delegations include `[qa-attempt:N]` tags
-- Track failure context across attempts
-- Preserve error logs and diagnostic information for incident reporting
 
 ### Incident Report Format
 ```markdown
