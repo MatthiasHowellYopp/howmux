@@ -359,3 +359,112 @@ func TestCtrlWOnReviewContentTabClosesAndReturnsToReviewsTab(t *testing.T) {
 		}
 	})
 }
+
+// TestMouseClickCloseButtonOnNonActiveReviewContentTabReturnsToReviewsTab
+// covers the case the reviewContentTabIDs set-difference fix explicitly
+// handles but the other tests do not: click-closing a review content tab
+// that is NOT the currently active tab. A second review content tab is
+// added and left active; clicking the × of the first (non-active) review
+// content tab must still remove it and redirect to Reviews, because the
+// count-drop detection keys on the review-content-tab count falling, not on
+// which tab was active.
+func TestMouseClickCloseButtonOnNonActiveReviewContentTabReturnsToReviewsTab(t *testing.T) {
+	tmp := t.TempDir()
+	spoolPath := writeSpoolFixture(t, filepath.Join(tmp, "pending"), "owner-repo-123.md", "# Review body\n")
+
+	m := createTestModelWithReviewsTab(t, []review.Record{
+		{Repo: "owner/repo", PR: 123, SpoolPath: spoolPath},
+	})
+
+	// First review content tab (via the real Enter round trip).
+	updated := selectFirstRowAndPressEnter(t, m)
+	firstTab := updated.tabManager.GetActiveTab()
+	if firstTab == nil || firstTab.Type() != TabTypeReviewContent {
+		t.Fatalf("expected active tab to be TabTypeReviewContent, got %v", firstTab)
+	}
+	firstTabID := firstTab.ID()
+
+	// Add a SECOND review content tab and make it the active one, so the
+	// first review content tab is present but not active when we close it.
+	secondTab := NewReviewContentTab("review-content-2", "Review: owner/repo #456", "# Body 2\n", true, updated.styles)
+	updated.tabManager.AddTab(secondTab)
+	secondIdx := updated.tabManager.FindTabByID(secondTab.ID())
+	if secondIdx < 0 {
+		t.Fatalf("expected to find the second review content tab")
+	}
+	var switchCmd tea.Cmd
+	updated, switchCmd = updated.switchActiveTab(secondIdx)
+	_ = switchCmd
+
+	// Click the × of the FIRST (non-active) review content tab.
+	tabs := updated.tabManager.GetTabs()
+	firstIdx := updated.tabManager.FindTabByID(firstTabID)
+	if firstIdx < 0 {
+		t.Fatalf("expected to find the first review content tab")
+	}
+	clickPos := tabClickPos(tabs, firstIdx, true)
+
+	updatedModel, _ := updated.Update(tea.MouseClickMsg{X: clickPos, Y: 0})
+	afterClick := updatedModel.(model)
+
+	if idx := afterClick.tabManager.FindTabByID(firstTabID); idx >= 0 {
+		t.Errorf("expected non-active review content tab %q to be removed after click-close, found at index %d", firstTabID, idx)
+	}
+	afterActiveTab := afterClick.tabManager.GetActiveTab()
+	if afterActiveTab == nil || afterActiveTab.Type() != TabTypeReviews {
+		t.Fatalf("expected active tab to be TabTypeReviews after click-closing a non-active review content tab, got %v", afterActiveTab)
+	}
+}
+
+// TestMouseClickCloseButtonOnLogTabDoesNotRedirectToReviews is the negative
+// guard: the redirect-to-Reviews behavior must fire ONLY when a review
+// content tab is closed. Closing a non-review closable tab (a Log tab) while
+// a review content tab exists elsewhere must NOT force focus to Reviews.
+// This pins the count-drop guard against over-firing.
+func TestMouseClickCloseButtonOnLogTabDoesNotRedirectToReviews(t *testing.T) {
+	tmp := t.TempDir()
+	spoolPath := writeSpoolFixture(t, filepath.Join(tmp, "pending"), "owner-repo-123.md", "# Review body\n")
+
+	m := createTestModelWithReviewsTab(t, []review.Record{
+		{Repo: "owner/repo", PR: 123, SpoolPath: spoolPath},
+	})
+
+	// Open a review content tab (so a review content tab exists in the strip),
+	// then add a Log tab AFTER it and make the Log tab active.
+	updated := selectFirstRowAndPressEnter(t, m)
+	reviewTab := updated.tabManager.GetActiveTab()
+	if reviewTab == nil || reviewTab.Type() != TabTypeReviewContent {
+		t.Fatalf("expected active tab to be TabTypeReviewContent, got %v", reviewTab)
+	}
+	reviewTabID := reviewTab.ID()
+
+	logTab := NewLogTab("log-1", "info", 100, updated.styles)
+	updated.tabManager.AddTab(logTab)
+	logIdx := updated.tabManager.FindTabByID(logTab.ID())
+	if logIdx < 0 {
+		t.Fatalf("expected to find the log tab")
+	}
+	var switchCmd tea.Cmd
+	updated, switchCmd = updated.switchActiveTab(logIdx)
+	_ = switchCmd
+
+	// Click the × of the Log tab.
+	tabs := updated.tabManager.GetTabs()
+	clickPos := tabClickPos(tabs, logIdx, true)
+
+	updatedModel, _ := updated.Update(tea.MouseClickMsg{X: clickPos, Y: 0})
+	afterClick := updatedModel.(model)
+
+	// The Log tab is gone, the review content tab remains, and focus was NOT
+	// forced to Reviews (the redirect must not over-fire on a non-review close).
+	if idx := afterClick.tabManager.FindTabByID(logTab.ID()); idx >= 0 {
+		t.Errorf("expected log tab to be removed after click-close, found at index %d", idx)
+	}
+	if idx := afterClick.tabManager.FindTabByID(reviewTabID); idx < 0 {
+		t.Errorf("expected review content tab %q to remain after closing an unrelated log tab", reviewTabID)
+	}
+	afterActiveTab := afterClick.tabManager.GetActiveTab()
+	if afterActiveTab != nil && afterActiveTab.Type() == TabTypeReviews {
+		t.Errorf("closing a non-review Log tab must not redirect to Reviews, but active tab is Reviews")
+	}
+}

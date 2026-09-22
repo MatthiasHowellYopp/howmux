@@ -2397,11 +2397,16 @@ func (m *model) checkLogTabClosed() {
 // reviewContentTabIDs returns the IDs of all TabTypeReviewContent tabs
 // currently in tm, in tm.GetTabs() order. Callers that close a tab via a
 // path other than the dedicated "esc" handler (mouse-click on a header's
-// close button, "ctrl+w") use this before/after a close operation to
-// detect — by diffing the two ID lists — whether a review content tab was
+// close button, "ctrl+w") capture this before a close and compare the
+// count against the count after — a drop means a review content tab was
 // the one just closed, without needing CloseTab/HandleTabHeaderClick to
-// report which tab type they removed. See the "esc" handler above for the
-// reference behavior this is mirroring.
+// report which tab type they removed. A count comparison is sufficient
+// because those close paths remove at most one tab per invocation, so a
+// length drop unambiguously identifies a single review-content close. The
+// IDs (rather than a bare count) are returned so a caller that needs to
+// know *which* tab closed can diff the lists, but the current callers only
+// need the length. See the "esc" handler above for the reference behavior
+// this is mirroring.
 func reviewContentTabIDs(tm *TabManager) []string {
 	var ids []string
 	for _, tab := range tm.GetTabs() {
