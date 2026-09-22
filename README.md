@@ -151,9 +151,7 @@ The review loop polls enrolled PRs periodically and triggers reviews when:
 - A review is requested from you
 - A new commit is pushed after the last review
 
-### Finalizing Reviews
-
-Once you've set a decision on a review with `decide` (`post`, `revise`, `rereview`, or `discard`), run `finalize` to actually drain the review spool. `finalize` shells out to `finalize-reviews.sh` with `--dry-run` first, streaming its output into a preview window so you can see exactly what would happen — which files get posted, revised, re-reviewed, or discarded — without anything being sent yet. Once the dry-run finishes, howmux asks for confirmation (`y`/`N`) before running the script again for real. Decline and nothing is posted; confirm and the live run streams into the same window, after which the Reviews tab's decision status updates to reflect what was drained.
+Setting a decision on a review with `decide` (`post`, `revise`, `rereview`, or `discard`) launches that action immediately for the selected review. `revise` and `rereview` re-run locally and land back in `pending/` with the decision cleared; `discard` archives to `done/` right away. `post` is the one irreversible step — it shows an inline `y/N` confirm (repo, PR number, and finding count) before publishing inline PR comments and archiving to `done/`; declining leaves the review untouched in `pending/` with no decision recorded.
 
 ## CLI Usage
 
@@ -184,8 +182,7 @@ howmux
 | `stop <issue>` | Stop the agent working on a specific issue number |
 | `plan [desc]` | Start interactive planning session |
 | `review [PR_URL]` | Start PR review workflow (URL to enroll/review now, bare to start loop) |
-| `decide <post\|revise\|rereview\|discard>` | Set the decision on the currently selected review |
-| `finalize` | Preview and post decided PR reviews via finalize-reviews.sh (dry-run, then confirm) |
+| `decide <post\|revise\|rereview\|discard>` | Launch the action immediately on the selected review (post shows an inline y/N confirm) |
 | `theme` | Show current theme |
 | `theme <name>` | Switch to theme |
 | `about` | Show version information and check for updates |
@@ -216,10 +213,10 @@ Both modes preserve their state when you switch, allowing seamless workflow tran
 - `Ctrl+V` — Paste from the clipboard into the message input (planning tabs only, when the message input is focused)
 
 **Reviews Tab (row selected):**
-- `p` — Set decision to post
-- `r` — Set decision to revise
-- `R` — Set decision to rereview
-- `d` — Set decision to discard
+- `p` — Post the review immediately (shows an inline y/N confirm with repo, PR number, and finding count before publishing)
+- `r` — Revise the review immediately (re-runs the consolidator, lands back in `pending/` with the decision cleared, no confirm)
+- `R` — Rereview the review immediately (re-runs the full lens fan-out, lands back in `pending/` with the decision cleared, no confirm)
+- `d` — Discard the review immediately (archives to `done/`, no confirm)
 
 **Application:**
 - `Ctrl+C` — Quit (immediate exit with cleanup; always available as an escape hatch)

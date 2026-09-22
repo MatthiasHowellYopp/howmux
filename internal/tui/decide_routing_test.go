@@ -80,69 +80,109 @@ func newFullDecideRoutingTestModel() model {
 // typed into the footer instead of triggering ReviewsTab.decideSelectedCmd —
 // this test fails without the fix and passes with it.
 func TestSwitchActiveTab_ReviewsTab_KeypressReachesDecideSelectedCmd(t *testing.T) {
-	cases := []struct {
-		key      rune
-		decision string
-	}{
-		{'p', "post"},
-		{'d', "discard"},
-	}
-	for _, tc := range cases {
-		t.Run(string(tc.key), func(t *testing.T) {
-			spoolPath := withRoutingFakeDecisionScript(t)
-			m := newFullDecideRoutingTestModel()
-			addReviewsTabWithRecord(m, review.Record{Repo: "owner/repo", PR: 42, SpoolPath: spoolPath})
+	t.Run("p", func(t *testing.T) {
+		spoolPath := withRoutingFakeDecisionScript(t)
+		m := newFullDecideRoutingTestModel()
+		addReviewsTabWithRecord(m, review.Record{Repo: "owner/repo", PR: 42, SpoolPath: spoolPath})
 
-			reviewsIdx := m.findReviewsTabIndex()
-			if reviewsIdx < 0 {
-				t.Fatalf("expected a Reviews tab to be present")
-			}
+		reviewsIdx := m.findReviewsTabIndex()
+		if reviewsIdx < 0 {
+			t.Fatalf("expected a Reviews tab to be present")
+		}
 
-			// Drive the REAL switchActiveTab — the only path F2/[/] uses to
-			// activate the Reviews tab in the running app.
-			m, switchCmd := m.switchActiveTab(reviewsIdx)
-			if switchCmd != nil {
-				// Draining is unnecessary for focus assertions, but run it
-				// so any tea.Cmd side effect (there should be none here) is
-				// exercised rather than silently ignored.
-				_ = switchCmd()
-			}
+		m, switchCmd := m.switchActiveTab(reviewsIdx)
+		if switchCmd != nil {
+			_ = switchCmd()
+		}
+		if m.input.Focused() {
+			t.Fatalf("expected footer to be unfocused after switching to the Reviews tab (AC2 fix), but it was focused")
+		}
 
-			if m.input.Focused() {
-				t.Fatalf("expected footer to be unfocused after switching to the Reviews tab (AC2 fix), but it was focused")
-			}
+		// Real keypress through the real model.Update routing path.
+		result, cmd := m.Update(pressKey('p'))
+		resultModel, ok := result.(model)
+		if !ok {
+			t.Fatalf("Update did not return a model")
+		}
+		if cmd == nil {
+			t.Fatalf("expected a tea.Cmd emitting decideRequestMsg from ReviewsTab.Update, got nil — keypress did not reach the tab")
+		}
 
-			// Real keypress through the real model.Update routing path.
-			result, cmd := m.Update(pressKey(tc.key))
-			resultModel, ok := result.(model)
-			if !ok {
-				t.Fatalf("Update did not return a model")
-			}
-			if cmd == nil {
-				t.Fatalf("expected a tea.Cmd emitting decideRequestMsg from ReviewsTab.Update, got nil — keypress did not reach the tab")
-			}
+		// The cmd emits decideRequestMsg; drive it through Update once more
+		// (mirroring the real Bubble Tea event loop). "post" opens the
+		// inline confirm gate rather than writing/launching anything yet.
+		msg := cmd()
+		finalResult, finalCmd := resultModel.Update(msg)
+		if finalCmd != nil {
+			t.Errorf("expected nil cmd from decideRequestMsg handling for 'post' (opens confirm gate synchronously), got %v", finalCmd)
+		}
+		finalModel, ok := finalResult.(model)
+		if !ok {
+			t.Fatalf("Update did not return a model")
+		}
 
-			// The cmd emits decideRequestMsg; drive it through Update once
-			// more (mirroring the real Bubble Tea event loop) to observe
-			// the resulting activity line.
-			msg := cmd()
-			finalResult, finalCmd := resultModel.Update(msg)
-			if finalCmd != nil {
-				t.Errorf("expected nil cmd from decideRequestMsg handling, got %v", finalCmd)
-			}
-			finalModel, ok := finalResult.(model)
-			if !ok {
-				t.Fatalf("Update did not return a model")
-			}
+		if finalModel.decidePostConfirmState != decidePostConfirmAwaiting {
+			t.Fatalf("expected decidePostConfirmAwaiting after routing 'p' through the tab, got %v", finalModel.decidePostConfirmState)
+		}
+		if !anyLineContains(finalModel.activityLines, "to owner/repo#42?") {
+			t.Errorf("expected confirm-prompt activity line, got: %v", finalModel.activityLines)
+		}
+	})
 
-			if len(finalModel.activityLines) == 0 {
-				t.Fatalf("expected an activity line to be added (decision applied), got none")
-			}
-			if !anyLineContains(finalModel.activityLines, "Set decision on PR #42 to '"+tc.decision+"'") {
-				t.Errorf("expected success activity line for decision %q, got: %v", tc.decision, finalModel.activityLines)
-			}
-		})
-	}
+	t.Run("d", func(t *testing.T) {
+		spoolPath := withRoutingFakeDecisionScript(t)
+		m := newFullDecideRoutingTestModel()
+		addReviewsTabWithRecord(m, review.Record{Repo: "owner/repo", PR: 42, SpoolPath: spoolPath})
+
+		reviewsIdx := m.findReviewsTabIndex()
+		if reviewsIdx < 0 {
+			t.Fatalf("expected a Reviews tab to be present")
+		}
+
+		m, switchCmd := m.switchActiveTab(reviewsIdx)
+		if switchCmd != nil {
+			_ = switchCmd()
+		}
+		if m.input.Focused() {
+			t.Fatalf("expected footer to be unfocused after switching to the Reviews tab (AC2 fix), but it was focused")
+		}
+
+		result, cmd := m.Update(pressKey('d'))
+		resultModel, ok := result.(model)
+		if !ok {
+			t.Fatalf("Update did not return a model")
+		}
+		if cmd == nil {
+			t.Fatalf("expected a tea.Cmd emitting decideRequestMsg from ReviewsTab.Update, got nil — keypress did not reach the tab")
+		}
+
+		// decideRequestMsg -> dispatchDecideAction("discard") -> a tea.Cmd
+		// that (once invoked) reports decideDiscardCompleteMsg.
+		msg := cmd()
+		finalResult, finalCmd := resultModel.Update(msg)
+		discardCmd := finalCmd
+		finalModel, ok := finalResult.(model)
+		if !ok {
+			t.Fatalf("Update did not return a model")
+		}
+		if discardCmd == nil {
+			t.Fatalf("expected a non-nil tea.Cmd for the discard launch, got nil")
+		}
+
+		completeMsg := drainBatchForType[decideDiscardCompleteMsg](t, discardCmd)
+		afterDiscard, afterCmd := finalModel.Update(completeMsg)
+		if afterCmd != nil {
+			t.Errorf("expected nil cmd from decideDiscardCompleteMsg handling, got %v", afterCmd)
+		}
+		afterModel, ok := afterDiscard.(model)
+		if !ok {
+			t.Fatalf("Update did not return a model")
+		}
+
+		if !anyLineContains(afterModel.activityLines, "Discarded review for owner/repo#42 — archived to done/.") {
+			t.Errorf("expected success activity line for discard, got: %v", afterModel.activityLines)
+		}
+	})
 }
 
 // TestSwitchActiveTab_ReviewsTab_EnterReachesOpenSelectedReviewCmd proves the
@@ -230,14 +270,19 @@ func TestToggleReviewsFocus_UserCanStillFocusFooterAndRunDecideCommand(t *testin
 		t.Fatalf("expected footer value %q, got %q", "decide post", got)
 	}
 
-	// Enter executes it as a command, since the footer is focused.
+	// Enter executes it as a command, since the footer is focused. "decide
+	// post" opens the inline confirm gate rather than writing/launching
+	// anything yet (issue #109 — post is no longer write-only).
 	finalResult, _ := m2.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	finalModel, ok := finalResult.(model)
 	if !ok {
 		t.Fatalf("Update did not return a model")
 	}
-	if !anyLineContains(finalModel.activityLines, "Set decision on PR #9 to 'post'") {
-		t.Errorf("expected success activity line for AC1's decide-post command, got: %v", finalModel.activityLines)
+	if finalModel.decidePostConfirmState != decidePostConfirmAwaiting {
+		t.Fatalf("expected decidePostConfirmAwaiting after AC1's decide-post command, got %v", finalModel.decidePostConfirmState)
+	}
+	if !anyLineContains(finalModel.activityLines, "to owner/repo#9?") {
+		t.Errorf("expected confirm-prompt activity line for AC1's decide-post command, got: %v", finalModel.activityLines)
 	}
 }
 
@@ -375,59 +420,93 @@ func TestAC5a_FooterFocused_ReviewsTabActive_PrintableKeyTypesIntoInput(t *testi
 // cases and trigger a decision — proving the guard only suppresses
 // forwarding when the footer actually has focus, not unconditionally.
 func TestAC5a_FooterUnfocused_ReviewsTabActive_KeyTriggersDecision(t *testing.T) {
-	cases := []struct {
-		key      rune
-		decision string
-	}{
-		{'p', "post"},
-		{'d', "discard"},
-	}
-	for _, tc := range cases {
-		t.Run(string(tc.key), func(t *testing.T) {
-			spoolPath := withRoutingFakeDecisionScript(t)
-			m := newDecideRoutingTestModel()
-			addReviewsTabWithRecord(m, review.Record{Repo: "owner/repo", PR: 8, SpoolPath: spoolPath})
-			m.input.SetFocus(false)
-			if m.input.Focused() {
-				t.Fatalf("test setup broken: input should not be focused")
-			}
-			beforeValue := m.input.Value()
+	t.Run("p", func(t *testing.T) {
+		spoolPath := withRoutingFakeDecisionScript(t)
+		m := newDecideRoutingTestModel()
+		addReviewsTabWithRecord(m, review.Record{Repo: "owner/repo", PR: 8, SpoolPath: spoolPath})
+		m.input.SetFocus(false)
+		if m.input.Focused() {
+			t.Fatalf("test setup broken: input should not be focused")
+		}
+		beforeValue := m.input.Value()
 
-			result, cmd := m.Update(pressKey(tc.key))
-			resultModel, ok := result.(model)
-			if !ok {
-				t.Fatalf("Update did not return a model")
-			}
+		result, cmd := m.Update(pressKey('p'))
+		resultModel, ok := result.(model)
+		if !ok {
+			t.Fatalf("Update did not return a model")
+		}
 
-			// The keypress reaches ReviewsTab.Update via m.tabManager.Update,
-			// which returns a tea.Cmd emitting decideRequestMsg — it has not
-			// yet been applied to activityLines at this point, so drive the
-			// cmd through Update once more (mirroring the real Bubble Tea
-			// event loop) to observe the resulting activity line.
-			if cmd == nil {
-				t.Fatalf("expected a tea.Cmd emitting decideRequestMsg, got nil")
-			}
-			msg := cmd()
-			finalResult, finalCmd := resultModel.Update(msg)
-			if finalCmd != nil {
-				t.Errorf("expected nil cmd from decideRequestMsg handling, got %v", finalCmd)
-			}
-			finalModel, ok := finalResult.(model)
-			if !ok {
-				t.Fatalf("Update did not return a model")
-			}
+		if cmd == nil {
+			t.Fatalf("expected a tea.Cmd emitting decideRequestMsg, got nil")
+		}
+		msg := cmd()
+		finalResult, finalCmd := resultModel.Update(msg)
+		// "post" opens the confirm gate synchronously (no launch cmd yet).
+		if finalCmd != nil {
+			t.Errorf("expected nil cmd from decideRequestMsg handling for 'post', got %v", finalCmd)
+		}
+		finalModel, ok := finalResult.(model)
+		if !ok {
+			t.Fatalf("Update did not return a model")
+		}
 
-			if len(finalModel.activityLines) == 0 {
-				t.Fatalf("expected an activity line to be added (decision applied), got none")
-			}
-			if !anyLineContains(finalModel.activityLines, "Set decision on PR #8 to '"+tc.decision+"'") {
-				t.Errorf("expected success activity line for decision %q, got: %v", tc.decision, finalModel.activityLines)
-			}
-			if finalModel.input.Value() != beforeValue {
-				t.Errorf("expected input value unchanged, got %q (want %q)", finalModel.input.Value(), beforeValue)
-			}
-		})
-	}
+		if finalModel.decidePostConfirmState != decidePostConfirmAwaiting {
+			t.Fatalf("expected decidePostConfirmAwaiting, got %v", finalModel.decidePostConfirmState)
+		}
+		if !anyLineContains(finalModel.activityLines, "to owner/repo#8?") {
+			t.Errorf("expected confirm-prompt activity line, got: %v", finalModel.activityLines)
+		}
+		if finalModel.input.Value() != beforeValue {
+			t.Errorf("expected input value unchanged, got %q (want %q)", finalModel.input.Value(), beforeValue)
+		}
+	})
+
+	t.Run("d", func(t *testing.T) {
+		spoolPath := withRoutingFakeDecisionScript(t)
+		m := newDecideRoutingTestModel()
+		addReviewsTabWithRecord(m, review.Record{Repo: "owner/repo", PR: 8, SpoolPath: spoolPath})
+		m.input.SetFocus(false)
+		if m.input.Focused() {
+			t.Fatalf("test setup broken: input should not be focused")
+		}
+		beforeValue := m.input.Value()
+
+		result, cmd := m.Update(pressKey('d'))
+		resultModel, ok := result.(model)
+		if !ok {
+			t.Fatalf("Update did not return a model")
+		}
+
+		if cmd == nil {
+			t.Fatalf("expected a tea.Cmd emitting decideRequestMsg, got nil")
+		}
+		msg := cmd()
+		finalResult, finalCmd := resultModel.Update(msg)
+		finalModel, ok := finalResult.(model)
+		if !ok {
+			t.Fatalf("Update did not return a model")
+		}
+		if finalCmd == nil {
+			t.Fatalf("expected a non-nil tea.Cmd for the discard launch, got nil")
+		}
+
+		completeMsg := drainBatchForType[decideDiscardCompleteMsg](t, finalCmd)
+		afterResult, afterCmd := finalModel.Update(completeMsg)
+		if afterCmd != nil {
+			t.Errorf("expected nil cmd from decideDiscardCompleteMsg handling, got %v", afterCmd)
+		}
+		afterModel, ok := afterResult.(model)
+		if !ok {
+			t.Fatalf("Update did not return a model")
+		}
+
+		if !anyLineContains(afterModel.activityLines, "Discarded review for owner/repo#8 — archived to done/.") {
+			t.Errorf("expected success activity line for discard, got: %v", afterModel.activityLines)
+		}
+		if afterModel.input.Value() != beforeValue {
+			t.Errorf("expected input value unchanged, got %q (want %q)", afterModel.input.Value(), beforeValue)
+		}
+	})
 }
 
 // newDecideRoutingTestModelWithNotesAndBody extends newDecideRoutingTestModel

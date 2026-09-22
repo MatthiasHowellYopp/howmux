@@ -452,9 +452,26 @@ func buildSpoolInfo(data []byte, inDoneDir bool) SpoolInfo {
 // spoolPath, returning "" if no "pending" segment is present to swap. This
 // mirrors the external finalize pipeline's move from ~/PR-Review/pending/
 // to ~/PR-Review/done/ (same base filename, sibling directory).
+//
+// This is now a thin wrapper around the more general swapPendingDone, kept
+// so every existing caller (resolveSpoolPath, etc.) needs no change.
 func derivePendingToDone(spoolPath string) string {
-	const from = "pending"
-	const to = "done"
+	return swapPendingDone(spoolPath, true)
+}
+
+// swapPendingDone swaps the last "pending"/"done" path segment in spoolPath
+// for the other one, returning "" if the segment being swapped away from is
+// not present. When toDone is true, it swaps the last "pending" segment for
+// "done" (the direction derivePendingToDone has always performed); when
+// false, it swaps the last "done" segment for "pending" (the write-side
+// inverse archiveToDone's counterpart, DiscardReview/PostReview's undo path,
+// would need — kept general here so both directions live in exactly one
+// implementation rather than two near-duplicate ones).
+func swapPendingDone(spoolPath string, toDone bool) string {
+	from, to := "done", "pending"
+	if toDone {
+		from, to = "pending", "done"
+	}
 
 	segments := strings.Split(spoolPath, string(os.PathSeparator))
 	swapped := false
@@ -471,6 +488,190 @@ func derivePendingToDone(spoolPath string) string {
 	}
 
 	return strings.Join(segments, string(os.PathSeparator))
+}
+
+// RewriteSpoolEntry rewrites the spool file at spoolPath in place: it
+// replaces the front-matter's "verdict:" line (adding it before the closing
+// fence if absent, mirroring patchFrontMatterMetadata's existing
+// add-if-absent pattern for "generated"/"reviewed_sha") and replaces
+// everything after the closing fence with newBody. If clearDecision is
+// true, the "decision:" line's value is blanked (added, blank, if absent);
+// "decision_notes:" is left untouched either way, matching the Python
+// reference's spool.rewrite(), which only ever touches the keys explicitly
+// passed to it.
+//
+// This is the direct Go equivalent of ai-resources/workflows/spool.py's
+// rewrite() function, used by revise/rereview to land a freshly-consolidated
+// body + verdict back into pending/ with the decision cleared so the file
+// returns to the human's queue.
+//
+// Behavior:
+//   - spoolPath == "" -> "no spool path provided"
+//   - the file does not exist on disk -> a wrapped os.ReadFile error
+//   - no opening "---" fence, or no closing "---" fence -> returns an error
+//     (mirrors patchFrontMatterMetadata's requirement of a well-formed
+//     fence to rewrite into)
+//   - on success: the file at spoolPath is atomically replaced (same
+//     temp-file-same-directory-then-rename discipline as
+//     WriteReviewedMetadata, including permission preservation)
+func RewriteSpoolEntry(spoolPath string, newBody string, newVerdict string, clearDecision bool) error {
+	if spoolPath == "" {
+		return fmt.Errorf("no spool path provided")
+	}
+
+	data, err := os.ReadFile(spoolPath)
+	if err != nil {
+		return fmt.Errorf("failed to read spool file %s: %w", spoolPath, err)
+	}
+
+	rewritten, err := rewriteFrontMatterAndBody(data, newBody, newVerdict, clearDecision)
+	if err != nil {
+		return fmt.Errorf("failed to rewrite %s: %w", spoolPath, err)
+	}
+
+	perm := os.FileMode(0o644)
+	if info, statErr := os.Stat(spoolPath); statErr == nil {
+		perm = info.Mode().Perm()
+	}
+
+	tmp, err := os.CreateTemp(filepath.Dir(spoolPath), filepath.Base(spoolPath)+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file for %s: %w", spoolPath, err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+
+	if _, err := tmp.Write(rewritten); err != nil {
+		tmp.Close()
+		return fmt.Errorf("failed to write temp file for %s: %w", spoolPath, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("failed to close temp file for %s: %w", spoolPath, err)
+	}
+	if err := os.Chmod(tmpName, perm); err != nil {
+		return fmt.Errorf("failed to set mode on temp file for %s: %w", spoolPath, err)
+	}
+	if err := os.Rename(tmpName, spoolPath); err != nil {
+		return fmt.Errorf("failed to atomically replace spool file %s: %w", spoolPath, err)
+	}
+
+	return nil
+}
+
+// rewriteFrontMatterAndBody is the pure-function core of RewriteSpoolEntry:
+// it replaces the "verdict:" front-matter line (added before the closing
+// fence if absent), optionally blanks "decision:" (added, blank, if absent,
+// when clearDecision is true), and replaces everything after the closing
+// fence with newBody. Every other front-matter line, and its relative
+// order, is left unchanged — mirroring patchFrontMatterMetadata's own
+// preserve-everything-else contract.
+//
+// Requires a well-formed opening and closing "---" fence; unlike
+// ParseSpoolFrontMatter's silent-degrade contract, a caller asking to
+// rewrite a file needs to know if there was nothing to rewrite into.
+func rewriteFrontMatterAndBody(data []byte, newBody string, newVerdict string, clearDecision bool) ([]byte, error) {
+	lines := strings.Split(string(data), "\n")
+
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
+		return nil, fmt.Errorf("no opening front-matter fence")
+	}
+
+	closingIdx := -1
+	for i := 1; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == "---" {
+			closingIdx = i
+			break
+		}
+	}
+	if closingIdx == -1 {
+		return nil, fmt.Errorf("no closing front-matter fence")
+	}
+
+	sawVerdict := false
+	sawDecision := false
+
+	// Copy before mutating, for the same reason patchFrontMatterMetadata
+	// does: appending to a sub-slice of lines could silently overwrite the
+	// closing fence and body via shared backing-array capacity.
+	frontMatter := make([]string, closingIdx-1)
+	copy(frontMatter, lines[1:closingIdx])
+	for i, line := range frontMatter {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		key, _, found := strings.Cut(line, ":")
+		if !found {
+			continue
+		}
+		switch strings.TrimSpace(key) {
+		case "verdict":
+			frontMatter[i] = "verdict: " + newVerdict
+			sawVerdict = true
+		case "decision":
+			if clearDecision {
+				frontMatter[i] = "decision:"
+			}
+			sawDecision = true
+		}
+	}
+
+	if !sawDecision && clearDecision {
+		frontMatter = append(frontMatter, "decision:")
+	}
+	if !sawVerdict {
+		frontMatter = append(frontMatter, "verdict: "+newVerdict)
+	}
+
+	newLines := make([]string, 0, len(frontMatter)+3)
+	newLines = append(newLines, lines[0])
+	newLines = append(newLines, frontMatter...)
+	newLines = append(newLines, "---")
+	newLines = append(newLines, "")
+	newLines = append(newLines, newBody)
+
+	return []byte(strings.Join(newLines, "\n")), nil
+}
+
+// archiveToDone moves the spool file at spoolPath from pending/ to its
+// done/ counterpart (same base filename), creating the done/ directory if
+// it does not yet exist. This is the direct Go equivalent of
+// ai-resources/workflows/spool.py's move_to_done(): a plain os.Rename once
+// the destination directory is guaranteed to exist.
+//
+// Behavior:
+//   - spoolPath == "" -> "no spool path provided"
+//   - spoolPath has no "pending" path segment to swap -> a descriptive error
+//     (swapPendingDone returned "")
+//   - the source file does not exist -> a descriptive error, not a bare
+//     os.Rename error
+//   - on success: the file no longer exists at spoolPath and exists at the
+//     derived done/ path
+func archiveToDone(spoolPath string) error {
+	if spoolPath == "" {
+		return fmt.Errorf("no spool path provided")
+	}
+
+	donePath := swapPendingDone(spoolPath, true)
+	if donePath == "" {
+		return fmt.Errorf("cannot derive a done/ path from %s (no \"pending\" path segment)", spoolPath)
+	}
+
+	if _, err := os.Stat(spoolPath); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("no spool file to archive at %s: %w", spoolPath, err)
+		}
+		return fmt.Errorf("failed to stat spool file %s: %w", spoolPath, err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(donePath), 0o755); err != nil {
+		return fmt.Errorf("failed to create done/ directory for %s: %w", donePath, err)
+	}
+
+	if err := os.Rename(spoolPath, donePath); err != nil {
+		return fmt.Errorf("failed to archive %s to %s: %w", spoolPath, donePath, err)
+	}
+
+	return nil
 }
 
 // ClassifySpoolState implements the AC3 decision-state mapping as a pure

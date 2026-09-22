@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +12,19 @@ import (
 
 	"github.com/matthiashowellyopp/howmux/internal/review"
 )
+
+// stubReviseReviewFunc substitutes the package-level reviseReviewFunc seam
+// (decideactions.go) with fn for the duration of a test, returning a
+// restore closure. Mirrors the *Func substitution pattern this codebase
+// already uses throughout (ensureCheckoutFunc, runReviewFunc, etc.) — used
+// here so revise/rereview/post-adjacent decide tests never actually shell
+// out to kiro-cli/gh via internal/review's own private seams, which are not
+// reachable from this package.
+func stubReviseReviewFunc(fn func(ctx context.Context, rec review.Record) (string, error)) func() {
+	original := reviseReviewFunc
+	reviseReviewFunc = fn
+	return func() { reviseReviewFunc = original }
+}
 
 // newDecideTestModel builds a model with the collaborators handleDecide
 // needs: styles, a real *review.DecisionWriter, and a TabManager. Unlike
@@ -171,53 +185,81 @@ func TestHandleDecide_RowSelectedNoSpoolPath(t *testing.T) {
 
 func TestHandleDecide_ValidSpoolPath_WriterSuccess(t *testing.T) {
 	spoolPath := withFakeDecisionScript(t)
-	os.Setenv("FAKE_DECISION_EXIT", "0")
-	os.Unsetenv("FAKE_DECISION_STDERR")
-	defer os.Unsetenv("FAKE_DECISION_EXIT")
+
+	restore := stubReviseReviewFunc(func(ctx context.Context, rec review.Record) (string, error) {
+		return "APPROVE", nil
+	})
+	defer restore()
 
 	m := newDecideTestModel()
 	addReviewsTabWithRecord(m, review.Record{Repo: "owner/repo", PR: 7, SpoolPath: spoolPath})
 
 	result, cmd := m.handleDecide([]string{"revise"})
-	if cmd != nil {
-		t.Errorf("expected nil cmd, got %v", cmd)
+	if cmd == nil {
+		t.Fatalf("expected a non-nil tea.Cmd for the 'revise' launch, got nil")
 	}
-	if !anyLineContains(result.activityLines, "Set decision on PR #7 to 'revise'") {
-		t.Errorf("expected success activity line containing PR number and decision, got: %v", result.activityLines)
+	if !anyLineContains(result.activityLines, "Revising review for owner/repo#7...") {
+		t.Errorf("expected in-progress activity line, got: %v", result.activityLines)
+	}
+
+	msg := drainBatchForType[decideReviseCompleteMsg](t, cmd)
+	if msg.rec.PR != 7 || msg.newVerdict != "APPROVE" {
+		t.Errorf("unexpected decideReviseCompleteMsg: %+v", msg)
+	}
+
+	updated, finalCmd := result.Update(msg)
+	if finalCmd != nil {
+		t.Errorf("expected nil cmd from decideReviseCompleteMsg handling, got %v", finalCmd)
+	}
+	finalModel, ok := updated.(model)
+	if !ok {
+		t.Fatalf("Update did not return a model")
+	}
+	if !anyLineContains(finalModel.activityLines, "Revised review for owner/repo#7 — new verdict: APPROVE, back in pending/.") {
+		t.Errorf("expected success activity line containing PR number and new verdict, got: %v", finalModel.activityLines)
 	}
 }
 
 func TestHandleDecide_ValidSpoolPath_WriterError(t *testing.T) {
 	spoolPath := withFakeDecisionScript(t)
-	os.Setenv("FAKE_DECISION_EXIT", "3")
-	os.Setenv("FAKE_DECISION_STDERR", "error: spool file not found: /tmp/spool.md")
-	defer os.Unsetenv("FAKE_DECISION_EXIT")
-	defer os.Unsetenv("FAKE_DECISION_STDERR")
+
+	restore := stubReviseReviewFunc(func(ctx context.Context, rec review.Record) (string, error) {
+		return "", fmt.Errorf("revise failed for owner/repo#9: kiro-cli exited 3: spool file not found: /tmp/spool.md")
+	})
+	defer restore()
 
 	m := newDecideTestModel()
 	addReviewsTabWithRecord(m, review.Record{Repo: "owner/repo", PR: 9, SpoolPath: spoolPath})
 
-	result, cmd := m.handleDecide([]string{"discard"})
-	if cmd != nil {
-		t.Errorf("expected nil cmd, got %v", cmd)
+	result, cmd := m.handleDecide([]string{"revise"})
+	if cmd == nil {
+		t.Fatalf("expected a non-nil tea.Cmd for the 'revise' launch, got nil")
 	}
+
+	msg := drainBatchForType[decideReviseErrorMsg](t, cmd)
+	updated, finalCmd := result.Update(msg)
+	if finalCmd != nil {
+		t.Errorf("expected nil cmd from decideReviseErrorMsg handling, got %v", finalCmd)
+	}
+	finalModel, ok := updated.(model)
+	if !ok {
+		t.Fatalf("Update did not return a model")
+	}
+
 	found := false
-	for _, line := range result.activityLines {
-		if strings.Contains(line, "Failed to set decision:") && strings.Contains(line, "spool file not found") {
+	for _, line := range finalModel.activityLines {
+		if strings.Contains(line, "Failed to revise review for owner/repo#9:") && strings.Contains(line, "spool file not found") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("expected error activity line containing wrapped error text, got: %v", result.activityLines)
+		t.Errorf("expected error activity line containing wrapped error text, got: %v", finalModel.activityLines)
 	}
 }
 
 func TestHandleDecide_WorksWhenDifferentTabActive(t *testing.T) {
 	spoolPath := withFakeDecisionScript(t)
-	os.Setenv("FAKE_DECISION_EXIT", "0")
-	os.Unsetenv("FAKE_DECISION_STDERR")
-	defer os.Unsetenv("FAKE_DECISION_EXIT")
 
 	m := newDecideTestModel()
 	addReviewsTabWithRecord(m, review.Record{Repo: "owner/repo", PR: 13, SpoolPath: spoolPath})
@@ -234,10 +276,16 @@ func TestHandleDecide_WorksWhenDifferentTabActive(t *testing.T) {
 
 	result, cmd := m.handleDecide([]string{"post"})
 	if cmd != nil {
-		t.Errorf("expected nil cmd, got %v", cmd)
+		t.Errorf("expected nil cmd (post opens the confirm gate synchronously, nothing launched yet), got %v", cmd)
 	}
-	if !anyLineContains(result.activityLines, "Set decision on PR #13 to 'post'") {
-		t.Errorf("expected success activity line even with a different tab active, got: %v", result.activityLines)
+	if result.decidePostConfirmState != decidePostConfirmAwaiting {
+		t.Fatalf("expected decidePostConfirmAwaiting even with a different tab active, got %v", result.decidePostConfirmState)
+	}
+	if result.decidePostPending.PR != 13 {
+		t.Errorf("expected decidePostPending.PR == 13, got %d", result.decidePostPending.PR)
+	}
+	if !anyLineContains(result.activityLines, "to owner/repo#13?") {
+		t.Errorf("expected confirm-prompt activity line even with a different tab active, got: %v", result.activityLines)
 	}
 }
 
