@@ -8,8 +8,10 @@
 package review
 
 import (
+	"fmt"
 	"os"
 	"strings"
+	"time"
 )
 
 // SpoolInfo is the read-only, display-oriented view of a spool file's
@@ -102,6 +104,148 @@ func resolveSpoolPath(spoolPath string) (path string, found bool, inDoneDir bool
 		}
 	}
 	return "", false, false
+}
+
+// WriteReviewedMetadata patches the "generated" and "reviewed_sha"
+// front-matter fields into the spool file at spoolPath, in place, preserving
+// the review body and every other front-matter key byte-for-byte.
+//
+// This is the one exception to this file's "read-only" package doc comment:
+// pr_review.py (ai-resources, out of howmux's control) writes the spool
+// file's front-matter with a blank "generated:" and no "reviewed_sha:" key.
+// RunReview is the only thing in howmux that both knows the head SHA a
+// review actually covered and controls when the spool file is considered
+// finished — so it is the correct place to guarantee these two fields are
+// populated, rather than depending on pr_review.py's own output. See
+// runner.go's call site and issue #108 for the full rationale.
+//
+// Behavior:
+//   - spoolPath == "" -> "no spool path provided"
+//   - headSHA == "" -> "no head SHA provided"
+//   - spoolPath resolves to nothing (neither pending/ nor done/) -> "no spool file"
+//   - spoolPath resolves to done/ (already finalized/archived) -> refuses,
+//     mirroring BodyWriter.SetBody / DecisionWriter.SetDecision: a review
+//     that has already been drained should not have its front-matter
+//     rewritten out from under a decision that already ran against it.
+//   - no opening "---" fence, or no closing "---" fence -> returns an error
+//     (this function requires a well-formed fence to patch; unlike
+//     ParseSpoolFrontMatter it does not silently no-op on malformed input,
+//     because silently failing to stamp the file would defeat the point of
+//     this function existing)
+//   - on success: the front-matter block between the fences has its
+//     "generated:" line's value replaced with generatedAt formatted as
+//     RFC3339 (added if absent), and its "reviewed_sha:" line's value
+//     replaced with headSHA (added if absent). Every other front-matter
+//     line, and everything after the closing fence (the review body), is
+//     unchanged, including line order of untouched keys.
+//
+// New keys ("generated", "reviewed_sha" when absent) are appended
+// immediately before the closing fence, so a human scanning the file finds
+// them at a predictable place (bottom of the front-matter block) whether
+// pr_review.py already emitted a blank "generated:" or emitted neither key.
+func WriteReviewedMetadata(spoolPath, headSHA string, generatedAt time.Time) error {
+	if spoolPath == "" {
+		return fmt.Errorf("no spool path provided")
+	}
+	if headSHA == "" {
+		return fmt.Errorf("no head SHA provided")
+	}
+
+	resolved, found, inDoneDir := resolveSpoolPath(spoolPath)
+	if !found {
+		return fmt.Errorf("no spool file to stamp: %s", spoolPath)
+	}
+	if inDoneDir {
+		return fmt.Errorf("review already finalized (archived to done/); its metadata can no longer be changed: %s", resolved)
+	}
+
+	data, err := os.ReadFile(resolved)
+	if err != nil {
+		return fmt.Errorf("failed to read spool file %s: %w", resolved, err)
+	}
+
+	patched, err := patchFrontMatterMetadata(data, headSHA, generatedAt.Format(time.RFC3339))
+	if err != nil {
+		return fmt.Errorf("failed to patch front-matter in %s: %w", resolved, err)
+	}
+
+	if err := os.WriteFile(resolved, patched, 0644); err != nil {
+		return fmt.Errorf("failed to write spool file %s: %w", resolved, err)
+	}
+
+	return nil
+}
+
+// patchFrontMatterMetadata rewrites the "generated" and "reviewed_sha" lines
+// within the fenced front-matter block of data, leaving every other line
+// (front-matter or body) unchanged. It requires a well-formed opening and
+// closing "---" fence (unlike ParseSpoolFrontMatter's silent-degrade
+// contract) because a caller asking to patch metadata into a file needs to
+// know if that file has no fence to patch into, rather than silently
+// producing a byte-identical no-op.
+//
+// This is a pure function over []byte so it is directly unit-testable
+// without touching the filesystem; WriteReviewedMetadata is the only
+// filesystem-facing caller.
+func patchFrontMatterMetadata(data []byte, headSHA, generatedRFC3339 string) ([]byte, error) {
+	lines := strings.Split(string(data), "\n")
+
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
+		return nil, fmt.Errorf("no opening front-matter fence")
+	}
+
+	closingIdx := -1
+	for i := 1; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == "---" {
+			closingIdx = i
+			break
+		}
+	}
+	if closingIdx == -1 {
+		return nil, fmt.Errorf("no closing front-matter fence")
+	}
+
+	sawGenerated := false
+	sawReviewedSHA := false
+
+	// Copy into a fresh slice (rather than aliasing lines[1:closingIdx])
+	// before any append: frontMatter is a sub-slice of lines, and appending
+	// to it in place would silently overwrite lines[closingIdx] (the
+	// closing fence) and beyond whenever the underlying array has spare
+	// capacity, corrupting the fence and the body that follows it.
+	frontMatter := make([]string, closingIdx-1)
+	copy(frontMatter, lines[1:closingIdx])
+	for i, line := range frontMatter {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		key, _, found := strings.Cut(line, ":")
+		if !found {
+			continue
+		}
+		switch strings.TrimSpace(key) {
+		case "generated":
+			frontMatter[i] = "generated: " + generatedRFC3339
+			sawGenerated = true
+		case "reviewed_sha":
+			frontMatter[i] = "reviewed_sha: " + headSHA
+			sawReviewedSHA = true
+		}
+	}
+
+	if !sawReviewedSHA {
+		frontMatter = append(frontMatter, "reviewed_sha: "+headSHA)
+	}
+	if !sawGenerated {
+		frontMatter = append(frontMatter, "generated: "+generatedRFC3339)
+	}
+
+	newLines := make([]string, 0, len(lines)+2)
+	newLines = append(newLines, lines[0])
+	newLines = append(newLines, frontMatter...)
+	newLines = append(newLines, lines[closingIdx:]...)
+
+	return []byte(strings.Join(newLines, "\n")), nil
 }
 
 // ReadSpoolInfo resolves and reads a spool file for display purposes only.

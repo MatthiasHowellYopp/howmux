@@ -6,10 +6,32 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+// writeTestSpoolFixture writes a minimal, realistic pending/ spool fixture
+// to a fresh t.TempDir() and returns its absolute path. RunReview's
+// WriteReviewedMetadata call (added in issue #108) reads/patches whatever
+// path runReviewToolFunc returns, so any fake in this file that previously
+// returned a bare non-existent path string now needs a real file backing
+// it — this helper centralizes that fixture so each test doesn't repeat the
+// front-matter boilerplate.
+func writeTestSpoolFixture(t *testing.T, filename string) string {
+	t.Helper()
+	spoolDir := filepath.Join(t.TempDir(), "PR-Review", "pending")
+	if err := os.MkdirAll(spoolDir, 0755); err != nil {
+		t.Fatalf("failed to create spool dir: %v", err)
+	}
+	spoolPath := filepath.Join(spoolDir, filename)
+	fixture := "---\nverdict: APPROVE\ndecision:\ngenerated:\n---\n\nFixture review body.\n"
+	if err := os.WriteFile(spoolPath, []byte(fixture), 0644); err != nil {
+		t.Fatalf("failed to write spool fixture: %v", err)
+	}
+	return spoolPath
+}
 
 // TestRunReview_DiffFetch_Argv verifies fetchDiffFunc is called with correct arguments
 func TestRunReview_DiffFetch_Argv(t *testing.T) {
@@ -38,8 +60,13 @@ func TestRunReview_DiffFetch_Argv(t *testing.T) {
 		return os.WriteFile(outputFile, []byte("fake diff"), 0644)
 	}
 
+	// RunReview now stamps the spool file via WriteReviewedMetadata, which
+	// requires the returned path to exist on disk (see issue #108), so the
+	// fake must write a minimal real fixture rather than return a bare
+	// string.
+	spoolPath := writeTestSpoolFixture(t, "pr-review-owner-repo.md")
 	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
-		return []string{"/Users/test/PR-Review/pending/pr-review-owner-repo.md"}, nil
+		return []string{spoolPath}, nil
 	}
 
 	baseDir := t.TempDir()
@@ -102,7 +129,7 @@ func TestRunReview_ReviewTool_Argv(t *testing.T) {
 
 	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
 		capturedArgv = append([]string{}, argv...) // deep copy
-		return []string{"/Users/test/PR-Review/pending/pr-review-owner-repo.md"}, nil
+		return []string{writeTestSpoolFixture(t, "pr-review-owner-repo.md")}, nil
 	}
 
 	baseDir := t.TempDir()
@@ -196,7 +223,7 @@ func TestRunReview_StderrRouting(t *testing.T) {
 		io.WriteString(stderrWriter, "→ [2/3] Running lenses…\n")
 		io.WriteString(stderrWriter, "→ [3/3] Consolidating…\n")
 		io.WriteString(stderrWriter, "→ verdict: APPROVE\n")
-		return []string{"/Users/test/PR-Review/pending/pr-review-owner-repo.md"}, nil
+		return []string{writeTestSpoolFixture(t, "pr-review-owner-repo.md")}, nil
 	}
 
 	baseDir := t.TempDir()
@@ -257,7 +284,7 @@ func TestRunReview_StdoutCapture_SpoolPath(t *testing.T) {
 		return os.WriteFile(outputFile, []byte("fake diff"), 0644)
 	}
 
-	expectedSpoolPath := "/Users/test/PR-Review/pending/pr-review-owner-repo-42.md"
+	expectedSpoolPath := writeTestSpoolFixture(t, "pr-review-owner-repo-42.md")
 	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
 		// Return spool path as stdout
 		return []string{expectedSpoolPath}, nil
@@ -315,8 +342,9 @@ func TestRunReview_RecordUpdate_Success(t *testing.T) {
 		return os.WriteFile(outputFile, []byte("fake diff"), 0644)
 	}
 
+	spoolPath := writeTestSpoolFixture(t, "pr-review-owner-repo.md")
 	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
-		return []string{"/Users/test/PR-Review/pending/pr-review-owner-repo.md"}, nil
+		return []string{spoolPath}, nil
 	}
 
 	baseDir := t.TempDir()
@@ -360,8 +388,8 @@ func TestRunReview_RecordUpdate_Success(t *testing.T) {
 	if updated.LastServicedRequest != headSHA {
 		t.Errorf("expected LastServicedRequest %q, got %q", headSHA, updated.LastServicedRequest)
 	}
-	if updated.SpoolPath != "/Users/test/PR-Review/pending/pr-review-owner-repo.md" {
-		t.Errorf("expected SpoolPath '/tmp/spool.md', got %q", updated.SpoolPath)
+	if updated.SpoolPath != spoolPath {
+		t.Errorf("expected SpoolPath %q, got %q", spoolPath, updated.SpoolPath)
 	}
 }
 
@@ -583,7 +611,7 @@ func TestRunReview_TempFileCleanup(t *testing.T) {
 		{
 			name: "success path",
 			runReviewToolMock: func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
-				return []string{"/Users/test/PR-Review/pending/pr-review-owner-repo.md"}, nil
+				return []string{writeTestSpoolFixture(t, "pr-review-owner-repo.md")}, nil
 			},
 			expectError: false,
 		},
@@ -659,8 +687,9 @@ func TestRunReview_RecordValidation(t *testing.T) {
 		return os.WriteFile(outputFile, []byte("fake diff"), 0644)
 	}
 
+	spoolPath := writeTestSpoolFixture(t, "pr-review-owner-repo.md")
 	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
-		return []string{"/Users/test/PR-Review/pending/pr-review-owner-repo.md"}, nil
+		return []string{spoolPath}, nil
 	}
 
 	baseDir := t.TempDir()
@@ -704,7 +733,7 @@ func TestRunReview_RecordValidation(t *testing.T) {
 	if !strings.Contains(string(jsonData), `"spool_path"`) {
 		t.Error("JSON serialization missing 'spool_path' field")
 	}
-	if !strings.Contains(string(jsonData), `"/Users/test/PR-Review/pending/pr-review-owner-repo.md"`) {
+	if !strings.Contains(string(jsonData), `"`+spoolPath+`"`) {
 		t.Error("JSON serialization missing spool path value")
 	}
 
@@ -713,8 +742,8 @@ func TestRunReview_RecordValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FromJSON failed: %v", err)
 	}
-	if roundtrip.SpoolPath != "/Users/test/PR-Review/pending/pr-review-owner-repo.md" {
-		t.Errorf("round-trip SpoolPath mismatch: expected '/path/to/spool.md', got %q", roundtrip.SpoolPath)
+	if roundtrip.SpoolPath != spoolPath {
+		t.Errorf("round-trip SpoolPath mismatch: expected %q, got %q", spoolPath, roundtrip.SpoolPath)
 	}
 }
 
@@ -739,5 +768,195 @@ func TestValidateSpoolPath(t *testing.T) {
 				t.Errorf("validateSpoolPath(%q) error = %v, wantErr %v", tt.path, err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// TestRunReview_StampsSpoolFrontMatter is an end-to-end test verifying that
+// RunReview stamps "reviewed_sha" and "generated" into the spool file's
+// front-matter, while preserving every other front-matter field and the
+// review body untouched.
+func TestRunReview_StampsSpoolFrontMatter(t *testing.T) {
+	origFetchDiff := fetchDiffFunc
+	origRunReviewTool := runReviewToolFunc
+	origTimeNow := timeNow
+	defer func() {
+		fetchDiffFunc = origFetchDiff
+		runReviewToolFunc = origRunReviewTool
+		timeNow = origTimeNow
+	}()
+
+	fixedTime := time.Date(2026, 9, 22, 10, 0, 0, 0, time.UTC)
+	timeNow = func() time.Time { return fixedTime }
+
+	fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+		return os.WriteFile(outputFile, []byte("fake diff"), 0644)
+	}
+
+	spoolDir := filepath.Join(t.TempDir(), "PR-Review", "pending")
+	if err := os.MkdirAll(spoolDir, 0755); err != nil {
+		t.Fatalf("failed to create spool dir: %v", err)
+	}
+	spoolPath := filepath.Join(spoolDir, "pr-review-testowner-testrepo-42.md")
+	fixture := `---
+repo: testowner/testrepo
+pr: 42
+verdict: APPROVE
+decision:
+decision_notes:
+diff_file: /tmp/pr-42-123.diff
+generated:
+---
+
+Review body unchanged.
+`
+	if err := os.WriteFile(spoolPath, []byte(fixture), 0644); err != nil {
+		t.Fatalf("failed to write spool fixture: %v", err)
+	}
+
+	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+		return []string{spoolPath}, nil
+	}
+
+	baseDir := t.TempDir()
+	store := NewStore(baseDir)
+
+	rec := Record{
+		Repo:       "testowner/testrepo",
+		PR:         42,
+		URL:        "https://github.com/testowner/testrepo/pull/42",
+		Status:     StatusWatching,
+		EnrolledAt: time.Now().Format(time.RFC3339),
+		ReviewDir:  "/tmp/review-42",
+	}
+
+	const knownSHA = "abc1234def5678"
+
+	ctx := context.Background()
+	if err := RunReview(ctx, rec, knownSHA, store, io.Discard); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	patched, err := os.ReadFile(spoolPath)
+	if err != nil {
+		t.Fatalf("failed to read patched spool file: %v", err)
+	}
+
+	fields := ParseSpoolFrontMatter(patched)
+	if fields["reviewed_sha"] != knownSHA {
+		t.Errorf("expected reviewed_sha %q, got %q", knownSHA, fields["reviewed_sha"])
+	}
+	wantGenerated := fixedTime.Format(time.RFC3339)
+	if fields["generated"] != wantGenerated {
+		t.Errorf("expected generated %q, got %q", wantGenerated, fields["generated"])
+	}
+
+	if !strings.Contains(string(patched), "Review body unchanged.") {
+		t.Errorf("expected review body to be preserved, got: %s", string(patched))
+	}
+
+	if fields["repo"] != "testowner/testrepo" {
+		t.Errorf("expected repo to be preserved, got %q", fields["repo"])
+	}
+	if fields["verdict"] != "APPROVE" {
+		t.Errorf("expected verdict to be preserved, got %q", fields["verdict"])
+	}
+}
+
+// TestRunReview_SpoolStampFailure_DoesNotUpdateRecord verifies the
+// fail-closed property from Task 3: if WriteReviewedMetadata refuses to
+// stamp the spool file (here, because it resolves to an already-finalized
+// done/ path), RunReview returns an error and never persists the record as
+// StatusReviewed.
+//
+// runReviewToolFunc still returns a pending/ path so it satisfies
+// validateSpoolPath's format check. No file is written at that pending/
+// path, so resolveSpoolPath's pending -> done fallback kicks in and finds
+// the fixture written directly under done/, which WriteReviewedMetadata
+// then refuses to touch (see spool.go's inDoneDir guard).
+func TestRunReview_SpoolStampFailure_DoesNotUpdateRecord(t *testing.T) {
+	origFetchDiff := fetchDiffFunc
+	origRunReviewTool := runReviewToolFunc
+	origTimeNow := timeNow
+	defer func() {
+		fetchDiffFunc = origFetchDiff
+		runReviewToolFunc = origRunReviewTool
+		timeNow = origTimeNow
+	}()
+
+	fixedTime := time.Date(2026, 9, 22, 10, 0, 0, 0, time.UTC)
+	timeNow = func() time.Time { return fixedTime }
+
+	fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+		return os.WriteFile(outputFile, []byte("fake diff"), 0644)
+	}
+
+	prReviewRoot := t.TempDir()
+	donedir := filepath.Join(prReviewRoot, "PR-Review", "done")
+	if err := os.MkdirAll(donedir, 0755); err != nil {
+		t.Fatalf("failed to create done dir: %v", err)
+	}
+	pendingPath := filepath.Join(prReviewRoot, "PR-Review", "pending", "pr-review-testowner-testrepo-43.md")
+	donePath := filepath.Join(donedir, "pr-review-testowner-testrepo-43.md")
+
+	fixture := `---
+repo: testowner/testrepo
+pr: 43
+verdict: APPROVE
+decision: post
+decision_notes:
+diff_file: /tmp/pr-43-123.diff
+generated:
+---
+
+Already finalized review body.
+`
+	if err := os.WriteFile(donePath, []byte(fixture), 0644); err != nil {
+		t.Fatalf("failed to write done fixture: %v", err)
+	}
+
+	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+		return []string{pendingPath}, nil
+	}
+
+	baseDir := t.TempDir()
+	store := NewStore(baseDir)
+
+	rec := Record{
+		Repo:       "testowner/testrepo",
+		PR:         43,
+		URL:        "https://github.com/testowner/testrepo/pull/43",
+		Status:     StatusWatching,
+		EnrolledAt: time.Now().Format(time.RFC3339),
+		ReviewDir:  "/tmp/review-43",
+	}
+
+	const knownSHA = "def5678abc1234"
+
+	ctx := context.Background()
+	err := RunReview(ctx, rec, knownSHA, store, io.Discard)
+	if err == nil {
+		t.Fatal("expected error when spool file is already finalized (done/), got nil")
+	}
+	if !strings.Contains(err.Error(), "already finalized") {
+		t.Errorf("expected error to mention the file being already finalized, got: %v", err)
+	}
+
+	// The record must never have been saved as StatusReviewed.
+	_, found, getErr := store.Get("testowner/testrepo", 43)
+	if getErr != nil {
+		t.Fatalf("failed to check record: %v", getErr)
+	}
+	if found {
+		t.Error("expected record to NOT exist (should not be saved when metadata stamping fails)")
+	}
+
+	// The done/ fixture itself must be untouched (WriteReviewedMetadata
+	// refused to patch it).
+	afterDone, err := os.ReadFile(donePath)
+	if err != nil {
+		t.Fatalf("failed to read done fixture after RunReview: %v", err)
+	}
+	if string(afterDone) != fixture {
+		t.Errorf("expected done/ fixture to be untouched, got: %s", string(afterDone))
 	}
 }
