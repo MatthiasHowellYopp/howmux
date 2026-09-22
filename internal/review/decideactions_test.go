@@ -1030,6 +1030,62 @@ func TestRereviewReview_LensCallFails_PropagatesError(t *testing.T) {
 	}
 }
 
+// TestRereviewReview_LensCallFails_CancelsSiblings verifies that when one
+// lens fails, the shared fan-out context is cancelled so the sibling lens
+// calls observe ctx.Done() rather than each running to completion. This
+// guards the first-failure short-circuit added for PR #111's review: a
+// stuck or slow sibling must not keep running after a peer has already
+// failed the whole rereview.
+func TestRereviewReview_LensCallFails_CancelsSiblings(t *testing.T) {
+	base := t.TempDir()
+	diffPath := filepath.Join(base, "pr.diff")
+	if err := os.WriteFile(diffPath, []byte("diff --git a/foo.py b/foo.py\n"), 0o644); err != nil {
+		t.Fatalf("write diff fixture: %v", err)
+	}
+	spoolPath := writeFakeSpoolFile(t, base, map[string]string{
+		"repo": "owner/repo", "pr": "25", "verdict": "COMMENT", "decision": "rereview",
+		"diff_file": diffPath,
+	}, "# Original\n\nfindings\nVERDICT: COMMENT\n")
+	rec := recordForSpool("owner/repo", 25, spoolPath)
+
+	orig := kiroOneshotFunc
+	t.Cleanup(func() { kiroOneshotFunc = orig })
+
+	var mu sync.Mutex
+	siblingObservedCancel := false
+
+	kiroOneshotFunc = func(ctx context.Context, agentName string, prompt string) (string, error) {
+		// One lens fails immediately, triggering the shared cancel().
+		if agentName == "review-security-agent" {
+			return "", fmt.Errorf("kiro-cli exited 1 for security lens")
+		}
+		// Siblings block until either the context is cancelled (expected)
+		// or a generous safety timeout elapses (would indicate the cancel
+		// did NOT propagate). The consolidator never runs because a lens
+		// fails, so this branch only ever sees lens agents.
+		select {
+		case <-ctx.Done():
+			mu.Lock()
+			siblingObservedCancel = true
+			mu.Unlock()
+			return "", ctx.Err()
+		case <-time.After(5 * time.Second):
+			return "sibling ran to completion without cancellation", nil
+		}
+	}
+
+	_, _, callErr := RereviewReview(context.Background(), rec)
+	if callErr == nil {
+		t.Fatal("RereviewReview() error = nil, want non-nil when a lens fails")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !siblingObservedCancel {
+		t.Error("sibling lens calls did not observe context cancellation after a peer lens failed; first-failure short-circuit is not propagating")
+	}
+}
+
 // --- Task 4 / concurrency: race-condition-free lens fan-out -----------------
 
 // TestRereviewReview_LensFanOut_NoRaceCondition exercises RereviewReview's

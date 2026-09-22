@@ -15,10 +15,26 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/matthiashowellyopp/howmux/internal/review"
+)
+
+// Decide-action subprocess timeouts. Each launch wrapper derives a
+// context.WithTimeout from these rather than a bare context.Background(),
+// so a hung `gh api` (post) or a stalled `kiro-cli` agent call
+// (revise/rereview) cannot wedge the tea.Cmd goroutine and its child
+// process forever — restoring the cancellability the deleted finalize.go
+// had via finalizeCancel. Package-level vars (not consts) so tests can
+// shrink them if they ever exercise the timeout path. The rereview budget
+// is the largest because RereviewReview fans out up to five kiro-cli
+// agent invocations plus a consolidation pass under one context.
+var (
+	decidePostTimeout     = 2 * time.Minute
+	decideReviseTimeout   = 5 * time.Minute
+	decideRereviewTimeout = 10 * time.Minute
 )
 
 // decidePostConfirmState models the (idle -> awaiting-confirmation -> idle)
@@ -176,7 +192,8 @@ var countFindingsFunc = countFindingsForPrompt
 // that already has the verdict in hand need not re-read it.
 func launchDecidePostCmd(rec review.Record, _ string) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(context.Background(), decidePostTimeout)
+		defer cancel()
 		commentsPosted, err := postReviewFunc(ctx, rec)
 		if err != nil {
 			return decidePostErrorMsg{rec: rec, err: err}
@@ -190,7 +207,8 @@ func launchDecidePostCmd(rec review.Record, _ string) tea.Cmd {
 func (m model) launchDecideRevise(rec review.Record) (model, tea.Cmd) {
 	m = m.appendActivity(m.styles.Activity.Render(fmt.Sprintf("Revising review for %s#%d...", rec.Repo, rec.PR)))
 	return m, func() tea.Msg {
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(context.Background(), decideReviseTimeout)
+		defer cancel()
 		newVerdict, err := reviseReviewFunc(ctx, rec)
 		if err != nil {
 			return decideReviseErrorMsg{rec: rec, err: err}
@@ -205,7 +223,8 @@ func (m model) launchDecideRevise(rec review.Record) (model, tea.Cmd) {
 func (m model) launchDecideRereview(rec review.Record) (model, tea.Cmd) {
 	m = m.appendActivity(m.styles.Activity.Render(fmt.Sprintf("Re-reviewing %s#%d...", rec.Repo, rec.PR)))
 	return m, func() tea.Msg {
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(context.Background(), decideRereviewTimeout)
+		defer cancel()
 		newVerdict, degraded, err := rereviewReviewFunc(ctx, rec)
 		if err != nil {
 			return decideRereviewErrorMsg{rec: rec, err: err}

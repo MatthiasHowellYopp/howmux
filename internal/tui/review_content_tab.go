@@ -2,13 +2,10 @@ package tui
 
 import (
 	"fmt"
-	"strings"
 
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-
-	"github.com/matthiashowellyopp/howmux/internal/agent"
 )
 
 // ReviewContentTab implements the Tab interface for displaying the full,
@@ -37,15 +34,6 @@ type ReviewContentTab struct {
 	// returns it verbatim. Mutually exclusive with a populated plainContent.
 	errMsg string
 	styles *Styles
-
-	// liveCapture is set only by NewLiveReviewContentTab (issue #87) — a
-	// ReviewContentTab constructed via NewReviewContentTab (the #84
-	// PR-review-body use case) never sets this field, so AppendFromCapture
-	// is a documented no-op for that construction path (see its doc
-	// comment below) rather than needing a separate type. When non-nil,
-	// AppendFromCapture rebuilds the viewport's content from
-	// liveCapture.GetLines() each time it's called.
-	liveCapture *agent.OutputCapture
 }
 
 // NewReviewContentTab creates a review content window tab. id should be
@@ -82,56 +70,6 @@ func NewReviewContentTab(id, title, body string, found bool, styles *Styles) *Re
 	rct.viewport = vp
 	rct.setWrappedContent(body)
 	return rct
-}
-
-// NewLiveReviewContentTab creates a review content window tab backed by a
-// live agent.OutputCapture instead of a fixed body string (issue #87). It
-// starts with empty content — the first AppendFromCapture() call (driven by
-// the finalizeTickMsg poll loop in tui.go) populates the viewport as output
-// streams in. This is a second, distinct constructor rather than a variadic
-// option on NewReviewContentTab, to keep that constructor's simple
-// two-value contract intact for the #84 call site (openReviewContentMsg
-// handling in tui.go), which never needs a live capture.
-func NewLiveReviewContentTab(id, title string, capture *agent.OutputCapture, styles *Styles) *ReviewContentTab {
-	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(24))
-	vp.MouseWheelEnabled = true
-
-	return &ReviewContentTab{
-		id:          id,
-		title:       title,
-		styles:      styles,
-		viewport:    vp,
-		liveCapture: capture,
-	}
-}
-
-// AppendFromCapture rebuilds the viewport's content from the current
-// snapshot of liveCapture.GetLines(), matching LogTab.refreshContent's
-// "rebuild the whole displayed content from the current buffer snapshot"
-// approach rather than incremental appends — OutputCapture.GetLines()
-// already returns the full current buffer cheaply (a fixed-size ring
-// buffer, not an unbounded log), so incremental-append tracking would add
-// complexity with no payoff at this data volume.
-//
-// Called from the finalizeTickMsg case arm in tui.go, not from
-// ReviewContentTab.Update itself, because Update only receives tea.Msg
-// values already routed to the active tab, and finalizeTickMsg needs to
-// reach this tab whether or not it is currently active (streaming should
-// keep buffering even if the user switches away and back).
-//
-// On a tab constructed via NewReviewContentTab (the #84 static-body use
-// case), liveCapture is always nil, so this method is a documented no-op —
-// chosen over making the method unreachable by construction, since that
-// would require a second Tab-like type just to gate one method, and every
-// other call site (finalizeTickMsg's handler) already only invokes this on
-// tabs it itself created via NewLiveReviewContentTab.
-func (rct *ReviewContentTab) AppendFromCapture() {
-	if rct.liveCapture == nil {
-		return
-	}
-	content := strings.Join(rct.liveCapture.GetLines(), "\n")
-	rct.plainContent = content
-	rct.setWrappedContent(content)
 }
 
 // ID returns the tab identifier.
@@ -194,9 +132,9 @@ func (rct *ReviewContentTab) Resize(width, height int) {
 	case rct.plainContent != "":
 		rct.setWrappedContent(rct.plainContent)
 	}
-	// else: a freshly-constructed NewLiveReviewContentTab tab before its
-	// first AppendFromCapture — nothing to (re)wrap yet, matches the
-	// existing "starts empty" contract (TestNewLiveReviewContentTab_StartsEmpty).
+	// else: a tab with neither errMsg nor plainContent has nothing to
+	// (re)wrap yet — a defensive no-op, since NewReviewContentTab always
+	// populates one of the two.
 }
 
 // wrapWidth returns the width to wrap content to: the viewport's current

@@ -6,8 +6,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
-
-	"github.com/matthiashowellyopp/howmux/internal/agent"
 )
 
 // TestReviewContentTabImplementsTabInterface is a compile-time assertion
@@ -157,89 +155,6 @@ func TestReviewContentTabResizeUpdatesViewportDimensions(t *testing.T) {
 	}
 }
 
-// TestNewLiveReviewContentTab_StartsEmpty verifies the live constructor
-// starts with an empty viewport — content only appears once
-// AppendFromCapture() is called (issue #87).
-func TestNewLiveReviewContentTab_StartsEmpty(t *testing.T) {
-	capture := agent.NewOutputCapture(100)
-	rct := NewLiveReviewContentTab("finalize-preview", "Finalize Preview", capture, testReviewsStyles())
-	rct.Resize(80, 24)
-
-	if got := rct.CopyableContent(); got != "" {
-		t.Errorf("CopyableContent() = %q, want empty string before any AppendFromCapture() call", got)
-	}
-}
-
-// TestLiveReviewContentTab_AppendFromCaptureRendersLines verifies
-// AppendFromCapture() rebuilds the viewport content from the current
-// OutputCapture snapshot.
-func TestLiveReviewContentTab_AppendFromCaptureRendersLines(t *testing.T) {
-	capture := agent.NewOutputCapture(100)
-	rct := NewLiveReviewContentTab("finalize-preview", "Finalize Preview", capture, testReviewsStyles())
-	rct.Resize(80, 24)
-
-	capture.AddLine("first line")
-	capture.AddLine("second line")
-	rct.AppendFromCapture()
-
-	view := rct.View()
-	if !strings.Contains(view, "first line") || !strings.Contains(view, "second line") {
-		t.Errorf("View() = %q, want it to contain both captured lines", view)
-	}
-
-	copyable := rct.CopyableContent()
-	if !strings.Contains(copyable, "first line") || !strings.Contains(copyable, "second line") {
-		t.Errorf("CopyableContent() = %q, want it to contain both captured lines", copyable)
-	}
-}
-
-// TestLiveReviewContentTab_AppendFromCaptureReflectsLaterWrites verifies
-// repeated calls to AppendFromCapture() pick up newly added lines, matching
-// the poll-and-rerender contract the finalizeTickMsg handler relies on.
-func TestLiveReviewContentTab_AppendFromCaptureReflectsLaterWrites(t *testing.T) {
-	capture := agent.NewOutputCapture(100)
-	rct := NewLiveReviewContentTab("finalize-preview", "Finalize Preview", capture, testReviewsStyles())
-	rct.Resize(80, 24)
-
-	capture.AddLine("early line")
-	rct.AppendFromCapture()
-	if !strings.Contains(rct.CopyableContent(), "early line") {
-		t.Fatalf("expected early line to be present after first AppendFromCapture()")
-	}
-
-	capture.AddLine("later line")
-	rct.AppendFromCapture()
-	copyable := rct.CopyableContent()
-	if !strings.Contains(copyable, "early line") || !strings.Contains(copyable, "later line") {
-		t.Errorf("CopyableContent() = %q, want both early and later lines present", copyable)
-	}
-}
-
-// TestReviewContentTab_AppendFromCaptureIsNoOpForStaticConstructor verifies
-// that calling AppendFromCapture() on a tab built via the original
-// NewReviewContentTab (the #84 static-body use case, where liveCapture is
-// always nil) does not panic and leaves the existing static body content
-// completely unchanged — proving the two constructors' behaviors stay
-// independent.
-func TestReviewContentTab_AppendFromCaptureIsNoOpForStaticConstructor(t *testing.T) {
-	body := "static body text"
-	rct := NewReviewContentTab("id", "title", body, true, testReviewsStyles())
-	rct.Resize(80, 24)
-
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				t.Fatalf("AppendFromCapture() panicked on a static-constructor tab: %v", r)
-			}
-		}()
-		rct.AppendFromCapture()
-	}()
-
-	if got := rct.CopyableContent(); got != body {
-		t.Errorf("CopyableContent() = %q, want unchanged %q after AppendFromCapture() no-op", got, body)
-	}
-}
-
 // wrappedLineCount returns the number of newline-delimited lines in the
 // ANSI-stripped view output, used by the wrap tests below to assert on
 // visual line counts without being tripped up by styling escape codes.
@@ -321,30 +236,6 @@ func TestReviewContentTabResizeReflowsWrappedLineCount(t *testing.T) {
 
 	if narrowAgainCount <= wideCount {
 		t.Errorf("after re-narrowing: narrowAgainCount=%d, want > wideCount=%d", narrowAgainCount, wideCount)
-	}
-}
-
-// TestLiveReviewContentTabAppendFromCaptureWrapsLongLine verifies AC3: a
-// long line appended via AppendFromCapture wraps across multiple visual
-// lines after a narrow Resize, while CopyableContent() returns the
-// unwrapped original line.
-func TestLiveReviewContentTabAppendFromCaptureWrapsLongLine(t *testing.T) {
-	capture := agent.NewOutputCapture(100)
-	rct := NewLiveReviewContentTab("finalize-preview", "Finalize Preview", capture, testReviewsStyles())
-	rct.Resize(20, 24)
-
-	longLine := strings.Repeat("streamed output word ", 20)
-	capture.AddLine(longLine)
-	rct.AppendFromCapture()
-
-	view := rct.View()
-	if wrappedLineCount(view) <= 1 {
-		t.Errorf("wrappedLineCount(view) = %d, want > 1 after AppendFromCapture with a long line at width 20", wrappedLineCount(view))
-	}
-
-	copyable := rct.CopyableContent()
-	if copyable != longLine {
-		t.Errorf("CopyableContent() = %q, want unwrapped original %q", copyable, longLine)
 	}
 }
 

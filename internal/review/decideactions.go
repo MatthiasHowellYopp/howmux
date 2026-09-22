@@ -560,7 +560,10 @@ type lensResult struct {
 // writes ONLY to its own pre-allocated, disjoint index of a results
 // slice (results[i]) — there is no shared map and no mutex, and the
 // slice is never read until after wg.Wait() returns, by construction
-// making concurrent writes impossible. This must remain true under
+// making concurrent writes impossible. The one shared handle the
+// goroutines touch is the context.CancelFunc used to short-circuit
+// siblings on first failure, which is safe for concurrent use per the
+// context package's contract. This must remain race-free under
 // `go test -race`; see TestRereviewReview_LensFanOut_NoRaceCondition.
 func RereviewReview(ctx context.Context, rec Record) (newVerdict string, degradedToRevise bool, err error) {
 	resolved, found, inDoneDir := resolveSpoolPath(rec.SpoolPath)
@@ -607,6 +610,17 @@ func RereviewReview(ctx context.Context, rec Record) (newVerdict string, degrade
 
 	// Disjoint pre-allocated slice: goroutine i writes ONLY results[i].
 	// No shared map, no mutex, no read of results until after wg.Wait().
+	//
+	// fanCtx is a cancellable child of ctx: the first lens to fail cancels
+	// it, so the sibling kiro-cli subprocesses (spawned via
+	// exec.CommandContext inside kiroOneshotFunc) are signalled to stop
+	// rather than each running its full agent invocation to completion only
+	// to have the aggregate error check below discard them all. cancel() is
+	// also invoked on the success path via defer, releasing the context's
+	// resources.
+	fanCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	results := make([]lensResult, len(lensNames))
 	var wg sync.WaitGroup
 	for i, lensName := range lensNames {
@@ -616,8 +630,13 @@ func RereviewReview(ctx context.Context, rec Record) (newVerdict string, degrade
 		go func() {
 			defer wg.Done()
 			prompt := buildLensPrompt(lensName, diffFile, context_)
-			out, callErr := kiroOneshotFunc(ctx, profile, prompt)
+			out, callErr := kiroOneshotFunc(fanCtx, profile, prompt)
 			results[i] = lensResult{lensName: lensName, profile: profile, output: out, err: callErr}
+			if callErr != nil {
+				// Signal siblings to stop; the aggregate check below still
+				// reports the first error in lens order.
+				cancel()
+			}
 		}()
 	}
 	wg.Wait()
