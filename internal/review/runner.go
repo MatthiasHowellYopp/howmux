@@ -145,10 +145,22 @@ func RunReview(ctx context.Context, rec Record, headSHA string, storeImpl StoreI
 	}
 	logging.Debug("review completed", "spool_path", spoolPath)
 
+	// Stamp the reviewed SHA and generation timestamp into the spool file's
+	// own front-matter, so the review document is self-describing without
+	// cross-referencing the tracking Record. pr_review.py (ai-resources, out
+	// of howmux's control) does not populate these reliably today — see
+	// WriteReviewedMetadata's doc comment for the full rationale. Use the
+	// same generatedAt instant for both the spool file and the Record below
+	// so the two stay consistent.
+	generatedAt := timeNow()
+	if err := WriteReviewedMetadata(spoolPath, headSHA, generatedAt); err != nil {
+		return fmt.Errorf("failed to stamp reviewed metadata into spool file %s: %w", spoolPath, err)
+	}
+
 	// Update record with StatusReviewed, timestamps, and spool path
 	rec.Status = StatusReviewed
 	rec.LastReviewedSHA = headSHA
-	rec.LastReviewedAt = timeNow().Format(time.RFC3339)
+	rec.LastReviewedAt = generatedAt.Format(time.RFC3339)
 	rec.LastServicedRequest = headSHA
 	rec.SpoolPath = spoolPath
 

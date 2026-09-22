@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseSpoolFrontMatter(t *testing.T) {
@@ -608,4 +609,324 @@ func TestReadSpoolBodyUnreadableFileDegradesToNotFound(t *testing.T) {
 	if info.DecisionState != "no spool" {
 		t.Errorf("info.DecisionState = %q, want %q", info.DecisionState, "no spool")
 	}
+}
+
+// --- patchFrontMatterMetadata ---
+
+func TestPatchFrontMatterMetadata(t *testing.T) {
+	const bodyWithHorizontalRule = `
+Review body starts here.
+
+Some more text.
+
+---
+
+Text after a markdown horizontal rule inside the body.
+`
+
+	tests := []struct {
+		name        string
+		data        string
+		headSHA     string
+		generated   string
+		wantErr     bool
+		wantFields  map[string]string
+		wantBodyHas string // substring the output must contain verbatim, checked when non-empty
+	}{
+		{
+			name: "blank generated, no reviewed_sha (pr_review.py's current output)",
+			data: `---
+repo: owner/repo
+pr: 17
+verdict: APPROVE
+decision:
+decision_notes:
+diff_file: /abs/path/to.diff
+generated:
+---
+
+review body here
+`,
+			headSHA:   "abc1234",
+			generated: "2026-09-22T10:00:00Z",
+			wantFields: map[string]string{
+				"repo":           "owner/repo",
+				"pr":             "17",
+				"verdict":        "APPROVE",
+				"decision":       "",
+				"decision_notes": "",
+				"diff_file":      "/abs/path/to.diff",
+				"generated":      "2026-09-22T10:00:00Z",
+				"reviewed_sha":   "abc1234",
+			},
+			wantBodyHas: "review body here\n",
+		},
+		{
+			name: "both keys already present and non-blank (re-review case)",
+			data: `---
+repo: owner/repo
+pr: 17
+verdict: APPROVE
+generated: 2026-08-21T11:00:00Z
+reviewed_sha: oldsha0000
+---
+
+review body here
+`,
+			headSHA:   "newsha1111",
+			generated: "2026-09-22T10:00:00Z",
+			wantFields: map[string]string{
+				"repo":         "owner/repo",
+				"pr":           "17",
+				"verdict":      "APPROVE",
+				"generated":    "2026-09-22T10:00:00Z",
+				"reviewed_sha": "newsha1111",
+			},
+			wantBodyHas: "review body here\n",
+		},
+		{
+			name:    "no opening fence returns an error",
+			data:    "repo: owner/repo\npr: 17\n",
+			headSHA: "abc1234",
+			wantErr: true,
+		},
+		{
+			name:    "opening fence with no closing fence returns an error",
+			data:    "---\nrepo: owner/repo\npr: 17\n",
+			headSHA: "abc1234",
+			wantErr: true,
+		},
+		{
+			name: "body content and body-only blank lines/horizontal-rule preserved exactly",
+			data: `---
+repo: owner/repo
+pr: 17
+generated:
+---
+` + bodyWithHorizontalRule,
+			headSHA:   "abc1234",
+			generated: "2026-09-22T10:00:00Z",
+			wantFields: map[string]string{
+				"repo":         "owner/repo",
+				"pr":           "17",
+				"generated":    "2026-09-22T10:00:00Z",
+				"reviewed_sha": "abc1234",
+			},
+			wantBodyHas: bodyWithHorizontalRule,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := patchFrontMatterMetadata([]byte(tt.data), tt.headSHA, tt.generated)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("patchFrontMatterMetadata() error = nil, want non-nil error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("patchFrontMatterMetadata() unexpected error: %v", err)
+			}
+
+			fields := ParseSpoolFrontMatter(got)
+			for k, v := range tt.wantFields {
+				if fields[k] != v {
+					t.Errorf("ParseSpoolFrontMatter(output)[%q] = %q, want %q", k, fields[k], v)
+				}
+			}
+
+			if tt.wantBodyHas != "" && !strings.Contains(string(got), tt.wantBodyHas) {
+				t.Errorf("output does not contain expected body substring.\noutput: %q\nwant substring: %q", got, tt.wantBodyHas)
+			}
+
+			// Case-specific extra assertions.
+			switch tt.name {
+			case "both keys already present and non-blank (re-review case)":
+				generatedCount := strings.Count(string(got), "generated:")
+				if generatedCount != 1 {
+					t.Errorf("expected exactly one %q line, got %d", "generated:", generatedCount)
+				}
+				shaCount := strings.Count(string(got), "reviewed_sha:")
+				if shaCount != 1 {
+					t.Errorf("expected exactly one %q line, got %d", "reviewed_sha:", shaCount)
+				}
+
+				origFields := ParseSpoolFrontMatter([]byte(tt.data))
+				if len(fields) != len(origFields) {
+					t.Errorf("patched field count = %d, want %d (no duplicate keys introduced); orig=%#v got=%#v", len(fields), len(origFields), origFields, fields)
+				}
+			}
+		})
+	}
+}
+
+// --- WriteReviewedMetadata ---
+
+const writeReviewedMetadataFixture = `---
+repo: owner/repo
+pr: 1
+verdict: APPROVE
+decision:
+decision_notes:
+diff_file: /abs/path/to.diff
+generated:
+---
+
+review body here
+`
+
+func TestWriteReviewedMetadata(t *testing.T) {
+	t.Run("happy path: pending file gets both fields written to disk", func(t *testing.T) {
+		pendingDir := filepath.Join(t.TempDir(), "pending")
+		if err := os.MkdirAll(pendingDir, 0o755); err != nil {
+			t.Fatalf("failed to set up test pending dir: %v", err)
+		}
+		spoolPath := filepath.Join(pendingDir, "pr-review-owner-repo-1.md")
+		if err := os.WriteFile(spoolPath, []byte(writeReviewedMetadataFixture), 0o644); err != nil {
+			t.Fatalf("failed to write test spool fixture: %v", err)
+		}
+
+		const knownSHA = "deadbeef123"
+		knownTime := time.Date(2026, 9, 22, 10, 0, 0, 0, time.UTC)
+
+		if err := WriteReviewedMetadata(spoolPath, knownSHA, knownTime); err != nil {
+			t.Fatalf("WriteReviewedMetadata() unexpected error: %v", err)
+		}
+
+		data, err := os.ReadFile(spoolPath)
+		if err != nil {
+			t.Fatalf("failed to re-read spool file: %v", err)
+		}
+
+		fields := ParseSpoolFrontMatter(data)
+		if fields["reviewed_sha"] != knownSHA {
+			t.Errorf("reviewed_sha = %q, want %q", fields["reviewed_sha"], knownSHA)
+		}
+		wantGenerated := knownTime.Format(time.RFC3339)
+		if fields["generated"] != wantGenerated {
+			t.Errorf("generated = %q, want %q", fields["generated"], wantGenerated)
+		}
+	})
+
+	t.Run("preserves the original file mode (atomic write via temp+rename)", func(t *testing.T) {
+		pendingDir := filepath.Join(t.TempDir(), "pending")
+		if err := os.MkdirAll(pendingDir, 0o755); err != nil {
+			t.Fatalf("failed to set up test pending dir: %v", err)
+		}
+		spoolPath := filepath.Join(pendingDir, "pr-review-owner-repo-2.md")
+		// Seed with a non-default mode so a hardcoded 0644 write would be
+		// detectable. (This is what the old in-place os.WriteFile(_, 0644)
+		// regressed relative to the set-review-*.sh scripts' `cp -p`.)
+		const wantMode = os.FileMode(0o600)
+		if err := os.WriteFile(spoolPath, []byte(writeReviewedMetadataFixture), wantMode); err != nil {
+			t.Fatalf("failed to write test spool fixture: %v", err)
+		}
+		// Guard against a restrictive umask having masked the seed write.
+		if err := os.Chmod(spoolPath, wantMode); err != nil {
+			t.Fatalf("failed to chmod test spool fixture: %v", err)
+		}
+
+		if err := WriteReviewedMetadata(spoolPath, "cafef00d", time.Date(2026, 9, 22, 10, 0, 0, 0, time.UTC)); err != nil {
+			t.Fatalf("WriteReviewedMetadata() unexpected error: %v", err)
+		}
+
+		info, err := os.Stat(spoolPath)
+		if err != nil {
+			t.Fatalf("failed to stat spool file after write: %v", err)
+		}
+		if info.Mode().Perm() != wantMode {
+			t.Errorf("file mode after write = %v, want %v (original mode must be preserved)", info.Mode().Perm(), wantMode)
+		}
+
+		// No stray temp files should remain in the directory.
+		entries, err := os.ReadDir(pendingDir)
+		if err != nil {
+			t.Fatalf("failed to read pending dir: %v", err)
+		}
+		for _, e := range entries {
+			if strings.Contains(e.Name(), ".tmp") {
+				t.Errorf("stray temp file left behind after write: %s", e.Name())
+			}
+		}
+	})
+
+	t.Run("empty spoolPath returns an error", func(t *testing.T) {
+		err := WriteReviewedMetadata("", "abc1234", time.Now())
+		if err == nil {
+			t.Fatalf("WriteReviewedMetadata(\"\", ...) error = nil, want non-nil error")
+		}
+	})
+
+	t.Run("empty headSHA returns an error", func(t *testing.T) {
+		pendingDir := filepath.Join(t.TempDir(), "pending")
+		if err := os.MkdirAll(pendingDir, 0o755); err != nil {
+			t.Fatalf("failed to set up test pending dir: %v", err)
+		}
+		spoolPath := filepath.Join(pendingDir, "pr-review-owner-repo-1.md")
+		if err := os.WriteFile(spoolPath, []byte(writeReviewedMetadataFixture), 0o644); err != nil {
+			t.Fatalf("failed to write test spool fixture: %v", err)
+		}
+
+		err := WriteReviewedMetadata(spoolPath, "", time.Now())
+		if err == nil {
+			t.Fatalf("WriteReviewedMetadata(path, \"\", ...) error = nil, want non-nil error")
+		}
+	})
+
+	t.Run("nonexistent spool file returns an error mentioning no spool file", func(t *testing.T) {
+		pendingDir := filepath.Join(t.TempDir(), "pending")
+		if err := os.MkdirAll(pendingDir, 0o755); err != nil {
+			t.Fatalf("failed to set up test pending dir: %v", err)
+		}
+		spoolPath := filepath.Join(pendingDir, "does-not-exist.md")
+
+		err := WriteReviewedMetadata(spoolPath, "abc1234", time.Now())
+		if err == nil {
+			t.Fatalf("WriteReviewedMetadata() error = nil, want non-nil error")
+		}
+		if !strings.Contains(err.Error(), "no spool file") {
+			t.Errorf("error = %q, want it to mention %q", err.Error(), "no spool file")
+		}
+	})
+
+	t.Run("file already in done/ is refused without modifying it", func(t *testing.T) {
+		tmp := t.TempDir()
+		pendingDir := filepath.Join(tmp, "pending")
+		doneDir := filepath.Join(tmp, "done")
+		if err := os.MkdirAll(pendingDir, 0o755); err != nil {
+			t.Fatalf("failed to set up test pending dir: %v", err)
+		}
+		if err := os.MkdirAll(doneDir, 0o755); err != nil {
+			t.Fatalf("failed to set up test done dir: %v", err)
+		}
+
+		// Record.SpoolPath always points at the pending/ location; the file
+		// itself has already been moved to done/ by the external finalize
+		// pipeline. resolveSpoolPath falls back pending -> done, mirroring
+		// the ReadSpoolInfo tests elsewhere in this file.
+		filename := "pr-review-owner-repo-1.md"
+		spoolPath := filepath.Join(pendingDir, filename)
+		donePath := filepath.Join(doneDir, filename)
+		if err := os.WriteFile(donePath, []byte(writeReviewedMetadataFixture), 0o644); err != nil {
+			t.Fatalf("failed to write test spool fixture: %v", err)
+		}
+
+		err := WriteReviewedMetadata(spoolPath, "abc1234", time.Now())
+		if err == nil {
+			t.Fatalf("WriteReviewedMetadata() error = nil, want non-nil error")
+		}
+		if !strings.Contains(err.Error(), "already finalized") {
+			t.Errorf("error = %q, want it to mention %q", err.Error(), "already finalized")
+		}
+
+		data, err := os.ReadFile(donePath)
+		if err != nil {
+			t.Fatalf("failed to re-read spool file: %v", err)
+		}
+		if string(data) != writeReviewedMetadataFixture {
+			t.Errorf("file bytes changed after refused write.\ngot:  %q\nwant: %q", data, writeReviewedMetadataFixture)
+		}
+	})
 }
