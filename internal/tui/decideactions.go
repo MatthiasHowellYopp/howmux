@@ -160,9 +160,15 @@ func (m model) startDecidePost(rec review.Record) (model, tea.Cmd) {
 	m.decidePostVerdict = info.Verdict
 
 	var prompt string
-	if breakdown != "" {
+	switch {
+	case count == 0:
+		// A review with no parsed finding lines is still postable (e.g. an
+		// APPROVE with only summary prose + verdict, no inline comments).
+		// Say "Post review" rather than the misleading "Post 0 findings".
+		prompt = fmt.Sprintf("Post review to %s#%d? [y/N]", rec.Repo, rec.PR)
+	case breakdown != "":
 		prompt = fmt.Sprintf("Post %d findings (%s) to %s#%d? [y/N]", count, breakdown, rec.Repo, rec.PR)
-	} else {
+	default:
 		prompt = fmt.Sprintf("Post %d findings to %s#%d? [y/N]", count, rec.Repo, rec.PR)
 	}
 	m = m.appendActivity(m.styles.Activity.Render(prompt))
