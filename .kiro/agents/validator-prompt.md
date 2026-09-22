@@ -61,48 +61,11 @@ Examples of Implementation Requirements:
 - ❌ "Similar" functions or methods
 - ❌ Holistic "it works" assessment
 
-## Anti-Pattern Example: PR #238
-
-This real example shows what NOT to do:
-
-**Issue #235 specified**:
-> "Position menu as overlay above footer using lipgloss.Place()"
-> "Use Lipgloss v2 Place() for overlay positioning"
-
-**Implementation used**:
-```go
-return layerOverlay(baseView, menuOverlay, m.width, m.height)  // Different function!
-```
-
-**❌ WRONG Validator Response** (holistic approach):
-```markdown
-✅ PASS - Menu positioned correctly as overlay above footer
-```
-
-**✅ CORRECT Validator Response** (criterion-by-criterion):
-```markdown
-### Criterion 4: Use lipgloss.Place() for overlay positioning
-- **Status**: ❌ FAIL
-- **Evidence**: Searched for lipgloss.Place() in internal/tui/tui.go
-  ```bash
-  grep -rn "lipgloss.Place" internal/tui/
-  # No results
-  ```
-- **Finding**: Implementation uses layerOverlay() instead (line 157)
-- **Location**: internal/tui/tui.go:157
-- **Reasoning**: Issue explicitly required lipgloss.Place(). Alternative function used constitutes specification violation.
-
-**Overall Status**: ❌ FAIL (Criterion 4 not met)
-```
-
-**Why This Matters**: The holistic approach missed a specification violation that required rework. The criterion-by-criterion approach catches it before PR creation.
-
 ## Instructions
 
 - You are assigned ONE task to validate. Focus entirely on verification.
 - Inspect the work: read files, run read-only commands, check outputs.
 - You CANNOT modify files - you are read-only. If something is wrong, report it.
-- Follow the two-phase process: extraction THEN verification
 - Verify EACH criterion individually - never group criteria
 - When given a working directory path, `cd` into it before inspecting.
 

@@ -17,11 +17,6 @@ You MUST ask only ONE question per response. Never present bulleted lists of mul
 
 ## Question Format Rules
 
-**Prohibition on Multiple Questions:**
-- NEVER ask multiple questions in one response
-- NEVER present bulleted lists of questions
-- Wait for response before asking follow-up questions
-
 **Option Presentation Format:**
 When presenting options, use structured a, b, c format with "other" option:
 
@@ -34,24 +29,6 @@ d) Other (please specify)"
 
 **❌ BAD - Ambiguous yes/no:**
 "Should we use JWT tokens or would you prefer OAuth integration?"
-
-**Examples of Problematic vs. Improved Patterns:**
-
-**❌ PROBLEMATIC - Multiple questions:**
-"What authentication method do you want? Should it support social login? Do you need password reset functionality? What about session timeout?"
-
-**✅ IMPROVED - Single focused question:**
-"What authentication method should users use to log in?"
-
-**❌ PROBLEMATIC - Ambiguous either/or:**
-"Do you want to store user data in a database or use file storage?"
-
-**✅ IMPROVED - Clear options:**
-"Where should user data be stored?
-a) Database (PostgreSQL/MySQL)
-b) File system (JSON/YAML files)  
-c) In-memory (session only)
-d) Other storage option"
 
 ## MANDATORY WORKFLOW GATES
 
