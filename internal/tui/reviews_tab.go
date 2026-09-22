@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/matthiashowellyopp/howmux/internal/review"
 )
@@ -187,8 +188,9 @@ func reviewsHeader() string {
 // functions produces the plain-text form used by CopyableContent(); passing
 // the real style functions produces the styled View() form. This keeps the
 // row/header layout and loop in one place so the styled and plain outputs
-// cannot drift.
-func buildTable(records []review.Record, spoolInfo []review.SpoolInfo, headerStyle func(string) string, statusStyle func(review.Status, string) string, rowStyle func(int, string) string) string {
+// cannot drift. statusStyle also receives the row index so it can
+// special-case the selected row (see rt.styleStatus).
+func buildTable(records []review.Record, spoolInfo []review.SpoolInfo, headerStyle func(string) string, statusStyle func(int, review.Status, string) string, rowStyle func(int, string) string) string {
 	var b strings.Builder
 	b.WriteString(headerStyle(reviewsHeader()))
 
@@ -196,7 +198,7 @@ func buildTable(records []review.Record, spoolInfo []review.SpoolInfo, headerSty
 		b.WriteString("\n")
 		repoCol := fmt.Sprintf("%-*s", reviewsColRepo, rec.Repo)
 		prCol := fmt.Sprintf("%-*s", reviewsColPR, fmt.Sprintf("#%d", rec.PR))
-		statusCol := statusStyle(rec.Status, fmt.Sprintf("%-*s", reviewsColStatus, string(rec.Status)))
+		statusCol := statusStyle(i, rec.Status, fmt.Sprintf("%-*s", reviewsColStatus, string(rec.Status)))
 		lastReviewed := fmt.Sprintf("%-*s", reviewsColLastReviewed, formatLastReviewedAt(rec.LastReviewedAt))
 
 		info := spoolInfo[i]
@@ -261,7 +263,10 @@ func (rt *ReviewsTab) renderTable(records []review.Record) string {
 		}
 		return rt.styles.AutocompleteSelected.Render(line)
 	}
-	return buildTable(sorted, spoolInfo, headerStyle, rt.styleStatus, rowStyle)
+	statusStyleForRow := func(i int, status review.Status, text string) string {
+		return rt.styleStatus(i, selectedIdx, status, text)
+	}
+	return buildTable(sorted, spoolInfo, headerStyle, statusStyleForRow, rowStyle)
 }
 
 // resolveSpoolInfo resolves review.SpoolInfo for each record in sorted, in
@@ -295,12 +300,20 @@ func (rt *ReviewsTab) resolveSpoolInfo(sorted []review.Record) []review.SpoolInf
 	return infos
 }
 
-// styleStatus colors the STATUS column: StatusDone -> Success, StatusReviewing
-// -> Warning, StatusWatching/StatusReviewed -> neutral (styles.Prompt), reusing
-// existing Styles fields rather than inventing new theme colors.
-func (rt *ReviewsTab) styleStatus(status review.Status, text string) string {
+// styleStatus colors the STATUS column. For the selected row (i ==
+// selectedIdx), the text is rendered with the highlight bar's own foreground
+// (selectedStatusStyle) so it stays legible against the AutocompleteSelected
+// background applied by the outer rowStyle wrap in renderTable — using the
+// row's normal per-status color there would conflict with (or blend into)
+// the highlight, per issue #112. For every other row, coloring is unchanged:
+// StatusDone -> Success, StatusReviewing -> Warning, StatusWatching/
+// StatusReviewed -> neutral (styles.Prompt).
+func (rt *ReviewsTab) styleStatus(i int, selectedIdx int, status review.Status, text string) string {
 	if rt.styles == nil {
 		return text
+	}
+	if i == selectedIdx {
+		return rt.selectedStatusStyle().Render(text)
 	}
 	switch status {
 	case review.StatusDone:
@@ -312,6 +325,17 @@ func (rt *ReviewsTab) styleStatus(status review.Status, text string) string {
 	default:
 		return text
 	}
+}
+
+// selectedStatusStyle returns the style used for the STATUS cell of the
+// currently-selected row: the same foreground AutocompleteSelected uses,
+// with no background of its own (the outer rowStyle wrap supplies the
+// highlight background for the whole line). Deriving the foreground from
+// AutocompleteSelected itself — rather than hardcoding theme.Colors.Surface
+// a second time — means this cannot drift from the highlight bar's actual
+// foreground if the theme changes.
+func (rt *ReviewsTab) selectedStatusStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(rt.styles.AutocompleteSelected.GetForeground())
 }
 
 // formatLastReviewedAt renders the RFC3339 LastReviewedAt as a short,
@@ -592,7 +616,7 @@ func (rt *ReviewsTab) CopyableContent() string {
 		sorted := sortedRecords(records)
 		spoolInfo := rt.resolveSpoolInfo(sorted)
 
-		plainStatus := func(_ review.Status, text string) string { return text }
+		plainStatus := func(_ int, _ review.Status, text string) string { return text }
 		plainRow := func(_ int, line string) string { return line }
 		content = buildTable(sorted, spoolInfo, identityStyle, plainStatus, plainRow)
 	}

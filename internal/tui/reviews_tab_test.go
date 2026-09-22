@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/matthiashowellyopp/howmux/internal/review"
 )
@@ -667,7 +668,7 @@ func TestReviewsTabBuildTableRowStyleIdentity(t *testing.T) {
 		{Repo: "owner/repo-a", PR: 1, Status: review.StatusWatching},
 	}
 	spoolInfo := []review.SpoolInfo{{}}
-	plainStatus := func(_ review.Status, text string) string { return text }
+	plainStatus := func(_ int, _ review.Status, text string) string { return text }
 	identityRow := func(_ int, line string) string { return line }
 
 	got := buildTable(records, spoolInfo, identityStyle, plainStatus, identityRow)
@@ -708,6 +709,89 @@ func TestReviewsTabHighlightPresence(t *testing.T) {
 				t.Errorf("expected non-selected row to lack the row-highlight wrapper, got %q", line)
 			}
 		}
+	}
+}
+
+// TestReviewsTabSelectedRowStatusStaysLegible verifies the regression from
+// issue #112: on the selected row, the STATUS cell must not carry its normal
+// per-status foreground (Success/Warning/Prompt) — which is unreadable
+// against the AutocompleteSelected highlight background — and must instead
+// carry the highlight's own foreground (theme.Colors.Surface), matching what
+// selectedStatusStyle derives from styles.AutocompleteSelected.
+func TestReviewsTabSelectedRowStatusStaysLegible(t *testing.T) {
+	records := []review.Record{
+		{Repo: "owner/repo-a", PR: 1, Status: review.StatusDone},      // Success when unselected
+		{Repo: "owner/repo-b", PR: 2, Status: review.StatusReviewing}, // Warning when unselected
+	}
+	store := &fakeReviewStore{records: records}
+	styles := testReviewsStyles()
+	rt := NewReviewsTab("reviews", store, styles)
+	_ = rt.View()                     // seed lastOrder
+	rt.selectedKey = "owner/repo-a#1" // select the StatusDone row
+
+	view := rt.View()
+
+	// The ANSI sequence styleStatus would have used for an UNSELECTED
+	// StatusDone row (Success foreground) must not appear anywhere in the
+	// selected row's rendered STATUS text.
+	unselectedDoneANSI := styles.Success.Render(string(review.StatusDone))
+	// lipgloss renders foreground-only styles as an SGR sequence; extract
+	// just the color-setting prefix (before the text) for a substring check
+	// robust to reset placement — reuse the same helper pattern as
+	// TestReviewsTabHighlightPresence's isRowHighlighted (ANSI-prefix check).
+	ansiPrefix := func(rendered, text string) string {
+		idx := strings.Index(rendered, text)
+		if idx == -1 {
+			return rendered
+		}
+		return rendered[:idx]
+	}
+	successPrefix := ansiPrefix(unselectedDoneANSI, string(review.StatusDone))
+
+	lines := strings.Split(view, "\n")
+	var selectedLine string
+	for _, line := range lines[1:] { // skip header
+		if strings.Contains(line, "owner/repo-a") {
+			selectedLine = line
+			break
+		}
+	}
+	if selectedLine == "" {
+		t.Fatalf("expected to find the selected row (owner/repo-a) in view, got %q", view)
+	}
+
+	if successPrefix != "" && strings.Contains(selectedLine, successPrefix) {
+		t.Errorf("selected row's STATUS still carries the normal Success color sequence %q — expected it overridden by the highlight foreground; line: %q", successPrefix, selectedLine)
+	}
+
+	// Positive assertion: the selected row's STATUS text is rendered with
+	// AutocompleteSelected's own foreground color (the highlight foreground),
+	// not left uncolored and not colored per-status.
+	highlightForeground := styles.AutocompleteSelected.GetForeground()
+	expectedSelectedStatusPrefix := ansiPrefix(
+		lipgloss.NewStyle().Foreground(highlightForeground).Render(string(review.StatusDone)),
+		string(review.StatusDone),
+	)
+	if expectedSelectedStatusPrefix != "" && !strings.Contains(selectedLine, expectedSelectedStatusPrefix) {
+		t.Errorf("expected selected row's STATUS to carry the highlight foreground sequence %q, got line %q", expectedSelectedStatusPrefix, selectedLine)
+	}
+
+	// Sanity: the OTHER (unselected) row must still carry its normal
+	// per-status color — regression guard for the "unselected rows keep
+	// their existing per-status colours" acceptance criterion.
+	var unselectedLine string
+	for _, line := range lines[1:] {
+		if strings.Contains(line, "owner/repo-b") {
+			unselectedLine = line
+			break
+		}
+	}
+	if unselectedLine == "" {
+		t.Fatalf("expected to find the unselected row (owner/repo-b) in view, got %q", view)
+	}
+	unselectedWarningPrefix := ansiPrefix(styles.Warning.Render(string(review.StatusReviewing)), string(review.StatusReviewing))
+	if unselectedWarningPrefix != "" && !strings.Contains(unselectedLine, unselectedWarningPrefix) {
+		t.Errorf("expected unselected row's STATUS to keep its normal Warning color sequence %q, got line %q", unselectedWarningPrefix, unselectedLine)
 	}
 }
 
