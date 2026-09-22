@@ -810,6 +810,48 @@ func TestWriteReviewedMetadata(t *testing.T) {
 		}
 	})
 
+	t.Run("preserves the original file mode (atomic write via temp+rename)", func(t *testing.T) {
+		pendingDir := filepath.Join(t.TempDir(), "pending")
+		if err := os.MkdirAll(pendingDir, 0o755); err != nil {
+			t.Fatalf("failed to set up test pending dir: %v", err)
+		}
+		spoolPath := filepath.Join(pendingDir, "pr-review-owner-repo-2.md")
+		// Seed with a non-default mode so a hardcoded 0644 write would be
+		// detectable. (This is what the old in-place os.WriteFile(_, 0644)
+		// regressed relative to the set-review-*.sh scripts' `cp -p`.)
+		const wantMode = os.FileMode(0o600)
+		if err := os.WriteFile(spoolPath, []byte(writeReviewedMetadataFixture), wantMode); err != nil {
+			t.Fatalf("failed to write test spool fixture: %v", err)
+		}
+		// Guard against a restrictive umask having masked the seed write.
+		if err := os.Chmod(spoolPath, wantMode); err != nil {
+			t.Fatalf("failed to chmod test spool fixture: %v", err)
+		}
+
+		if err := WriteReviewedMetadata(spoolPath, "cafef00d", time.Date(2026, 9, 22, 10, 0, 0, 0, time.UTC)); err != nil {
+			t.Fatalf("WriteReviewedMetadata() unexpected error: %v", err)
+		}
+
+		info, err := os.Stat(spoolPath)
+		if err != nil {
+			t.Fatalf("failed to stat spool file after write: %v", err)
+		}
+		if info.Mode().Perm() != wantMode {
+			t.Errorf("file mode after write = %v, want %v (original mode must be preserved)", info.Mode().Perm(), wantMode)
+		}
+
+		// No stray temp files should remain in the directory.
+		entries, err := os.ReadDir(pendingDir)
+		if err != nil {
+			t.Fatalf("failed to read pending dir: %v", err)
+		}
+		for _, e := range entries {
+			if strings.Contains(e.Name(), ".tmp") {
+				t.Errorf("stray temp file left behind after write: %s", e.Name())
+			}
+		}
+	})
+
 	t.Run("empty spoolPath returns an error", func(t *testing.T) {
 		err := WriteReviewedMetadata("", "abc1234", time.Now())
 		if err == nil {

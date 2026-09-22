@@ -10,6 +10,7 @@ package review
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -169,8 +170,41 @@ func WriteReviewedMetadata(spoolPath, headSHA string, generatedAt time.Time) err
 		return fmt.Errorf("failed to patch front-matter in %s: %w", resolved, err)
 	}
 
-	if err := os.WriteFile(resolved, patched, 0644); err != nil {
-		return fmt.Errorf("failed to write spool file %s: %w", resolved, err)
+	// Write atomically: the spool file is shared with the finalize pipeline
+	// (pr_review_finalize.py), so an interrupted in-place os.WriteFile would
+	// leave a truncated file for that reader. Mirror the discipline the
+	// set-review-*.sh mutation scripts established for this same file (#94/#95):
+	// write to a temp file in the SAME directory (so the rename stays on one
+	// filesystem and is therefore atomic), preserve the original file's mode
+	// (the scripts use `cp -p`), then rename over the target. Clean up the temp
+	// file on any error path so a failure never leaves a stray .tmp behind.
+	perm := os.FileMode(0o644)
+	if info, statErr := os.Stat(resolved); statErr == nil {
+		perm = info.Mode().Perm()
+	}
+
+	tmp, err := os.CreateTemp(filepath.Dir(resolved), filepath.Base(resolved)+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file for %s: %w", resolved, err)
+	}
+	tmpName := tmp.Name()
+	// From here on, ensure the temp file is removed unless the final rename
+	// succeeds (a successful rename consumes tmpName, making the remove a
+	// harmless no-op).
+	defer os.Remove(tmpName)
+
+	if _, err := tmp.Write(patched); err != nil {
+		tmp.Close()
+		return fmt.Errorf("failed to write temp file for %s: %w", resolved, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("failed to close temp file for %s: %w", resolved, err)
+	}
+	if err := os.Chmod(tmpName, perm); err != nil {
+		return fmt.Errorf("failed to set mode on temp file for %s: %w", resolved, err)
+	}
+	if err := os.Rename(tmpName, resolved); err != nil {
+		return fmt.Errorf("failed to atomically replace spool file %s: %w", resolved, err)
 	}
 
 	return nil
