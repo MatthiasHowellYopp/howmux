@@ -198,7 +198,7 @@ func (m model) handleHelp() (model, tea.Cmd) {
 		"  plan classic [desc] - Start legacy subprocess planning session",
 		"  log [level] [size] - Open log viewer (level: debug/info/warn/error, size: buffer lines)",
 		"  logs           - View incident logs",
-		"  decide <value>  - Set decision on selected review (post|revise|rereview|discard)",
+		"  decide <value>  - Launch action on selected review (post confirms inline, others run immediately)",
 		"  theme          - Show current theme",
 		"  theme <name>   - Switch to theme",
 		"  about          - Show version information and check for updates",
@@ -941,28 +941,16 @@ func (m model) findReviewsTab() *ReviewsTab {
 	return nil
 }
 
-// applyDecision calls DecisionWriter.SetDecision for rec and decision, then
-// appends the resulting success or error activity line, using the same
-// m.styles.Error/Success + appendActivity pattern every other command in
-// this file already uses. This is the shared "apply decision + produce
-// activity line" logic both handleDecide (REPL dispatch, below) and the
-// future decideRequestMsg handler in model.Update (Task 7, key-menu
-// dispatch) call, so key-driven and command-driven decisions always produce
-// identical visual feedback from exactly one code path.
-func (m model) applyDecision(rec review.Record, decision string) model {
-	if err := m.decisionWriter.SetDecision(rec.SpoolPath, decision); err != nil {
-		return m.appendActivity(m.styles.Error.Render(fmt.Sprintf("Failed to set decision: %v", err)))
-	}
-	return m.appendActivity(m.styles.Success.Render(fmt.Sprintf("Set decision on PR #%d to '%s'", rec.PR, decision)))
-}
-
 // handleDecide implements the `decide post|revise|rereview|discard` REPL
 // command. It validates the argument, resolves the currently selected review
 // row from the singleton Reviews tab (regardless of which tab is currently
-// active — see findReviewsTab), and delegates to applyDecision. See the
-// design spec's "Input Validation Summary" and "Row-Selection Requirement
-// Summary" sections (issue #85) for why these checks are layered and why
-// selection is resolved by tab type rather than active-tab status.
+// active — see findReviewsTab), and dispatches to the shared
+// dispatchDecideAction, which launches the corresponding action
+// immediately (revise/rereview/discard) or opens the inline y/N confirm
+// gate (post) — see decideactions.go and the design spec's "Input
+// Validation Summary" and "Row-Selection Requirement Summary" sections
+// (issue #85) for why these checks are layered and why selection is
+// resolved by tab type rather than active-tab status.
 func (m model) handleDecide(args []string) (model, tea.Cmd) {
 	if len(args) != 1 {
 		m = m.appendActivity(m.styles.Error.Render("Usage: decide post|revise|rereview|discard"))
@@ -995,82 +983,7 @@ func (m model) handleDecide(args []string) (model, tea.Cmd) {
 		return m, nil
 	}
 
-	m = m.applyDecision(rec, decision)
-	return m, nil
-}
-
-// handleFinalize implements the "finalize" REPL command (bare form only —
-// this issue does not add a "finalize <PR>" per-review form, since
-// finalize-reviews.sh itself has no such mode; it always drains the whole
-// spool). It first runs the issue #88 asset preflight (see below) — the
-// primary gate for this command; the existing finalizeScriptPathFunc()
-// call inside runFinalizeCmd remains as a defense-in-depth safety net in
-// case the environment changes between preflight and dry-run. Assuming
-// the preflight passes, it guards against re-entrancy, resets the shared
-// OutputCapture for a fresh run, opens (or reuses) the live preview
-// window, transitions m.finalizeState to finalizeDryRunRunning, and kicks
-// off the dry-run subprocess plus the output poll loop in a single
-// batched tea.Cmd — see issue #87's design spec, "Triggering a run".
-func (m model) handleFinalize(args []string) (model, tea.Cmd) {
-	// Preflight check (issue #88) - blocks before the finalizeState guard
-	// or any subprocess dispatch. Calls review.CheckFinalizeAssets()
-	// directly (the real check), not the TUI-layer checkFinalizeAssetsFunc
-	// var — matching handleReview's existing synchronous
-	// review.CheckReviewAssets call above. On failure, renders the error
-	// via appendActivity (styled Error, two lines: header + error text,
-	// mirroring handleReview's rendering), stores the result via the
-	// shared applyFinalizePreflightResult helper (also used by the async
-	// retry path in model.Update), and returns without starting the dry
-	// run.
-	if err := review.CheckFinalizeAssets(); err != nil {
-		m = m.applyFinalizePreflightResult(err)
-		m = m.appendActivity(m.styles.Error.Render("Finalize preflight failed:"))
-		m = m.appendActivity(m.styles.Error.Render(err.Error()))
-		return m, nil
-	}
-	m = m.applyFinalizePreflightResult(nil)
-
-	if m.finalizeState != finalizeIdle {
-		m = m.appendActivity(m.styles.Warning.Render("Finalize already in progress"))
-		return m, nil
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	m.finalizeCancel = cancel
-	m.finalizeCapture = agent.NewOutputCapture(finalizeCaptureBufferSize)
-	m.finalizeLastGen = 0
-
-	var windowCmd tea.Cmd
-	m, windowCmd = m.openFinalizePreviewWindow()
-
-	m.finalizeState = finalizeDryRunRunning
-	m = m.appendActivity(m.styles.Activity.Render("Running finalize-reviews.sh --dry-run..."))
-
-	return m, tea.Batch(
-		windowCmd,
-		runFinalizeCmd(ctx, true, m.finalizeCapture, cancel),
-		pollFinalizeOutputCmd(),
-	)
-}
-
-// openFinalizePreviewWindow opens (or reuses, by the fixed tab ID
-// finalizeWindowTabID) the live-capture ReviewContentTab window that shows
-// finalize-reviews.sh's streamed output, matching the reuse-by-fixed-ID
-// pattern openReviewContentMsg's handler in tui.go already uses for #84's
-// windows. It records the tab's ID on m.finalizeWindowTabID so the
-// finalizeTickMsg handler can look it up regardless of which tab is
-// currently active.
-func (m model) openFinalizePreviewWindow() (model, tea.Cmd) {
-	const id = "finalize-preview"
-	if existingIdx := m.tabManager.FindTabByID(id); existingIdx >= 0 {
-		m.finalizeWindowTabID = id
-		return m.switchActiveTab(existingIdx)
-	}
-
-	contentTab := NewLiveReviewContentTab(id, "Finalize Preview", m.finalizeCapture, m.styles)
-	m.tabManager.AddTab(contentTab)
-	m.finalizeWindowTabID = id
-	return m.switchActiveTab(len(m.tabManager.GetTabs()) - 1)
+	return m.dispatchDecideAction(rec, decision)
 }
 
 func (m model) handleReview(args []string) (model, tea.Cmd) {

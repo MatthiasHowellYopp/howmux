@@ -102,13 +102,8 @@ func NewCommandRegistry(agentManager *agent.Manager) *CommandRegistry {
 
 	registry.register(&Command{
 		Name:        "decide",
-		Description: "Set the decision on the selected review (post|revise|rereview|discard)",
+		Description: "Launch action on the selected review (post confirms inline, others run immediately)",
 		Subcommands: []string{"post", "revise", "rereview", "discard"},
-	})
-
-	registry.register(&Command{
-		Name:        "finalize",
-		Description: "Preview and post decided PR reviews via finalize-reviews.sh (dry-run, then confirm) — checks finalize-reviews.sh/pr_review_finalize.py are on PATH first",
 	})
 
 	// Build flattened command list

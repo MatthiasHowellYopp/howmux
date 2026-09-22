@@ -930,3 +930,298 @@ func TestWriteReviewedMetadata(t *testing.T) {
 		}
 	})
 }
+
+// --- swapPendingDone ---
+
+func TestSwapPendingDone(t *testing.T) {
+	tests := []struct {
+		name   string
+		path   string
+		toDone bool
+		want   string
+	}{
+		{
+			name:   "pending to done swaps the segment",
+			path:   filepath.Join("home", "user", "PR-Review", "pending", "pr-review-owner-repo-1.md"),
+			toDone: true,
+			want:   filepath.Join("home", "user", "PR-Review", "done", "pr-review-owner-repo-1.md"),
+		},
+		{
+			name:   "done to pending swaps the segment back",
+			path:   filepath.Join("home", "user", "PR-Review", "done", "pr-review-owner-repo-1.md"),
+			toDone: false,
+			want:   filepath.Join("home", "user", "PR-Review", "pending", "pr-review-owner-repo-1.md"),
+		},
+		{
+			name:   "no pending segment present, toDone true, returns empty",
+			path:   filepath.Join("home", "user", "PR-Review", "done", "pr-review-owner-repo-1.md"),
+			toDone: true,
+			want:   "",
+		},
+		{
+			name:   "no done segment present, toDone false, returns empty",
+			path:   filepath.Join("home", "user", "PR-Review", "pending", "pr-review-owner-repo-1.md"),
+			toDone: false,
+			want:   "",
+		},
+		{
+			name:   "empty path returns empty",
+			path:   "",
+			toDone: true,
+			want:   "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := swapPendingDone(tt.path, tt.toDone)
+			if got != tt.want {
+				t.Errorf("swapPendingDone(%q, %v) = %q, want %q", tt.path, tt.toDone, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDerivePendingToDoneDelegatesToSwapPendingDone(t *testing.T) {
+	path := filepath.Join("home", "user", "PR-Review", "pending", "pr-review-owner-repo-1.md")
+	want := swapPendingDone(path, true)
+	got := derivePendingToDone(path)
+	if got != want {
+		t.Errorf("derivePendingToDone(%q) = %q, want %q (should delegate to swapPendingDone(path, true))", path, got, want)
+	}
+}
+
+// --- RewriteSpoolEntry ---
+
+const rewriteSpoolFixture = `---
+repo: owner/repo
+pr: 1
+verdict: COMMENT
+decision: revise
+decision_notes: please double check the auth flow
+diff_file: /abs/path/to.diff
+generated: 2026-09-22T10:00:00Z
+---
+
+Old review body here.
+`
+
+func TestRewriteSpoolEntry_ReplacesBodyAndVerdict(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "pending")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir pending: %v", err)
+	}
+	spoolPath := filepath.Join(dir, "pr-review-owner-repo-1.md")
+	if err := os.WriteFile(spoolPath, []byte(rewriteSpoolFixture), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	newBody := "# Consolidated Review\n\nsrc/foo.py:10 - warning - bad thing -> fix it\nVERDICT: APPROVE\n"
+	if err := RewriteSpoolEntry(spoolPath, newBody, "APPROVE", false); err != nil {
+		t.Fatalf("RewriteSpoolEntry() unexpected error: %v", err)
+	}
+
+	data, err := os.ReadFile(spoolPath)
+	if err != nil {
+		t.Fatalf("re-read: %v", err)
+	}
+	fields := ParseSpoolFrontMatter(data)
+	if fields["verdict"] != "APPROVE" {
+		t.Errorf("verdict = %q, want %q", fields["verdict"], "APPROVE")
+	}
+	gotBody := extractSpoolBody(data)
+	if !strings.Contains(gotBody, "src/foo.py:10 - warning - bad thing -> fix it") {
+		t.Errorf("body = %q, want it to contain the new finding line", gotBody)
+	}
+	if strings.Contains(gotBody, "Old review body here.") {
+		t.Errorf("body still contains old content: %q", gotBody)
+	}
+}
+
+func TestRewriteSpoolEntry_ClearsDecision(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "pending")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir pending: %v", err)
+	}
+	spoolPath := filepath.Join(dir, "pr-review-owner-repo-1.md")
+	if err := os.WriteFile(spoolPath, []byte(rewriteSpoolFixture), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	if err := RewriteSpoolEntry(spoolPath, "new body", "APPROVE", true); err != nil {
+		t.Fatalf("RewriteSpoolEntry() unexpected error: %v", err)
+	}
+
+	data, err := os.ReadFile(spoolPath)
+	if err != nil {
+		t.Fatalf("re-read: %v", err)
+	}
+	fields := ParseSpoolFrontMatter(data)
+	if fields["decision"] != "" {
+		t.Errorf("decision = %q, want empty after clearDecision=true", fields["decision"])
+	}
+	// decision_notes must be left as-is (only decision is touched).
+	if fields["decision_notes"] != "please double check the auth flow" {
+		t.Errorf("decision_notes = %q, want it preserved untouched", fields["decision_notes"])
+	}
+}
+
+func TestRewriteSpoolEntry_PreservesOtherFrontMatterKeys(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "pending")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir pending: %v", err)
+	}
+	spoolPath := filepath.Join(dir, "pr-review-owner-repo-1.md")
+	if err := os.WriteFile(spoolPath, []byte(rewriteSpoolFixture), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	if err := RewriteSpoolEntry(spoolPath, "new body", "REQUEST_CHANGES", false); err != nil {
+		t.Fatalf("RewriteSpoolEntry() unexpected error: %v", err)
+	}
+
+	data, err := os.ReadFile(spoolPath)
+	if err != nil {
+		t.Fatalf("re-read: %v", err)
+	}
+	fields := ParseSpoolFrontMatter(data)
+	want := map[string]string{
+		"repo":      "owner/repo",
+		"pr":        "1",
+		"diff_file": "/abs/path/to.diff",
+		"generated": "2026-09-22T10:00:00Z",
+	}
+	for k, v := range want {
+		if fields[k] != v {
+			t.Errorf("fields[%q] = %q, want %q (untouched keys must survive)", k, fields[k], v)
+		}
+	}
+	// decision was left alone (clearDecision=false), so its original value survives.
+	if fields["decision"] != "revise" {
+		t.Errorf("decision = %q, want %q (clearDecision=false must not touch it)", fields["decision"], "revise")
+	}
+}
+
+func TestRewriteSpoolEntry_NoOpeningFence_ReturnsError(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "pending")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir pending: %v", err)
+	}
+	spoolPath := filepath.Join(dir, "pr-review-owner-repo-1.md")
+	if err := os.WriteFile(spoolPath, []byte("no front matter here\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	err := RewriteSpoolEntry(spoolPath, "new body", "APPROVE", false)
+	if err == nil {
+		t.Fatal("RewriteSpoolEntry() error = nil, want non-nil error for missing opening fence")
+	}
+}
+
+func TestRewriteSpoolEntry_NoClosingFence_ReturnsError(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "pending")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir pending: %v", err)
+	}
+	spoolPath := filepath.Join(dir, "pr-review-owner-repo-1.md")
+	if err := os.WriteFile(spoolPath, []byte("---\nrepo: owner/repo\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	err := RewriteSpoolEntry(spoolPath, "new body", "APPROVE", false)
+	if err == nil {
+		t.Fatal("RewriteSpoolEntry() error = nil, want non-nil error for missing closing fence")
+	}
+}
+
+func TestRewriteSpoolEntry_EmptySpoolPath_ReturnsError(t *testing.T) {
+	err := RewriteSpoolEntry("", "new body", "APPROVE", false)
+	if err == nil {
+		t.Fatal("RewriteSpoolEntry(\"\", ...) error = nil, want non-nil error")
+	}
+}
+
+// --- archiveToDone ---
+
+func TestArchiveToDone_MovesFile(t *testing.T) {
+	base := t.TempDir()
+	pendingDir := filepath.Join(base, "pending")
+	if err := os.MkdirAll(pendingDir, 0o755); err != nil {
+		t.Fatalf("mkdir pending: %v", err)
+	}
+	spoolPath := filepath.Join(pendingDir, "pr-review-owner-repo-1.md")
+	if err := os.WriteFile(spoolPath, []byte(rewriteSpoolFixture), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	if err := archiveToDone(spoolPath); err != nil {
+		t.Fatalf("archiveToDone() unexpected error: %v", err)
+	}
+
+	if _, err := os.Stat(spoolPath); !os.IsNotExist(err) {
+		t.Errorf("expected source file to no longer exist at %s, stat err = %v", spoolPath, err)
+	}
+
+	donePath := filepath.Join(base, "done", "pr-review-owner-repo-1.md")
+	if _, err := os.Stat(donePath); err != nil {
+		t.Errorf("expected archived file at %s, stat err = %v", donePath, err)
+	}
+}
+
+func TestArchiveToDone_CreatesDoneDirIfMissing(t *testing.T) {
+	base := t.TempDir()
+	pendingDir := filepath.Join(base, "pending")
+	if err := os.MkdirAll(pendingDir, 0o755); err != nil {
+		t.Fatalf("mkdir pending: %v", err)
+	}
+	spoolPath := filepath.Join(pendingDir, "pr-review-owner-repo-1.md")
+	if err := os.WriteFile(spoolPath, []byte(rewriteSpoolFixture), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	doneDir := filepath.Join(base, "done")
+	if _, err := os.Stat(doneDir); !os.IsNotExist(err) {
+		t.Fatalf("expected done/ to not exist yet, stat err = %v", err)
+	}
+
+	if err := archiveToDone(spoolPath); err != nil {
+		t.Fatalf("archiveToDone() unexpected error: %v", err)
+	}
+
+	if _, err := os.Stat(doneDir); err != nil {
+		t.Errorf("expected done/ dir to be created, stat err = %v", err)
+	}
+}
+
+func TestArchiveToDone_SourceMissing_ReturnsError(t *testing.T) {
+	base := t.TempDir()
+	spoolPath := filepath.Join(base, "pending", "pr-review-owner-repo-1.md")
+
+	err := archiveToDone(spoolPath)
+	if err == nil {
+		t.Fatal("archiveToDone() error = nil, want non-nil error for missing source file")
+	}
+}
+
+func TestArchiveToDone_EmptyPath_ReturnsError(t *testing.T) {
+	err := archiveToDone("")
+	if err == nil {
+		t.Fatal("archiveToDone(\"\") error = nil, want non-nil error")
+	}
+}
+
+func TestArchiveToDone_NoPendingSegment_ReturnsError(t *testing.T) {
+	base := t.TempDir()
+	spoolPath := filepath.Join(base, "somewhere-else", "pr-review-owner-repo-1.md")
+	if err := os.MkdirAll(filepath.Dir(spoolPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(spoolPath, []byte(rewriteSpoolFixture), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	err := archiveToDone(spoolPath)
+	if err == nil {
+		t.Fatal("archiveToDone() error = nil, want non-nil error when no \"pending\" segment is present")
+	}
+}

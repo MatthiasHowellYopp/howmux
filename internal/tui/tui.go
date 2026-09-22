@@ -229,45 +229,21 @@ type model struct {
 	// non-empty.
 	bodyWriter *review.BodyWriter
 
-	// Finalize workflow state (issue #87): drives finalize-reviews.sh with
-	// a dry-run preview, then an explicit y/N confirmation before posting
-	// live. finalizeState is the state-machine position (see finalize.go);
-	// finalizeCapture is the shared OutputCapture backing the live preview
-	// window, written by the runFinalizeCmd goroutine's CaptureWriters and
-	// read by the poll loop / window render path via OutputCapture's own
-	// exported, mutex-guarded methods only. finalizeCancel is the
-	// context.CancelFunc for whichever phase (dry-run or live) is
-	// currently in flight. finalizeLastGen is the last-seen
-	// OutputCapture.Generation() value the finalizeTickMsg handler compared
-	// against, mirroring LogTab's lastWriteCounter. finalizeWindowTabID is
-	// the fixed ID of the open preview window tab ("finalize-preview"),
-	// empty when no finalize window is open. All five fields are mutated
-	// only inside model.Update/model.View() (the single Bubble Tea
-	// event-loop goroutine) — never inside the runFinalizeCmd or
-	// pollFinalizeOutputCmd goroutine closures, which only ever return a
-	// tea.Msg for Bubble Tea's runtime to deliver back onto this goroutine.
-	finalizeState       finalizeState
-	finalizeCapture     *agent.OutputCapture
-	finalizeCancel      context.CancelFunc
-	finalizeLastGen     uint64
-	finalizeWindowTabID string
-
-	// finalizePreflightState/finalizePreflightErr (issue #88) cache the
-	// last-known result of review.CheckFinalizeAssets — whether
-	// finalize-reviews.sh and pr_review_finalize.py currently resolve on
-	// $PATH. This is a distinct concern from the five fields above:
-	// finalizeState tracks the dry-run/confirm/live-run subprocess
-	// lifecycle, while these two track asset availability, checked before
-	// that lifecycle is ever allowed to start (see handleFinalize and
-	// finalize_preflight.go). finalizePreflightErr holds the full error
-	// text from review.CheckFinalizeAssets ("" when OK/unknown). Both
-	// fields are mutated only inside model.Update (handleFinalize's
-	// synchronous path and the finalizePreflightResultMsg case), never
-	// inside the runFinalizePreflightCmd goroutine closure, which only
-	// ever returns a tea.Msg for Bubble Tea's runtime to deliver back onto
-	// this goroutine.
-	finalizePreflightState finalizePreflightState
-	finalizePreflightErr   string
+	// decidePostConfirmState models the (idle -> awaiting-confirmation ->
+	// idle) lifecycle of decide post's inline y/N gate — this issue's
+	// direct, smaller replacement for the confirm gate finalize.go used to
+	// have (finalize.go, removed by issue #109). decidePostPending is the
+	// review awaiting confirmation; decidePostFindingCount and
+	// decidePostVerdict are the parsed values used to render the confirm
+	// prompt's text and to map to the GitHub review "event" on
+	// confirmation. All four fields are mutated only inside model.Update
+	// (the single Bubble Tea event-loop goroutine) — never inside the
+	// tea.Cmd closures the launchDecideX helpers return, which only ever
+	// report back via a terminal tea.Msg.
+	decidePostConfirmState decidePostConfirmState
+	decidePostPending      review.Record
+	decidePostFindingCount int
+	decidePostVerdict      string
 
 	// Overlay system
 	activeOverlay  overlayType
@@ -595,119 +571,67 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.reviewCancel = nil
 		return m, nil
 
-	case finalizeDryRunMsg:
-		// Dry-run finished successfully (exit 0). Transition to
-		// awaiting-confirmation and stop the poll loop from re-arming (no
-		// tea.Cmd requesting another tick is returned here) — see issue
-		// #87's design spec, "On finalizeDryRunMsg (dry-run succeeded)".
-		// Do NOT clear m.finalizeCapture/m.finalizeCancel: the live run
-		// reuses the same window/capture, and finalizeCancel is
-		// overwritten (not reused) by the live run's own context in the
-		// confirmation-keypress handler below.
-		if tabIdx := m.tabManager.FindTabByID(m.finalizeWindowTabID); tabIdx >= 0 {
-			if rct, ok := m.tabManager.GetTabs()[tabIdx].(*ReviewContentTab); ok {
-				rct.AppendFromCapture()
-			}
-		}
-		m.finalizeState = finalizeAwaitingConfirmation
-		m.footerManager.SetTransientMessage("Dry-run complete — post live? (y/N)")
-		m = m.appendActivity(m.styles.Warning.Render("Dry-run complete — review the preview window, then post live? (y/N)"))
+	case decidePostCompleteMsg:
+		// PostReview succeeded: the review was posted and archived to
+		// done/. See dispatchDecideAction/launchDecidePostCmd
+		// (decideactions.go) for the launch side.
+		m = m.appendActivity(m.styles.Success.Render(fmt.Sprintf(
+			"Posted %d inline comments to %s#%d, archived to done/.", msg.commentsPosted, msg.rec.Repo, msg.rec.PR)))
 		return m, nil
 
-	case finalizeCompleteMsg:
-		// Live run finished successfully (exit 0). Return to idle; the
-		// Reviews tab's next render reads current spool state from disk
-		// (see issue #87's design spec, "Decision State Update") — no
-		// explicit refresh call is needed here.
-		if tabIdx := m.tabManager.FindTabByID(m.finalizeWindowTabID); tabIdx >= 0 {
-			if rct, ok := m.tabManager.GetTabs()[tabIdx].(*ReviewContentTab); ok {
-				rct.AppendFromCapture()
-			}
-		}
-		m.finalizeState = finalizeIdle
-		m.finalizeCancel = nil
-		m.footerManager.SetTransientMessage("")
-		m = m.appendActivity(m.styles.Success.Render("Finalize complete — spool drained."))
+	case decidePostErrorMsg:
+		// PostReview failed (gh error, payload build error, etc.). The
+		// crash-recovery contract already applies: decision: post was
+		// written to front-matter BEFORE the failing step, so the file is
+		// left in pending/ with that decision recorded — retrying `decide
+		// post` picks it back up. See PostReview's doc comment
+		// (internal/review/decideactions.go) for the full contract.
+		m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf(
+			"Failed to post review for %s#%d: %v (decision recorded; retry with decide post)", msg.rec.Repo, msg.rec.PR, msg.err)))
 		return m, nil
 
-	case finalizeErrorMsg:
-		// Either phase failed — script not found, spawn failure, or a
-		// non-zero exit. This handler performs no spool mutation of any
-		// kind (see issue #87's design spec, "Error handling": every
-		// actual spool-file write happens inside pr_review_finalize.py's
-		// own idempotent per-file processing loop) — it only touches
-		// m.finalizeState, m.finalizeCancel, and the activity log. The
-		// preview window is left open with whatever partial output was
-		// captured, so the user can read exactly what happened.
-		if tabIdx := m.tabManager.FindTabByID(m.finalizeWindowTabID); tabIdx >= 0 {
-			if rct, ok := m.tabManager.GetTabs()[tabIdx].(*ReviewContentTab); ok {
-				rct.AppendFromCapture()
-			}
-		}
-		phaseLabel := "live"
-		if msg.dryRun {
-			phaseLabel = "dry-run"
-		}
-		m.finalizeState = finalizeIdle
-		m.finalizeCancel = nil
-		m.footerManager.SetTransientMessage("")
-		m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("Finalize (%s) failed: %v", phaseLabel, msg.err)))
-		// On a *live* run, the script may have already posted some reviews
-		// before erroring mid-drain (each file is processed in its own
-		// idempotent pass by pr_review_finalize.py). Point the user at the
-		// safe recovery without changing any state: re-running finalize
-		// skips already-drained files and completes the rest. Dry-run
-		// failures post nothing, so the hint would be misleading there.
-		if !msg.dryRun {
-			m = m.appendActivity(m.styles.Warning.Render("Some reviews may already have posted — re-run finalize to complete the rest (it skips already-drained files)."))
-		}
+	case decideReviseCompleteMsg:
+		// ReviseReview succeeded: the file is back in pending/ with a
+		// fresh body/verdict and decision cleared.
+		m = m.appendActivity(m.styles.Success.Render(fmt.Sprintf(
+			"Revised review for %s#%d — new verdict: %s, back in pending/.", msg.rec.Repo, msg.rec.PR, msg.newVerdict)))
 		return m, nil
 
-	case finalizePreflightResultMsg:
-		// Async retry path: the Reviews tab's "F" key emitted
-		// finalizeRetryPreflightMsg, which the case below turned into
-		// runFinalizePreflightCmd(); this is that command's result
-		// arriving back on the Update goroutine. Delegates to the same
-		// applyFinalizePreflightResult helper handleFinalize's synchronous
-		// path uses, so the two paths can never disagree about what
-		// "current preflight state" means (see issue #88's design spec,
-		// "Where the preflight runs").
-		m = m.applyFinalizePreflightResult(msg.err)
+	case decideReviseErrorMsg:
+		// ReviseReview failed. No decision was ever written for revise
+		// (unlike post/discard), so the file is exactly as it was
+		// pre-decide — retrying `decide revise` is safe.
+		m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf(
+			"Failed to revise review for %s#%d: %v (decision NOT recorded — retry with decide revise)", msg.rec.Repo, msg.rec.PR, msg.err)))
 		return m, nil
 
-	case finalizeRetryPreflightMsg:
-		// Emitted by ReviewsTab.Update's "F" key handler (see issue #88's
-		// design spec, "Retry mechanism"). Re-runs the preflight
-		// asynchronously — unlike handleFinalize's synchronous call, this
-		// is a user-initiated background re-check, not gating an in-flight
-		// command dispatch, so it goes through the tea.Cmd round trip
-		// instead of blocking Update.
-		return m, runFinalizePreflightCmd()
+	case decideRereviewCompleteMsg:
+		// RereviewReview succeeded — either via the full lens fan-out, or
+		// degraded to the revise path if diff_file was missing/gone.
+		verb := "Rereviewed"
+		if msg.degradedToRevise {
+			verb = "Rereviewed (degraded to revise — diff file unavailable)"
+		}
+		m = m.appendActivity(m.styles.Success.Render(fmt.Sprintf(
+			"%s review for %s#%d — new verdict: %s, back in pending/.", verb, msg.rec.Repo, msg.rec.PR, msg.newVerdict)))
+		return m, nil
 
-	case finalizeTickMsg:
-		// Poll tick for streaming finalize-reviews.sh output into the
-		// preview window. Looks up the window by its fixed tab ID and
-		// calls AppendFromCapture() regardless of whether it is the
-		// currently active tab (streaming keeps buffering even if the
-		// user switches away and back) — see issue #87's design spec,
-		// "Files to Modify" -> review_content_tab.go. Re-arms the poll
-		// only while a finalize run is actually in flight; once state has
-		// moved to finalizeAwaitingConfirmation or finalizeIdle, this
-		// stops requesting more ticks so the loop doesn't run forever
-		// after the process exits.
-		if m.finalizeCapture != nil {
-			if currentGen := m.finalizeCapture.Generation(); currentGen != m.finalizeLastGen {
-				m.finalizeLastGen = currentGen
-				if tabIdx := m.tabManager.FindTabByID(m.finalizeWindowTabID); tabIdx >= 0 {
-					if rct, ok := m.tabManager.GetTabs()[tabIdx].(*ReviewContentTab); ok {
-						rct.AppendFromCapture()
-					}
-				}
-			}
-		}
-		if m.finalizeState == finalizeDryRunRunning || m.finalizeState == finalizeLiveRunning {
-			return m, pollFinalizeOutputCmd()
-		}
+	case decideRereviewErrorMsg:
+		// RereviewReview failed (a lens call errored, or consolidation
+		// failed). Same "decision NOT recorded" contract as revise.
+		m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf(
+			"Failed to rereview review for %s#%d: %v (decision NOT recorded — retry with decide rereview)", msg.rec.Repo, msg.rec.PR, msg.err)))
+		return m, nil
+
+	case decideDiscardCompleteMsg:
+		// DiscardReview succeeded: the file was archived to done/.
+		m = m.appendActivity(m.styles.Success.Render(fmt.Sprintf(
+			"Discarded review for %s#%d — archived to done/.", msg.rec.Repo, msg.rec.PR)))
+		return m, nil
+
+	case decideDiscardErrorMsg:
+		m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf(
+			"Failed to discard review for %s#%d: %v", msg.rec.Repo, msg.rec.PR, msg.err)))
 		return m, nil
 
 	case openReviewContentMsg:
@@ -743,23 +667,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Emitted by ReviewsTab.Update's p/r/R/d key handlers (via
 		// decideSelectedCmd) — the key-menu counterpart to the "decide"
 		// REPL command handled by handleDecide (commands.go). Both entry
-		// points delegate to the shared applyDecision helper so key-driven
-		// and command-driven decisions produce identical activity-line
-		// feedback from exactly one code path (issue #85, Task 7).
+		// points delegate to the shared dispatchDecideAction helper so
+		// key-driven and command-driven decisions launch identically
+		// (issue #109, Task 7 — replaces the old write-only applyDecision
+		// dispatch).
 		//
 		// decideSelectedCmd already resolved repo/pr/spoolPath from the
 		// selected record before emitting this message, so no tab lookup
 		// is needed here — but the same empty-spool-path check handleDecide
-		// performs (step 4) still applies uniformly, since msg.spoolPath
-		// could in principle be "" for the same reason a selected record's
+		// performs still applies uniformly, since msg.spoolPath could in
+		// principle be "" for the same reason a selected record's
 		// SpoolPath could be empty (never reviewed yet).
 		if msg.spoolPath == "" {
 			m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("PR #%d has no review yet — nothing to decide", msg.pr)))
 			return m, nil
 		}
 		rec := review.Record{Repo: msg.repo, PR: msg.pr, SpoolPath: msg.spoolPath}
-		m = m.applyDecision(rec, msg.decision)
-		return m, nil
+		return m.dispatchDecideAction(rec, msg.decision)
 
 	case gateFailedMsg:
 		// Emitted by ReviewsTab.Update's "n" key handler when the selected
@@ -1125,25 +1049,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleCopy()
 		}
 
-		// Finalize confirmation-keypress interception (issue #87, relocated
-		// and hardened by issue #102): while
-		// m.finalizeState == finalizeAwaitingConfirmation, the next
+		// decide post confirmation-keypress interception (issue #109 —
+		// direct, smaller replacement for the confirm gate finalize.go used
+		// to have, issue #87/#102): while
+		// m.decidePostConfirmState == decidePostConfirmAwaiting, the next
 		// keypress is gated exactly like m.confirmingExit's own y/N block
-		// further below — "y"/"yes" triggers the live run, "n"/"no"/"esc"
-		// cancels back to idle, and anything else (navigation keys like
-		// "[", "]", "f2", arrow keys, or any other key) is ignored outright
-		// with no state change and no activity line (issue #102: these keys
-		// used to fall into the old two-arm switch's default/cancel case and
-		// silently cancelled the pending confirmation). This must be
-		// checked before m.confirmingExit's block, before Reviews-tab
-		// row-shortcut forwarding, AND — as of issue #102 — before all
-		// three esc-handling blocks immediately below (overlay dismissal,
-		// planning-tab focus return, and TabTypeReviewContent window-close).
-		// Without running ahead of the TabTypeReviewContent-closes-on-Esc
-		// handler specifically, pressing Esc while the Finalize Preview tab
-		// is the active tab would close that window via the generic
-		// handler instead of cancelling finalize here, since the generic
-		// handler would otherwise match first.
+		// further below — "y"/"yes" launches the post, "n"/"no"/"esc"
+		// cancels back to idle with NOTHING recorded (no decision: write
+		// happens until the "y" branch's tea.Cmd runs), and anything else
+		// (navigation keys like "[", "]", "f2", arrow keys, or any other
+		// key) is ignored outright with no state change and no activity
+		// line — this preserves issue #102's fix for the
+		// silent-cancel-on-navigation trap, now for decide post instead of
+		// finalize. This must be checked at the exact same position the
+		// old finalize confirm gate's keypress-interception block occupied:
+		// before m.confirmingExit's block, before Reviews-tab row-shortcut
+		// forwarding, and before all three esc-handling blocks immediately
+		// below (overlay dismissal, planning-tab focus return, and
+		// TabTypeReviewContent window-close) — see issue #102's spec for
+		// why this ordering matters (a review-content window happening to
+		// be active must not let Esc fall through to the generic
+		// window-closer instead of cancelling the pending confirmation).
 		//
 		// Because none of the keys this block explicitly handles (y/yes/
 		// n/no/esc) return early in the default arm, and the default arm
@@ -1154,69 +1080,36 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		//
 		// Invariant: this block and m.confirmingExit's block below are
 		// mutually exclusive by construction — both gate on being
-		// idle-ish top-level states (finalizeAwaitingConfirmation is only
-		// reached via handleFinalize/finalizeDryRunMsg, which never runs
-		// while a "stop all and exit?" prompt is pending, and tryExit's
-		// own agent/planning-tab checks are independent of finalize
-		// state), so the same keypress can never be interpreted by both.
-		// A future change to either gate must preserve this invariant
-		// rather than letting both fire on one keypress.
-		if m.finalizeState == finalizeAwaitingConfirmation {
+		// idle-ish top-level states (decidePostConfirmAwaiting is only
+		// reached via startDecidePost, which never runs while a "stop all
+		// and exit?" prompt is pending, and tryExit's own agent/planning-tab
+		// checks are independent of decide-post state), so the same
+		// keypress can never be interpreted by both. A future change to
+		// either gate must preserve this invariant rather than letting
+		// both fire on one keypress.
+		if m.decidePostConfirmState == decidePostConfirmAwaiting {
 			input := strings.ToLower(strings.TrimSpace(msg.String()))
 			switch input {
 			case "y", "yes":
-				// Create a NEW context for the live run — the dry-run's
-				// context is already done; do not reuse it.
-				ctx, cancel := context.WithCancel(context.Background())
-				m.finalizeCancel = cancel
-
-				// Visibly demarcate the live-run output from the dry-run
-				// preview within the same window (see design spec,
-				// "Window Content Model") by appending a separator line
-				// directly to the shared OutputCapture, so
-				// AppendFromCapture's "just re-render the whole buffer"
-				// logic stays uniform with no special-casing.
-				if m.finalizeCapture != nil {
-					m.finalizeCapture.AddLine("─── Posting live ───")
-				}
-				// Reset the comparison baseline (not the counter itself)
-				// so the poll loop's next tick treats the live run's
-				// fresh output as new, mirroring how LogTab never resets
-				// its ring buffer, only its last-seen counter.
-				m.finalizeLastGen = 0
-
-				m.finalizeState = finalizeLiveRunning
-				m.footerManager.SetTransientMessage("Posting live via finalize-reviews.sh...")
-				m = m.appendActivity(m.styles.Activity.Render("Posting live via finalize-reviews.sh..."))
-
-				return m, tea.Batch(
-					runFinalizeCmd(ctx, false, m.finalizeCapture, cancel),
-					pollFinalizeOutputCmd(),
-				)
+				m.decidePostConfirmState = decidePostConfirmIdle
+				rec := m.decidePostPending
+				verdict := m.decidePostVerdict
+				m = m.appendActivity(m.styles.Activity.Render(
+					fmt.Sprintf("Posting review for %s#%d...", rec.Repo, rec.PR)))
+				return m, launchDecidePostCmd(rec, verdict)
 			case "n", "no", "esc":
-				m.finalizeState = finalizeIdle
-				// Calling an already-fired CancelFunc is always safe/no-op
-				// per the context package's own contract — the dry-run's
-				// subprocess has already exited by this point since we
-				// only reach finalizeAwaitingConfirmation after
-				// finalizeDryRunMsg.
-				if m.finalizeCancel != nil {
-					m.finalizeCancel()
-					m.finalizeCancel = nil
-				}
-				m.footerManager.SetTransientMessage("")
-				m = m.appendActivity(m.styles.Warning.Render("Live posting cancelled — nothing was posted."))
+				m.decidePostConfirmState = decidePostConfirmIdle
+				m = m.appendActivity(m.styles.Warning.Render(
+					"Post cancelled — no decision recorded, review left in pending/."))
 				return m, nil
 			default:
 				// Navigation/other key while awaiting confirmation: ignore
-				// entirely. No state change, no activity line — this is
-				// the fix for the silent-cancel-on-navigation trap (issue
-				// #102). Deliberately no return here: falling through lets
-				// this keypress still reach its normal handler further
+				// entirely. No state change, no activity line — mirrors the
+				// #102-fixed finalize confirm-gate's non-swallowing default
+				// arm exactly. Deliberately no return here: falling through
+				// lets this keypress still reach its normal handler further
 				// below in Update (tab switching via "[", "]", "f2",
-				// viewport scrolling via the arrow keys, etc.), so
-				// navigation continues to work exactly as it did before
-				// finalizeAwaitingConfirmation existed.
+				// viewport scrolling via the arrow keys, etc.).
 			}
 		}
 
@@ -2269,8 +2162,6 @@ func (m model) executeCommand(input string) (model, tea.Cmd) {
 			args = parts[1:]
 		}
 		return m.handleDecide(args)
-	case "finalize":
-		return m.handleFinalize(nil)
 	default:
 		m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("Unknown command: %s", cmd)))
 		return m, nil
