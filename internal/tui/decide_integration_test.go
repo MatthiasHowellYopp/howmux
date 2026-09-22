@@ -288,6 +288,44 @@ func driveToDecidePostAwaitingConfirmation(t *testing.T, spoolPath string) model
 	return result
 }
 
+// TestDecidePost_ZeroFindings_PromptOmitsCount verifies the confirm prompt
+// for a review with no parsed finding lines (e.g. an APPROVE with only
+// summary prose + verdict) says "Post review to owner/repo#N?" rather than
+// the misleading "Post 0 findings to ...". A zero-finding review is still
+// postable — PostReview posts the whole body regardless — so the gate must
+// still open; only the wording changes.
+func TestDecidePost_ZeroFindings_PromptOmitsCount(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "pending", "owner-repo-55.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("failed to create pending dir: %v", err)
+	}
+	// Spool body with a verdict and prose but NO "file:line - sev - ..."
+	// finding lines, so countFindings returns 0.
+	content := "---\n" +
+		"repo: owner/repo\n" +
+		"pr: 55\n" +
+		"verdict: APPROVE\n" +
+		"decision:\n" +
+		"decision_notes:\n" +
+		"---\n\n" +
+		"# Review\n\n" +
+		"Looks good overall, no blocking issues.\n\n" +
+		"VERDICT: APPROVE\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("failed to write test spool file: %v", err)
+	}
+
+	m := driveToDecidePostAwaitingConfirmation(t, path)
+
+	if !activityContains(m, "Post review to owner/repo#55?") {
+		t.Errorf("expected zero-findings prompt %q, activity lines: %v", "Post review to owner/repo#55?", m.activityLines)
+	}
+	if activityContains(m, "0 findings") {
+		t.Errorf("prompt must not contain the misleading \"0 findings\"; activity lines: %v", m.activityLines)
+	}
+}
+
 // TestDecidePost_NavigationKeyDoesNotCancel is the core regression guard
 // for the decide-post confirm gate (the direct analog of issue #102's
 // finalize confirm-gate fix, now for decide post): while
