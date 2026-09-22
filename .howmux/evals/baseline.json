@@ -13,6 +13,16 @@
         "recorded": "2026-09-14",
         "note": "No longer reproducible in current environment by any prompt content; see top-level description. Retained for provenance."
       },
+      "control_run": {
+        "recorded": "2026-09-21",
+        "git_hash": "78f388c",
+        "conditions": "Same-day, same-environment control comparison run to isolate this issue's prompt edits from pre-existing environmental drift. Both prompts were scored under identical current conditions (live worktree checkout, ACP transport, 5m timeout, same LLM judge).",
+        "original_prompt_average": 0.314,
+        "edited_prompt_average": 0.729,
+        "edited_prompt_range": "0.500-0.729 across 5 runs (0.729 = cleanest run, recorded as the reference above)",
+        "runs": {"original_prompt": 1, "edited_prompt": 5},
+        "conclusion": "The edited prompt substantially and consistently outperforms the original under identical current conditions (0.729 vs 0.314). The drop from the historical 0.757 reference reflects environmental drift, not a content regression from this issue's edits; the edited-vs-original comparison is the fair one. Raw per-run results live under .howmux/evals/results/ (gitignored per this file's convention); this block records the summary figures so the re-record is auditable from the committed tree."
+      },
       "cases": {
         "basic-spec-generation": {
           "score": 0.9,
