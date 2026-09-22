@@ -410,7 +410,21 @@ func TestRunReview_Cancellation(t *testing.T) {
 	timeNow = func() time.Time { return fixedTime }
 
 	// Install fake seams
+	baseDir := t.TempDir()
+	store := NewStore(baseDir)
+
+	// Capture the status persisted at the start of RunReview, before the
+	// review-tool call surfaces the cancellation. fetchDiffFunc runs after
+	// the initial StatusReviewing Save, so reading the record back here
+	// asserts that intermediate write explicitly — rather than inferring it
+	// only from the final reverted state, which would silently depend on
+	// BOTH the initial Save AND the revert Save landing (and on store.Save
+	// being context-unaware). See PR #116 review, finding 1.
+	var statusDuringWork Status
 	fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+		if r, found, err := store.Get(owner+"/"+repo, pr); err == nil && found {
+			statusDuringWork = r.Status
+		}
 		return os.WriteFile(outputFile, []byte("fake diff"), 0644)
 	}
 
@@ -424,9 +438,6 @@ func TestRunReview_Cancellation(t *testing.T) {
 			return []string{"/Users/test/PR-Review/pending/pr-review-owner-repo.md"}, nil
 		}
 	}
-
-	baseDir := t.TempDir()
-	store := NewStore(baseDir)
 
 	rec := Record{
 		Repo:       "owner/repo",
@@ -451,17 +462,35 @@ func TestRunReview_Cancellation(t *testing.T) {
 		t.Errorf("expected context.Canceled error, got: %v", err)
 	}
 
-	// Verify record was NOT updated (no save on cancellation)
-	_, found, err := store.Get("owner/repo", 5)
+	// The intermediate StatusReviewing write is asserted explicitly (via
+	// statusDuringWork, captured inside fetchDiffFunc) rather than only
+	// inferred from the reverted end-state — so the two guarantees (initial
+	// write landed; revert landed) are tested separately.
+	if statusDuringWork != StatusReviewing {
+		t.Errorf("expected StatusReviewing to be persisted before the review-tool call, got %q", statusDuringWork)
+	}
+
+	// Verify record reverted to StatusWatching: the StatusReviewing write at
+	// the top of RunReview persists via storeImpl.Save (not context-aware),
+	// so it lands even though ctx is already cancelled; the subsequent
+	// runReviewToolFunc failure (surfacing the cancellation) then reverts
+	// the record to StatusWatching via the normal error-revert path.
+	updated, found, err := store.Get("owner/repo", 5)
 	if err != nil {
 		t.Fatalf("failed to check record: %v", err)
 	}
-	if found {
-		t.Error("expected record to NOT exist (should not be saved on cancellation)")
+	if !found {
+		t.Fatal("expected record to exist (StatusReviewing write happens before the review-tool call observes cancellation)")
+	}
+	if updated.Status != StatusWatching {
+		t.Errorf("expected record reverted to StatusWatching after cancellation, got %q", updated.Status)
 	}
 }
 
-// TestRunReview_DiffFetchFailure verifies error handling for diff fetch failure
+// TestRunReview_DiffFetchFailure verifies error handling for diff fetch
+// failure: RunReview persists StatusReviewing before the diff fetch runs,
+// so on failure the record exists but is reverted to StatusWatching rather
+// than left stuck on StatusReviewing.
 func TestRunReview_DiffFetchFailure(t *testing.T) {
 	// Save and restore original seams
 	origFetchDiff := fetchDiffFunc
@@ -510,13 +539,19 @@ func TestRunReview_DiffFetchFailure(t *testing.T) {
 		t.Errorf("unexpected error message: %v", err)
 	}
 
-	// Verify record was NOT saved
-	_, found, err := store.Get("owner/repo", 1)
+	// Verify record reverted to StatusWatching: RunReview now saves a
+	// StatusReviewing record before the diff fetch runs, then reverts it to
+	// StatusWatching on failure, so the record exists but is no longer
+	// stuck on StatusReviewing.
+	updated, found, err := store.Get("owner/repo", 1)
 	if err != nil {
 		t.Fatalf("failed to check record: %v", err)
 	}
-	if found {
-		t.Error("expected record to NOT exist (should not be saved on failure)")
+	if !found {
+		t.Fatal("expected record to exist (StatusReviewing write happens before diff fetch)")
+	}
+	if updated.Status != StatusWatching {
+		t.Errorf("expected record reverted to StatusWatching after diff-fetch failure, got %q", updated.Status)
 	}
 }
 
@@ -577,13 +612,17 @@ func TestRunReview_ReviewToolFailure(t *testing.T) {
 		}
 	}
 
-	// Verify record was NOT saved
-	_, found, err := store.Get("owner/repo", 2)
+	// Verify record reverted to StatusWatching: a StatusReviewing record is
+	// saved before the review tool runs, then reverted on failure.
+	updated, found, err := store.Get("owner/repo", 2)
 	if err != nil {
 		t.Fatalf("failed to check record: %v", err)
 	}
-	if found {
-		t.Error("expected record to NOT exist (should not be saved on failure)")
+	if !found {
+		t.Fatal("expected record to exist (StatusReviewing write happens before review tool invocation)")
+	}
+	if updated.Status != StatusWatching {
+		t.Errorf("expected record reverted to StatusWatching after review-tool failure, got %q", updated.Status)
 	}
 }
 
@@ -941,13 +980,17 @@ Already finalized review body.
 		t.Errorf("expected error to mention the file being already finalized, got: %v", err)
 	}
 
-	// The record must never have been saved as StatusReviewed.
-	_, found, getErr := store.Get("testowner/testrepo", 43)
+	// The record must never have been saved as StatusReviewed — it reverts
+	// to StatusWatching via the WriteReviewedMetadata-failure revert path.
+	updated, found, getErr := store.Get("testowner/testrepo", 43)
 	if getErr != nil {
 		t.Fatalf("failed to check record: %v", getErr)
 	}
-	if found {
-		t.Error("expected record to NOT exist (should not be saved when metadata stamping fails)")
+	if !found {
+		t.Fatal("expected record to exist (StatusReviewing write happens before metadata stamping)")
+	}
+	if updated.Status != StatusWatching {
+		t.Errorf("expected record reverted to StatusWatching after metadata-stamping failure, got %q", updated.Status)
 	}
 
 	// The done/ fixture itself must be untouched (WriteReviewedMetadata
@@ -958,5 +1001,317 @@ Already finalized review body.
 	}
 	if string(afterDone) != fixture {
 		t.Errorf("expected done/ fixture to be untouched, got: %s", string(afterDone))
+	}
+}
+
+// TestRunReview_SetsStatusReviewingBeforeWork verifies that RunReview
+// persists rec.Status = StatusReviewing before any long-running work
+// (diff fetch, subprocess invocation) starts — not just "at some point"
+// during the run. The fake fetchDiffFunc reads the record back from the
+// store before writing the diff, capturing whatever status was persisted
+// at that moment.
+func TestRunReview_SetsStatusReviewingBeforeWork(t *testing.T) {
+	// Save and restore original seams
+	origFetchDiff := fetchDiffFunc
+	origRunReviewTool := runReviewToolFunc
+	origTimeNow := timeNow
+	defer func() {
+		fetchDiffFunc = origFetchDiff
+		runReviewToolFunc = origRunReviewTool
+		timeNow = origTimeNow
+	}()
+
+	fixedTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	timeNow = func() time.Time { return fixedTime }
+
+	baseDir := t.TempDir()
+	store := NewStore(baseDir)
+
+	var capturedStatus Status
+	fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+		rec, found, err := store.Get(owner+"/"+repo, pr)
+		if err != nil {
+			t.Fatalf("failed to read back record inside fetchDiffFunc: %v", err)
+		}
+		if !found {
+			t.Fatal("expected record to already exist inside fetchDiffFunc")
+		}
+		capturedStatus = rec.Status
+		return os.WriteFile(outputFile, []byte("fake diff"), 0644)
+	}
+
+	spoolPath := writeTestSpoolFixture(t, "pr-review-owner-repo.md")
+	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+		return []string{spoolPath}, nil
+	}
+
+	rec := Record{
+		Repo:       "owner/repo",
+		PR:         30,
+		URL:        "https://github.com/owner/repo/pull/30",
+		Status:     StatusWatching,
+		EnrolledAt: time.Now().Format(time.RFC3339),
+		ReviewDir:  "/tmp/review-30",
+	}
+
+	ctx := context.Background()
+	if err := RunReview(ctx, rec, "sha30", store, io.Discard); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if capturedStatus != StatusReviewing {
+		t.Errorf("expected status to be StatusReviewing before diff fetch, got %q", capturedStatus)
+	}
+}
+
+// saveSeqStore is a StoreInterface double whose Save fails on a chosen
+// call number (1-indexed), succeeding on all others, while recording the
+// status of the most recent Save it accepted. It lets a test drive the
+// distinct "first (StatusReviewing) Save succeeds, final (StatusReviewed)
+// Save fails" ordering that the FS-backed store cannot produce. Save is
+// called sequentially by RunReview, so no locking is needed.
+type saveSeqStore struct {
+	failOnCall  int // 1-indexed Save call to fail; 0 = never fail
+	saveCalls   int
+	lastSaved   Record
+	savedStatus Status // status of the last successfully-saved record
+}
+
+func (s *saveSeqStore) Save(rec Record) error {
+	s.saveCalls++
+	if s.failOnCall != 0 && s.saveCalls == s.failOnCall {
+		return fmt.Errorf("simulated save failure on call %d", s.saveCalls)
+	}
+	s.lastSaved = rec
+	s.savedStatus = rec.Status
+	return nil
+}
+func (s *saveSeqStore) Get(repo string, pr int) (Record, bool, error) {
+	if s.lastSaved.Repo == repo && s.lastSaved.PR == pr {
+		return s.lastSaved, true, nil
+	}
+	return Record{}, false, nil
+}
+func (s *saveSeqStore) List() ([]Record, error)          { return []Record{s.lastSaved}, nil }
+func (s *saveSeqStore) Remove(repo string, pr int) error { return nil }
+
+var _ StoreInterface = (*saveSeqStore)(nil)
+
+// TestRunReview_FinalSaveFailure_LeavesReviewing verifies the one error
+// branch that deliberately does NOT revert: if the final StatusReviewed
+// Save fails, RunReview returns "failed to update record" and the record's
+// last-persisted status honestly remains StatusReviewing (the reviewed
+// write never landed). This is the load-bearing "do not mask the failure
+// with a revert" decision from the spec — guard it so a future erroneous
+// revertToWatching on this branch is caught.
+func TestRunReview_FinalSaveFailure_LeavesReviewing(t *testing.T) {
+	origFetchDiff := fetchDiffFunc
+	origRunReviewTool := runReviewToolFunc
+	origTimeNow := timeNow
+	defer func() {
+		fetchDiffFunc = origFetchDiff
+		runReviewToolFunc = origRunReviewTool
+		timeNow = origTimeNow
+	}()
+
+	fixedTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	timeNow = func() time.Time { return fixedTime }
+
+	fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+		return os.WriteFile(outputFile, []byte("fake diff"), 0644)
+	}
+	spoolPath := writeTestSpoolFixture(t, "pr-review-owner-repo.md")
+	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+		return []string{spoolPath}, nil
+	}
+
+	// Save call 1 = the initial StatusReviewing write (succeeds); call 2 =
+	// the final StatusReviewed write (fails).
+	store := &saveSeqStore{failOnCall: 2}
+	rec := Record{Repo: "owner/repo", PR: 40, Status: StatusWatching}
+
+	err := RunReview(context.Background(), rec, "sha40", store, io.Discard)
+	if err == nil {
+		t.Fatal("expected error when the final StatusReviewed save fails")
+	}
+	if !strings.Contains(err.Error(), "failed to update record") {
+		t.Errorf("expected \"failed to update record\" error, got: %v", err)
+	}
+	// The reviewed write never landed, and this branch must NOT revert, so
+	// the last-persisted status is still StatusReviewing.
+	if store.savedStatus != StatusReviewing {
+		t.Errorf("expected on-disk status to remain StatusReviewing after a failed final save (no revert), got %q", store.savedStatus)
+	}
+	if store.saveCalls != 2 {
+		t.Errorf("expected exactly 2 Save calls (StatusReviewing + failed StatusReviewed), got %d — a 3rd would indicate an erroneous revert on this branch", store.saveCalls)
+	}
+}
+
+// TestRunReview_EmptyStdout_RevertsToWatching verifies the empty-stdout
+// early-return branch: when runReviewToolFunc returns no output lines,
+// RunReview returns a "produced no output" error and reverts the record to
+// StatusWatching rather than leaving it stuck on StatusReviewing.
+func TestRunReview_EmptyStdout_RevertsToWatching(t *testing.T) {
+	origFetchDiff := fetchDiffFunc
+	origRunReviewTool := runReviewToolFunc
+	origTimeNow := timeNow
+	defer func() {
+		fetchDiffFunc = origFetchDiff
+		runReviewToolFunc = origRunReviewTool
+		timeNow = origTimeNow
+	}()
+
+	fixedTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	timeNow = func() time.Time { return fixedTime }
+
+	fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+		return os.WriteFile(outputFile, []byte("fake diff"), 0644)
+	}
+	// Review tool succeeds but emits no spool-path line.
+	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+		return []string{}, nil
+	}
+
+	baseDir := t.TempDir()
+	store := NewStore(baseDir)
+	rec := Record{
+		Repo:       "owner/repo",
+		PR:         41,
+		URL:        "https://github.com/owner/repo/pull/41",
+		Status:     StatusWatching,
+		EnrolledAt: time.Now().Format(time.RFC3339),
+	}
+
+	err := RunReview(context.Background(), rec, "sha41", store, io.Discard)
+	if err == nil {
+		t.Fatal("expected error when the review tool produces no output")
+	}
+	if !strings.Contains(err.Error(), "produced no output") {
+		t.Errorf("expected \"produced no output\" error, got: %v", err)
+	}
+	updated, found, getErr := store.Get("owner/repo", 41)
+	if getErr != nil {
+		t.Fatalf("failed to check record: %v", getErr)
+	}
+	if !found {
+		t.Fatal("expected record to exist (StatusReviewing write happens before the empty-stdout check)")
+	}
+	if updated.Status != StatusWatching {
+		t.Errorf("expected record reverted to StatusWatching after empty stdout, got %q", updated.Status)
+	}
+}
+
+// TestRunReview_SpoolPathValidationFailure_RevertsToWatching verifies that
+// when runReviewToolFunc returns a line that fails validateSpoolPath's
+// format check, RunReview returns an error and the record reverts to
+// StatusWatching rather than remaining stuck on StatusReviewing.
+func TestRunReview_SpoolPathValidationFailure_RevertsToWatching(t *testing.T) {
+	// Save and restore original seams
+	origFetchDiff := fetchDiffFunc
+	origRunReviewTool := runReviewToolFunc
+	origTimeNow := timeNow
+	defer func() {
+		fetchDiffFunc = origFetchDiff
+		runReviewToolFunc = origRunReviewTool
+		timeNow = origTimeNow
+	}()
+
+	fixedTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	timeNow = func() time.Time { return fixedTime }
+
+	fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+		return os.WriteFile(outputFile, []byte("fake diff"), 0644)
+	}
+
+	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+		return []string{"not-a-spool-path.txt"}, nil
+	}
+
+	baseDir := t.TempDir()
+	store := NewStore(baseDir)
+
+	rec := Record{
+		Repo:       "owner/repo",
+		PR:         31,
+		URL:        "https://github.com/owner/repo/pull/31",
+		Status:     StatusWatching,
+		EnrolledAt: time.Now().Format(time.RFC3339),
+		ReviewDir:  "/tmp/review-31",
+	}
+
+	ctx := context.Background()
+	err := RunReview(ctx, rec, "sha31", store, io.Discard)
+	if err == nil {
+		t.Fatal("expected error from invalid spool path")
+	}
+	if !strings.Contains(err.Error(), "unexpected spool path") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+
+	updated, found, getErr := store.Get("owner/repo", 31)
+	if getErr != nil {
+		t.Fatalf("failed to check record: %v", getErr)
+	}
+	if !found {
+		t.Fatal("expected record to exist (StatusReviewing write happens before spool path validation)")
+	}
+	if updated.Status != StatusWatching {
+		t.Errorf("expected record reverted to StatusWatching after spool-path validation failure, got %q", updated.Status)
+	}
+}
+
+// TestRunReview_SuccessTransitionsOutOfReviewing verifies that on
+// successful completion, the final stored record shows StatusReviewed —
+// i.e., RunReview transitions the record OUT of StatusReviewing rather
+// than leaving it there.
+func TestRunReview_SuccessTransitionsOutOfReviewing(t *testing.T) {
+	// Save and restore original seams
+	origFetchDiff := fetchDiffFunc
+	origRunReviewTool := runReviewToolFunc
+	origTimeNow := timeNow
+	defer func() {
+		fetchDiffFunc = origFetchDiff
+		runReviewToolFunc = origRunReviewTool
+		timeNow = origTimeNow
+	}()
+
+	fixedTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	timeNow = func() time.Time { return fixedTime }
+
+	fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+		return os.WriteFile(outputFile, []byte("fake diff"), 0644)
+	}
+
+	spoolPath := writeTestSpoolFixture(t, "pr-review-owner-repo.md")
+	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+		return []string{spoolPath}, nil
+	}
+
+	baseDir := t.TempDir()
+	store := NewStore(baseDir)
+
+	rec := Record{
+		Repo:       "owner/repo",
+		PR:         32,
+		URL:        "https://github.com/owner/repo/pull/32",
+		Status:     StatusWatching,
+		EnrolledAt: time.Now().Format(time.RFC3339),
+		ReviewDir:  "/tmp/review-32",
+	}
+
+	ctx := context.Background()
+	if err := RunReview(ctx, rec, "sha32", store, io.Discard); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	updated, found, err := store.Get("owner/repo", 32)
+	if err != nil {
+		t.Fatalf("failed to get record: %v", err)
+	}
+	if !found {
+		t.Fatal("record not found")
+	}
+	if updated.Status != StatusReviewed {
+		t.Errorf("expected final status StatusReviewed (transitioned out of StatusReviewing), got %q", updated.Status)
 	}
 }
