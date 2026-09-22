@@ -213,3 +213,57 @@ func TestDecideReviewAction(t *testing.T) {
 		})
 	}
 }
+
+// TestDecideReviewAction_StaleReviewingRecordIsStillReviewable documents and
+// locks in the dedup invariant issue #115 depends on: decideReviewAction
+// decides purely from LastReviewedSHA / LastServicedRequest (write-once, at
+// the END of RunReview), never from Status. A record left on StatusReviewing
+// by a crashed/interrupted review — which by definition never reached the
+// completion write — must still be picked up as ActionReview on the next
+// poll, exactly as if the review had never started.
+func TestDecideReviewAction_StaleReviewingRecordIsStillReviewable(t *testing.T) {
+	reviewer := "test-reviewer"
+
+	t.Run("never-reviewed, crashed on first attempt", func(t *testing.T) {
+		pr := github.PR{
+			State:      "OPEN",
+			HeadRefOid: "new-sha",
+			ReviewRequests: []github.ReviewRequest{
+				{Login: reviewer},
+			},
+		}
+		rec := Record{
+			Repo:   "owner/repo",
+			PR:     1,
+			Status: StatusReviewing, // stuck from a crashed first review
+			// LastReviewedSHA / LastServicedRequest both empty: never completed
+		}
+
+		got := decideReviewAction(pr, rec, reviewer)
+		if got != ActionReview {
+			t.Errorf("decideReviewAction() = %v, want %v", got, ActionReview)
+		}
+	})
+
+	t.Run("previously reviewed, crashed reviewing a NEW commit", func(t *testing.T) {
+		pr := github.PR{
+			State:      "OPEN",
+			HeadRefOid: "new-sha",
+			ReviewRequests: []github.ReviewRequest{
+				{Login: reviewer},
+			},
+		}
+		rec := Record{
+			Repo:                "owner/repo",
+			PR:                  2,
+			Status:              StatusReviewing, // stuck from a crashed re-review
+			LastReviewedSHA:     "old-sha",
+			LastServicedRequest: "old-sha", // request for old-sha was serviced; new-sha's review crashed before completion
+		}
+
+		got := decideReviewAction(pr, rec, reviewer)
+		if got != ActionReview {
+			t.Errorf("decideReviewAction() = %v, want %v", got, ActionReview)
+		}
+	})
+}

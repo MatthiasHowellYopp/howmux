@@ -87,6 +87,19 @@ func validateSpoolPath(p string) error {
 	return nil
 }
 
+// revertToWatching reverts rec to StatusWatching and persists it, used on
+// every error exit from RunReview so a record can never remain stuck on
+// StatusReviewing after a failed/aborted review attempt. A Save failure
+// here is logged, not returned — the caller's original error takes
+// precedence, and a record left on StatusReviewing is still re-reviewable
+// on the next poll (decideReviewAction does not read Status).
+func revertToWatching(storeImpl StoreInterface, rec Record) {
+	rec.Status = StatusWatching
+	if err := storeImpl.Save(rec); err != nil {
+		logging.Warn("failed to revert record to StatusWatching after review error", "repo", rec.Repo, "pr", rec.PR, "error", err)
+	}
+}
+
 // RunReview orchestrates a complete PR review via subprocess invocation of pr_review.py
 // Fetches diff → runs pr_review.py → captures spool path → updates record
 func RunReview(ctx context.Context, rec Record, headSHA string, storeImpl StoreInterface, tabWriter io.Writer) error {
@@ -96,6 +109,15 @@ func RunReview(ctx context.Context, rec Record, headSHA string, storeImpl StoreI
 		return fmt.Errorf("invalid repo format: %s (expected owner/name)", rec.Repo)
 	}
 	owner, repo := parts[0], parts[1]
+
+	// Persist StatusReviewing before any long-running work starts, so the
+	// Reviews tab can show this PR as "reviewing" for the duration of the
+	// review. If this write itself fails, bail out immediately rather than
+	// proceeding with an un-persisted status.
+	rec.Status = StatusReviewing
+	if err := storeImpl.Save(rec); err != nil {
+		return fmt.Errorf("failed to persist reviewing status: %w", err)
+	}
 
 	logging.Info("starting PR review", "repo", rec.Repo, "pr", rec.PR, "sha", headSHA)
 
@@ -110,6 +132,7 @@ func RunReview(ctx context.Context, rec Record, headSHA string, storeImpl StoreI
 
 	// Fetch PR diff via gh CLI
 	if err := fetchDiffFunc(ctx, owner, repo, rec.PR, diffPath); err != nil {
+		revertToWatching(storeImpl, rec)
 		return fmt.Errorf("failed to fetch PR diff: %w", err)
 	}
 	logging.Debug("fetched PR diff", "file", diffPath)
@@ -129,6 +152,7 @@ func RunReview(ctx context.Context, rec Record, headSHA string, storeImpl StoreI
 	// Run pr_review.py with stderr streaming to tabWriter and stdout capture
 	stdoutLines, err := runReviewToolFunc(ctx, argv, tabWriter)
 	if err != nil {
+		revertToWatching(storeImpl, rec)
 		return fmt.Errorf("pr_review.py invocation failed: %w", err)
 	}
 
@@ -137,10 +161,12 @@ func RunReview(ctx context.Context, rec Record, headSHA string, storeImpl StoreI
 	// contract before persisting — a silently-wrong SpoolPath would only
 	// surface downstream when finalize tries to drain it, far from the cause.
 	if len(stdoutLines) == 0 {
+		revertToWatching(storeImpl, rec)
 		return fmt.Errorf("pr_review.py produced no output (expected spool path)")
 	}
 	spoolPath := stdoutLines[len(stdoutLines)-1]
 	if err := validateSpoolPath(spoolPath); err != nil {
+		revertToWatching(storeImpl, rec)
 		return fmt.Errorf("pr_review.py returned an unexpected spool path %q: %w", spoolPath, err)
 	}
 	logging.Debug("review completed", "spool_path", spoolPath)
@@ -154,6 +180,7 @@ func RunReview(ctx context.Context, rec Record, headSHA string, storeImpl StoreI
 	// so the two stay consistent.
 	generatedAt := timeNow()
 	if err := WriteReviewedMetadata(spoolPath, headSHA, generatedAt); err != nil {
+		revertToWatching(storeImpl, rec)
 		return fmt.Errorf("failed to stamp reviewed metadata into spool file %s: %w", spoolPath, err)
 	}
 
@@ -164,7 +191,11 @@ func RunReview(ctx context.Context, rec Record, headSHA string, storeImpl StoreI
 	rec.LastServicedRequest = headSHA
 	rec.SpoolPath = spoolPath
 
-	// Save record atomically
+	// Save record atomically. No revertToWatching here: this Save call IS
+	// the attempted transition out of StatusReviewing. If it fails, the
+	// write never landed, so the record honestly remains StatusReviewing on
+	// disk — which is still safely re-reviewable on the next poll, since
+	// decideReviewAction never reads Status.
 	if err := storeImpl.Save(rec); err != nil {
 		return fmt.Errorf("failed to update record: %w", err)
 	}
