@@ -748,6 +748,17 @@ func TestReviewsTabSelectedRowStatusStaysLegible(t *testing.T) {
 	}
 	successPrefix := ansiPrefix(unselectedDoneANSI, string(review.StatusDone))
 
+	// Precondition: this test only means anything when lipgloss is actually
+	// emitting ANSI color. If the color profile is downgraded (NO_COLOR set,
+	// non-TTY CI, Ascii profile, or a future lipgloss default change), every
+	// prefix below collapses to "" and the guarded assertions would pass
+	// while asserting nothing — silently neutering this regression guard.
+	// Fail loudly instead so a colorless environment is a visible failure,
+	// not a green no-op (see PR #113 review).
+	if successPrefix == "" {
+		t.Fatalf("color rendering appears disabled (Success prefix is empty): this test cannot verify the #112 regression without ANSI color; check the lipgloss color profile / NO_COLOR")
+	}
+
 	lines := strings.Split(view, "\n")
 	var selectedLine string
 	for _, line := range lines[1:] { // skip header
@@ -760,7 +771,7 @@ func TestReviewsTabSelectedRowStatusStaysLegible(t *testing.T) {
 		t.Fatalf("expected to find the selected row (owner/repo-a) in view, got %q", view)
 	}
 
-	if successPrefix != "" && strings.Contains(selectedLine, successPrefix) {
+	if strings.Contains(selectedLine, successPrefix) {
 		t.Errorf("selected row's STATUS still carries the normal Success color sequence %q — expected it overridden by the highlight foreground; line: %q", successPrefix, selectedLine)
 	}
 
@@ -772,7 +783,10 @@ func TestReviewsTabSelectedRowStatusStaysLegible(t *testing.T) {
 		lipgloss.NewStyle().Foreground(highlightForeground).Render(string(review.StatusDone)),
 		string(review.StatusDone),
 	)
-	if expectedSelectedStatusPrefix != "" && !strings.Contains(selectedLine, expectedSelectedStatusPrefix) {
+	if expectedSelectedStatusPrefix == "" {
+		t.Fatalf("color rendering appears disabled (highlight-foreground prefix is empty): this test cannot verify the #112 regression without ANSI color; check the lipgloss color profile / NO_COLOR")
+	}
+	if !strings.Contains(selectedLine, expectedSelectedStatusPrefix) {
 		t.Errorf("expected selected row's STATUS to carry the highlight foreground sequence %q, got line %q", expectedSelectedStatusPrefix, selectedLine)
 	}
 
@@ -790,7 +804,10 @@ func TestReviewsTabSelectedRowStatusStaysLegible(t *testing.T) {
 		t.Fatalf("expected to find the unselected row (owner/repo-b) in view, got %q", view)
 	}
 	unselectedWarningPrefix := ansiPrefix(styles.Warning.Render(string(review.StatusReviewing)), string(review.StatusReviewing))
-	if unselectedWarningPrefix != "" && !strings.Contains(unselectedLine, unselectedWarningPrefix) {
+	if unselectedWarningPrefix == "" {
+		t.Fatalf("color rendering appears disabled (Warning prefix is empty): this test cannot verify the #112 regression without ANSI color; check the lipgloss color profile / NO_COLOR")
+	}
+	if !strings.Contains(unselectedLine, unselectedWarningPrefix) {
 		t.Errorf("expected unselected row's STATUS to keep its normal Warning color sequence %q, got line %q", unselectedWarningPrefix, unselectedLine)
 	}
 }
