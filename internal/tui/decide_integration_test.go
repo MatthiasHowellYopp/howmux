@@ -324,6 +324,44 @@ func TestDecidePost_ZeroFindings_PromptOmitsCount(t *testing.T) {
 	if activityContains(m, "0 findings") {
 		t.Errorf("prompt must not contain the misleading \"0 findings\"; activity lines: %v", m.activityLines)
 	}
+
+	// Confirming a zero-finding review must still post it — PostReview posts
+	// the whole body (summary + verdict) regardless of inline-comment count.
+	// Press 'y' and assert the post launch actually fires, so a future
+	// early-return like `if count == 0 { return }` in the y branch can't
+	// silently break the documented behavior while the prompt assertions
+	// above still pass. Mirrors TestDecidePost_YKeyPostsAndArchives with a
+	// zero-finding body.
+	var calledWith review.Record
+	var callCount int
+	restore := stubPostReviewFunc(func(ctx context.Context, rec review.Record) (int, error) {
+		calledWith = rec
+		callCount++
+		return 0, nil
+	})
+	defer restore()
+
+	updated, cmd := m.Update(pressKey('y'))
+	m2, ok := updated.(model)
+	if !ok {
+		t.Fatalf("Update did not return a model")
+	}
+	if cmd == nil {
+		t.Fatalf("expected a non-nil tea.Cmd for the post launch, got nil")
+	}
+
+	completeMsg := drainBatchForType[decidePostCompleteMsg](t, cmd)
+	final, _ := m2.Update(completeMsg)
+	if _, ok := final.(model); !ok {
+		t.Fatalf("Update did not return a model")
+	}
+
+	if callCount != 1 {
+		t.Fatalf("expected postReviewFunc to be called exactly once for a zero-finding post, got %d", callCount)
+	}
+	if calledWith.Repo != "owner/repo" || calledWith.PR != 55 {
+		t.Errorf("expected postReviewFunc called with owner/repo#55, got %+v", calledWith)
+	}
 }
 
 // TestDecidePost_NavigationKeyDoesNotCancel is the core regression guard
