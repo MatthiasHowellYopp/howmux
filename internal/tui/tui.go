@@ -1047,9 +1047,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			mouse := msg.Mouse()
 			// Check if click is in the tab header area (first line)
 			if mouse.Y < tabHeaderHeight {
+				// Capture the set of review content tab IDs before the
+				// click so we can tell, by diffing against the set after,
+				// whether this click closed a review content tab (either
+				// the active one or a non-active one clicked directly).
+				// See findReviewsTabIndex/reviewContentTabIDs for context;
+				// this mirrors the "esc" handler's redirect-to-Reviews
+				// behavior for the mouse-click and ctrl+w close paths.
+				before := reviewContentTabIDs(m.tabManager)
 				m.tabManager.HandleTabHeaderClick(mouse.X)
 				// Check if log tab was closed
 				m.checkLogTabClosed()
+
+				if len(reviewContentTabIDs(m.tabManager)) < len(before) {
+					if reviewsIdx := m.findReviewsTabIndex(); reviewsIdx >= 0 {
+						var cmd tea.Cmd
+						m, cmd = m.switchActiveTab(reviewsIdx)
+						return m, cmd
+					}
+				}
 				return m, nil
 			}
 
@@ -1386,7 +1402,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m = m.appendActivity(m.styles.Warning.Render(fmt.Sprintf("Warning during logging deactivation: %v", err)))
 				}
 			}
+			// Same before/after review-content-tab diff and Reviews
+			// redirect as the mouse-click close path above; see
+			// reviewContentTabIDs.
+			before := reviewContentTabIDs(m.tabManager)
 			m.tabManager.CloseCurrentTab()
+			if len(reviewContentTabIDs(m.tabManager)) < len(before) {
+				if reviewsIdx := m.findReviewsTabIndex(); reviewsIdx >= 0 {
+					var cmd tea.Cmd
+					m, cmd = m.switchActiveTab(reviewsIdx)
+					return m, cmd
+				}
+			}
 			return m, nil
 		case "up", "down", "pgup", "pgdown", "home", "end":
 			// Dropdown navigation takes precedence over any tab-specific
@@ -2365,6 +2392,29 @@ func (m *model) checkLogTabClosed() {
 			log.Printf("Error deactivating logging after tab close: %v", err)
 		}
 	}
+}
+
+// reviewContentTabIDs returns the IDs of all TabTypeReviewContent tabs
+// currently in tm, in tm.GetTabs() order. Callers that close a tab via a
+// path other than the dedicated "esc" handler (mouse-click on a header's
+// close button, "ctrl+w") capture this before a close and compare the
+// count against the count after — a drop means a review content tab was
+// the one just closed, without needing CloseTab/HandleTabHeaderClick to
+// report which tab type they removed. A count comparison is sufficient
+// because those close paths remove at most one tab per invocation, so a
+// length drop unambiguously identifies a single review-content close. The
+// IDs (rather than a bare count) are returned so a caller that needs to
+// know *which* tab closed can diff the lists, but the current callers only
+// need the length. See the "esc" handler above for the reference behavior
+// this is mirroring.
+func reviewContentTabIDs(tm *TabManager) []string {
+	var ids []string
+	for _, tab := range tm.GetTabs() {
+		if tab.Type() == TabTypeReviewContent {
+			ids = append(ids, tab.ID())
+		}
+	}
+	return ids
 }
 
 // findReviewsTabIndex returns the index of the permanent Reviews tab. The
