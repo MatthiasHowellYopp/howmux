@@ -266,4 +266,35 @@ func TestDecideReviewAction_StaleReviewingRecordIsStillReviewable(t *testing.T) 
 			t.Errorf("decideReviewAction() = %v, want %v", got, ActionReview)
 		}
 	})
+
+	// Contrast case: the two subtests above both reach ActionReview via a SHA
+	// mismatch, so on their own they'd still pass even if decideReviewAction
+	// started reading Status. This case pins the actual invariant — that the
+	// decision is INVARIANT across Status — by running the identical PR +
+	// record under every Status value and asserting the result never changes.
+	// If a future change made the action depend on Status, one of these rows
+	// would diverge and fail. See PR #116 review, finding 3.
+	t.Run("action is invariant across Status value", func(t *testing.T) {
+		pr := github.PR{
+			State:      "OPEN",
+			HeadRefOid: "new-sha",
+			ReviewRequests: []github.ReviewRequest{
+				{Login: reviewer},
+			},
+		}
+		base := Record{
+			Repo:                "owner/repo",
+			PR:                  3,
+			LastReviewedSHA:     "old-sha",
+			LastServicedRequest: "old-sha", // request for new-sha is unserviced → ActionReview
+		}
+
+		for _, status := range []Status{StatusWatching, StatusReviewing, StatusReviewed, StatusDone} {
+			rec := base
+			rec.Status = status
+			if got := decideReviewAction(pr, rec, reviewer); got != ActionReview {
+				t.Errorf("decideReviewAction() with Status=%q = %v, want %v (action must not depend on Status)", status, got, ActionReview)
+			}
+		}
+	})
 }
