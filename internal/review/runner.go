@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/matthiashowellyopp/howmux/internal/logging"
+	"github.com/matthiashowellyopp/howmux/internal/notify"
 )
 
 // Injectable command seams for subprocess execution
@@ -62,6 +63,12 @@ var runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io
 
 // Injectable seam for time (used for timestamps)
 var timeNow = time.Now
+
+// notifyFunc is an injectable seam over notify.Notify, mirroring the
+// fetchDiffFunc/runReviewToolFunc/timeNow pattern above, so tests can
+// substitute a fake without touching internal/notify or shelling out to
+// osascript for real.
+var notifyFunc = notify.Notify
 
 // validateSpoolPath checks that a captured stdout line looks like the spool
 // path pr_review.py is expected to emit (…/PR-Review/pending/<name>.md). This
@@ -199,6 +206,25 @@ func RunReview(ctx context.Context, rec Record, headSHA string, storeImpl StoreI
 	if err := storeImpl.Save(rec); err != nil {
 		return fmt.Errorf("failed to update record: %w", err)
 	}
+
+	// Fire a best-effort, non-blocking notification that the review is
+	// ready. This runs in its own goroutine so a slow/hung osascript
+	// process cannot add latency to RunReview's return, and its failure
+	// is logged, never propagated — this is the success path only, since
+	// every earlier failure in this function returns before reaching here.
+	//
+	// Read the notifyFunc seam here, on RunReview's goroutine, and close over
+	// the local copy rather than the package global. The background goroutine
+	// then never reads notifyFunc, so a test that restores the seam in
+	// t.Cleanup after synchronizing on the notification cannot race the
+	// goroutine's read of it (the read now happens-before RunReview returns).
+	notifyFn := notifyFunc
+	go func(repo string, pr int) {
+		msg := fmt.Sprintf("Review ready: %s #%d", repo, pr)
+		if err := notifyFn("howmux", msg); err != nil {
+			logging.Warn("failed to send review-complete notification", "repo", repo, "pr", pr, "error", err)
+		}
+	}(rec.Repo, rec.PR)
 
 	logging.Info("PR review completed", "repo", rec.Repo, "pr", rec.PR, "sha", headSHA, "spool", spoolPath)
 
