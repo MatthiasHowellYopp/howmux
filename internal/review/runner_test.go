@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -1313,5 +1314,409 @@ func TestRunReview_SuccessTransitionsOutOfReviewing(t *testing.T) {
 	}
 	if updated.Status != StatusReviewed {
 		t.Errorf("expected final status StatusReviewed (transitioned out of StatusReviewing), got %q", updated.Status)
+	}
+}
+
+// notifyCall records a single invocation of the notifyFunc seam.
+type notifyCall struct {
+	title   string
+	message string
+}
+
+// fakeNotifyRecorder installs a fake notifyFunc that appends every call to
+// calls (guarded by mu, since the real call happens on a background
+// goroutine) and signals done exactly once per call so tests can
+// synchronize without sleeping.
+func installFakeNotifyRecorder(t *testing.T) (calls func() []notifyCall, done chan notifyCall) {
+	t.Helper()
+	origNotify := notifyFunc
+	t.Cleanup(func() { notifyFunc = origNotify })
+
+	var mu sync.Mutex
+	var recorded []notifyCall
+	done = make(chan notifyCall, 8)
+
+	notifyFunc = func(title, message string) error {
+		mu.Lock()
+		recorded = append(recorded, notifyCall{title: title, message: message})
+		mu.Unlock()
+		done <- notifyCall{title: title, message: message}
+		return nil
+	}
+
+	calls = func() []notifyCall {
+		mu.Lock()
+		defer mu.Unlock()
+		out := make([]notifyCall, len(recorded))
+		copy(out, recorded)
+		return out
+	}
+	return calls, done
+}
+
+// waitForNotify blocks until either a call arrives on done or the timeout
+// elapses, returning (call, true) or (zero, false). Bounded select instead
+// of time.Sleep so this cannot flake by racing the background goroutine.
+func waitForNotify(t *testing.T, done chan notifyCall, timeout time.Duration) (notifyCall, bool) {
+	t.Helper()
+	select {
+	case c := <-done:
+		return c, true
+	case <-time.After(timeout):
+		return notifyCall{}, false
+	}
+}
+
+// TestRunReview_Notify_SuccessPath verifies that on a fully successful
+// RunReview, notifyFunc is invoked exactly once, in the background, with the
+// expected "Review ready: <repo> #<pr>" message and "howmux" title.
+func TestRunReview_Notify_SuccessPath(t *testing.T) {
+	origFetchDiff := fetchDiffFunc
+	origRunReviewTool := runReviewToolFunc
+	origTimeNow := timeNow
+	defer func() {
+		fetchDiffFunc = origFetchDiff
+		runReviewToolFunc = origRunReviewTool
+		timeNow = origTimeNow
+	}()
+
+	fixedTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	timeNow = func() time.Time { return fixedTime }
+
+	fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+		return os.WriteFile(outputFile, []byte("fake diff"), 0644)
+	}
+
+	spoolPath := writeTestSpoolFixture(t, "pr-review-notify-owner-repo.md")
+	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+		return []string{spoolPath}, nil
+	}
+
+	calls, done := installFakeNotifyRecorder(t)
+
+	baseDir := t.TempDir()
+	store := NewStore(baseDir)
+
+	rec := Record{
+		Repo:       "notifyowner/notifyrepo",
+		PR:         77,
+		URL:        "https://github.com/notifyowner/notifyrepo/pull/77",
+		Status:     StatusWatching,
+		EnrolledAt: time.Now().Format(time.RFC3339),
+		ReviewDir:  "/tmp/review-77",
+	}
+
+	ctx := context.Background()
+	if err := RunReview(ctx, rec, "sha77", store, io.Discard); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	call, ok := waitForNotify(t, done, 2*time.Second)
+	if !ok {
+		t.Fatal("timed out waiting for notifyFunc to be called")
+	}
+
+	if call.title != "howmux" {
+		t.Errorf("expected notification title %q, got %q", "howmux", call.title)
+	}
+	wantMsg := "Review ready: notifyowner/notifyrepo #77"
+	if call.message != wantMsg {
+		t.Errorf("expected notification message %q, got %q", wantMsg, call.message)
+	}
+
+	// Give any accidental duplicate/async second call a chance to land
+	// before asserting exactly one call was recorded.
+	select {
+	case extra := <-done:
+		t.Fatalf("expected exactly one notifyFunc call, got an extra one: %+v", extra)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if got := calls(); len(got) != 1 {
+		t.Fatalf("expected exactly 1 recorded notifyFunc call, got %d: %+v", len(got), got)
+	}
+}
+
+// TestRunReview_Notify_NotCalledOnFailure verifies notifyFunc is never
+// invoked when RunReview fails at any of its existing failure points.
+func TestRunReview_Notify_NotCalledOnFailure(t *testing.T) {
+	origFetchDiff := fetchDiffFunc
+	origRunReviewTool := runReviewToolFunc
+	origTimeNow := timeNow
+	defer func() {
+		fetchDiffFunc = origFetchDiff
+		runReviewToolFunc = origRunReviewTool
+		timeNow = origTimeNow
+	}()
+
+	fixedTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	timeNow = func() time.Time { return fixedTime }
+
+	type setup struct {
+		name          string
+		fetchDiff     func(ctx context.Context, owner, repo string, pr int, outputFile string) error
+		runReviewTool func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error)
+	}
+
+	// Fixture for the "invalid spool path" case: runReviewToolFunc returns
+	// a stdout line that fails validateSpoolPath's format check.
+	tests := []setup{
+		{
+			name: "diff fetch failure",
+			fetchDiff: func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+				return fmt.Errorf("gh pr diff failed: network error")
+			},
+			runReviewTool: func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+				t.Fatal("runReviewToolFunc should not be called when diff fetch fails")
+				return nil, nil
+			},
+		},
+		{
+			name: "tool invocation failure",
+			fetchDiff: func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+				return os.WriteFile(outputFile, []byte("fake diff"), 0644)
+			},
+			runReviewTool: func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+				return nil, fmt.Errorf("pr_review.py failed: exit code 1")
+			},
+		},
+		{
+			name: "empty stdout",
+			fetchDiff: func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+				return os.WriteFile(outputFile, []byte("fake diff"), 0644)
+			},
+			runReviewTool: func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+				return nil, nil
+			},
+		},
+		{
+			name: "invalid spool path",
+			fetchDiff: func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+				return os.WriteFile(outputFile, []byte("fake diff"), 0644)
+			},
+			runReviewTool: func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+				return []string{"not-a-valid-spool-path"}, nil
+			},
+		},
+		{
+			name: "WriteReviewedMetadata failure (already finalized done/)",
+			fetchDiff: func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+				return os.WriteFile(outputFile, []byte("fake diff"), 0644)
+			},
+			runReviewTool: func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+				prReviewRoot := t.TempDir()
+				donedir := filepath.Join(prReviewRoot, "PR-Review", "done")
+				if err := os.MkdirAll(donedir, 0755); err != nil {
+					t.Fatalf("failed to create done dir: %v", err)
+				}
+				pendingPath := filepath.Join(prReviewRoot, "PR-Review", "pending", "pr-review-notifyowner-notifyrepo-90.md")
+				donePath := filepath.Join(donedir, "pr-review-notifyowner-notifyrepo-90.md")
+				fixture := `---
+repo: notifyowner/notifyrepo
+pr: 90
+verdict: APPROVE
+decision: post
+decision_notes:
+diff_file: /tmp/pr-90-123.diff
+generated:
+---
+
+Already finalized review body.
+`
+				if err := os.WriteFile(donePath, []byte(fixture), 0644); err != nil {
+					t.Fatalf("failed to write done fixture: %v", err)
+				}
+				return []string{pendingPath}, nil
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fetchDiffFunc = tt.fetchDiff
+			runReviewToolFunc = tt.runReviewTool
+
+			calls, done := installFakeNotifyRecorder(t)
+
+			baseDir := t.TempDir()
+			store := NewStore(baseDir)
+
+			rec := Record{
+				Repo:       "notifyowner/notifyrepo",
+				PR:         90,
+				URL:        "https://github.com/notifyowner/notifyrepo/pull/90",
+				Status:     StatusWatching,
+				EnrolledAt: time.Now().Format(time.RFC3339),
+				ReviewDir:  "/tmp/review-90",
+			}
+
+			ctx := context.Background()
+			err := RunReview(ctx, rec, "shaFail", store, io.Discard)
+			if err == nil {
+				t.Fatalf("expected RunReview to fail for case %q, got nil error", tt.name)
+			}
+
+			// Give a wrongly-fired background goroutine a bounded window
+			// to show up before asserting it never did.
+			select {
+			case c := <-done:
+				t.Fatalf("expected notifyFunc to NOT be called on failure path %q, but got: %+v", tt.name, c)
+			case <-time.After(200 * time.Millisecond):
+			}
+
+			if got := calls(); len(got) != 0 {
+				t.Fatalf("expected 0 notifyFunc calls on failure path %q, got %d: %+v", tt.name, len(got), got)
+			}
+		})
+	}
+}
+
+// TestRunReview_Notify_StoreSaveFailure_NotCalled verifies notifyFunc is
+// never invoked when storeImpl.Save fails, using a fake StoreInterface
+// implementation rather than the real Store (Save failure on the real
+// filesystem-backed Store is hard to force deterministically).
+func TestRunReview_Notify_StoreSaveFailure_NotCalled(t *testing.T) {
+	origFetchDiff := fetchDiffFunc
+	origRunReviewTool := runReviewToolFunc
+	origTimeNow := timeNow
+	defer func() {
+		fetchDiffFunc = origFetchDiff
+		runReviewToolFunc = origRunReviewTool
+		timeNow = origTimeNow
+	}()
+
+	fixedTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	timeNow = func() time.Time { return fixedTime }
+
+	fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+		return os.WriteFile(outputFile, []byte("fake diff"), 0644)
+	}
+
+	spoolPath := writeTestSpoolFixture(t, "pr-review-notify-save-failure.md")
+	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+		return []string{spoolPath}, nil
+	}
+
+	calls, done := installFakeNotifyRecorder(t)
+
+	failingStore := &failingSaveStore{saveErr: fmt.Errorf("simulated disk full")}
+
+	rec := Record{
+		Repo:       "notifyowner/notifyrepo",
+		PR:         91,
+		URL:        "https://github.com/notifyowner/notifyrepo/pull/91",
+		Status:     StatusWatching,
+		EnrolledAt: time.Now().Format(time.RFC3339),
+		ReviewDir:  "/tmp/review-91",
+	}
+
+	ctx := context.Background()
+	err := RunReview(ctx, rec, "shaSaveFail", failingStore, io.Discard)
+	if err == nil {
+		t.Fatal("expected error from storeImpl.Save failure")
+	}
+	// failingSaveStore fails on every Save, so RunReview bails at the first
+	// one — the StatusReviewing persist that guards the review (added with
+	// the reviewing-status feature). Whichever Save fails, the invariant this
+	// test guards is the same: no notification fires on a Save failure.
+	if !strings.Contains(err.Error(), "failed to persist reviewing status") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+
+	select {
+	case c := <-done:
+		t.Fatalf("expected notifyFunc to NOT be called when storeImpl.Save fails, but got: %+v", c)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	if got := calls(); len(got) != 0 {
+		t.Fatalf("expected 0 notifyFunc calls when storeImpl.Save fails, got %d: %+v", len(got), got)
+	}
+}
+
+// failingSaveStore is a minimal StoreInterface fake whose Save always
+// fails, used to exercise RunReview's storeImpl.Save error path
+// deterministically (the real filesystem-backed Store has no easy seam to
+// force a Save failure).
+type failingSaveStore struct {
+	saveErr error
+}
+
+func (f *failingSaveStore) Save(rec Record) error {
+	return f.saveErr
+}
+
+func (f *failingSaveStore) Get(repo string, pr int) (Record, bool, error) {
+	return Record{}, false, nil
+}
+
+func (f *failingSaveStore) List() ([]Record, error) {
+	return nil, nil
+}
+
+func (f *failingSaveStore) Remove(repo string, pr int) error {
+	return nil
+}
+
+// Verify failingSaveStore implements StoreInterface at compile time
+var _ StoreInterface = (*failingSaveStore)(nil)
+
+// TestRunReview_Notify_ErrorDoesNotFailRunReview verifies that when
+// notifyFunc itself returns an error, RunReview still returns nil overall —
+// a notification failure is best-effort and must never surface as a
+// RunReview error.
+func TestRunReview_Notify_ErrorDoesNotFailRunReview(t *testing.T) {
+	origFetchDiff := fetchDiffFunc
+	origRunReviewTool := runReviewToolFunc
+	origTimeNow := timeNow
+	origNotify := notifyFunc
+	defer func() {
+		fetchDiffFunc = origFetchDiff
+		runReviewToolFunc = origRunReviewTool
+		timeNow = origTimeNow
+		notifyFunc = origNotify
+	}()
+
+	fixedTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	timeNow = func() time.Time { return fixedTime }
+
+	fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+		return os.WriteFile(outputFile, []byte("fake diff"), 0644)
+	}
+
+	spoolPath := writeTestSpoolFixture(t, "pr-review-notify-error.md")
+	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+		return []string{spoolPath}, nil
+	}
+
+	notifyCalled := make(chan struct{}, 1)
+	notifyFunc = func(title, message string) error {
+		notifyCalled <- struct{}{}
+		return fmt.Errorf("simulated osascript failure")
+	}
+
+	baseDir := t.TempDir()
+	store := NewStore(baseDir)
+
+	rec := Record{
+		Repo:       "notifyowner/notifyrepo",
+		PR:         92,
+		URL:        "https://github.com/notifyowner/notifyrepo/pull/92",
+		Status:     StatusWatching,
+		EnrolledAt: time.Now().Format(time.RFC3339),
+		ReviewDir:  "/tmp/review-92",
+	}
+
+	ctx := context.Background()
+	err := RunReview(ctx, rec, "shaNotifyErr", store, io.Discard)
+	if err != nil {
+		t.Fatalf("expected RunReview to return nil despite notifyFunc error, got: %v", err)
+	}
+
+	select {
+	case <-notifyCalled:
+		// notifyFunc was invoked as expected; its error was swallowed.
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for notifyFunc to be called")
 	}
 }

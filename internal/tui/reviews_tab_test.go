@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -19,11 +20,16 @@ import (
 type fakeReviewStore struct {
 	records []review.Record
 	listErr error
+
+	// listCalls counts List() invocations so tests can assert the Title()
+	// pending-count memo actually suppresses per-frame store scans.
+	listCalls int
 }
 
 var _ review.StoreInterface = (*fakeReviewStore)(nil)
 
 func (f *fakeReviewStore) List() ([]review.Record, error) {
+	f.listCalls++
 	return f.records, f.listErr
 }
 
@@ -522,6 +528,194 @@ func TestReviewsTabSpoolColumns(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestReviewsTabTitlePendingBadge covers Title()'s pending-count badge: zero
+// records, records present but none pending, N pending records, a mix of
+// pending/non-pending, and a store.List() error — all via the existing
+// spoolInfoForFunc seam (withFakeSpoolInfoFunc) used elsewhere in this file,
+// rather than inventing a second way to fake SpoolInfo/DecisionState.
+func TestReviewsTabTitlePendingBadge(t *testing.T) {
+	t.Run("zero records", func(t *testing.T) {
+		store := &fakeReviewStore{records: nil}
+		rt := NewReviewsTab("reviews", store, testReviewsStyles())
+
+		if got := rt.Title(); got != "Reviews" {
+			t.Errorf("Title() = %q, want %q", got, "Reviews")
+		}
+	})
+
+	t.Run("records present but none pending", func(t *testing.T) {
+		records := []review.Record{
+			{Repo: "owner/repo-a", PR: 1, SpoolPath: "/tmp/a.md"},
+			{Repo: "owner/repo-b", PR: 2, SpoolPath: "/tmp/b.md"},
+		}
+		withFakeSpoolInfoFunc(t, map[string]review.SpoolInfo{
+			"/tmp/a.md": {Found: true, InDoneDir: true, Decision: "post", DecisionState: review.ClassifySpoolState(true, true, "post")},
+			"/tmp/b.md": {Found: true, InDoneDir: false, Decision: "discard", DecisionState: review.ClassifySpoolState(true, false, "discard")},
+		})
+		store := &fakeReviewStore{records: records}
+		rt := NewReviewsTab("reviews", store, testReviewsStyles())
+
+		if got := rt.Title(); got != "Reviews" {
+			t.Errorf("Title() = %q, want %q", got, "Reviews")
+		}
+	})
+
+	t.Run("N records with DecisionState pending", func(t *testing.T) {
+		records := []review.Record{
+			{Repo: "owner/repo-a", PR: 1, SpoolPath: "/tmp/a.md"},
+			{Repo: "owner/repo-b", PR: 2, SpoolPath: "/tmp/b.md"},
+			{Repo: "owner/repo-c", PR: 3, SpoolPath: "/tmp/c.md"},
+		}
+		withFakeSpoolInfoFunc(t, map[string]review.SpoolInfo{
+			"/tmp/a.md": {Found: true, InDoneDir: false, Decision: "", DecisionState: review.ClassifySpoolState(true, false, "")},
+			"/tmp/b.md": {Found: true, InDoneDir: false, Decision: "", DecisionState: review.ClassifySpoolState(true, false, "")},
+			"/tmp/c.md": {Found: true, InDoneDir: false, Decision: "", DecisionState: review.ClassifySpoolState(true, false, "")},
+		})
+		store := &fakeReviewStore{records: records}
+		rt := NewReviewsTab("reviews", store, testReviewsStyles())
+
+		if got, want := rt.Title(), "Reviews (3)"; got != want {
+			t.Errorf("Title() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("mix of pending and non-pending counts only pending", func(t *testing.T) {
+		records := []review.Record{
+			{Repo: "owner/repo-a", PR: 1, SpoolPath: "/tmp/a.md"}, // pending
+			{Repo: "owner/repo-b", PR: 2, SpoolPath: "/tmp/b.md"}, // done
+			{Repo: "owner/repo-c", PR: 3, SpoolPath: "/tmp/c.md"}, // pending
+			{Repo: "owner/repo-d", PR: 4, SpoolPath: "/tmp/d.md"}, // posted
+			{Repo: "owner/repo-e", PR: 5, SpoolPath: "/tmp/e.md"}, // decided: revise
+			{Repo: "owner/repo-f", PR: 6, SpoolPath: "/tmp/f.md"}, // discarded
+		}
+		withFakeSpoolInfoFunc(t, map[string]review.SpoolInfo{
+			"/tmp/a.md": {Found: true, InDoneDir: false, Decision: "", DecisionState: review.ClassifySpoolState(true, false, "")},
+			"/tmp/b.md": {Found: true, InDoneDir: true, Decision: "post", DecisionState: review.ClassifySpoolState(true, true, "post")},
+			"/tmp/c.md": {Found: true, InDoneDir: false, Decision: "", DecisionState: review.ClassifySpoolState(true, false, "")},
+			"/tmp/d.md": {Found: true, InDoneDir: true, Decision: "post", DecisionState: review.ClassifySpoolState(true, true, "post")},
+			"/tmp/e.md": {Found: true, InDoneDir: false, Decision: "revise", DecisionState: review.ClassifySpoolState(true, false, "revise")},
+			"/tmp/f.md": {Found: true, InDoneDir: true, Decision: "discard", DecisionState: review.ClassifySpoolState(true, true, "discard")},
+		})
+		store := &fakeReviewStore{records: records}
+		rt := NewReviewsTab("reviews", store, testReviewsStyles())
+
+		if got, want := rt.Title(), "Reviews (2)"; got != want {
+			t.Errorf("Title() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("store.List() error degrades to bare title", func(t *testing.T) {
+		store := &fakeReviewStore{listErr: errors.New("disk fell over")}
+		rt := NewReviewsTab("reviews", store, testReviewsStyles())
+
+		if got := rt.Title(); got != "Reviews" {
+			t.Errorf("Title() = %q, want %q", got, "Reviews")
+		}
+	})
+}
+
+// TestReviewsTabTitleMemo verifies Title()'s pending-count memo: within one
+// pendingCountTTL window a repeat call serves the cached count with no extra
+// store.List() scan (the fix for the per-frame render I/O the review flagged),
+// and once the window elapses the next call recomputes against the store.
+func TestReviewsTabTitleMemo(t *testing.T) {
+	newPendingTab := func(store *fakeReviewStore, clock *time.Time) *ReviewsTab {
+		rt := NewReviewsTab("reviews", store, testReviewsStyles())
+		rt.nowFunc = func() time.Time { return *clock }
+		return rt
+	}
+
+	t.Run("within TTL serves cached count without re-scanning", func(t *testing.T) {
+		records := []review.Record{
+			{Repo: "owner/repo-a", PR: 1, SpoolPath: "/tmp/a.md"},
+			{Repo: "owner/repo-b", PR: 2, SpoolPath: "/tmp/b.md"},
+		}
+		withFakeSpoolInfoFunc(t, map[string]review.SpoolInfo{
+			"/tmp/a.md": {Found: true, DecisionState: review.ClassifySpoolState(true, false, "")},
+			"/tmp/b.md": {Found: true, DecisionState: review.ClassifySpoolState(true, false, "")},
+		})
+		store := &fakeReviewStore{records: records}
+		now := time.Unix(1000, 0)
+		rt := newPendingTab(store, &now)
+
+		if got, want := rt.Title(), "Reviews (2)"; got != want {
+			t.Fatalf("first Title() = %q, want %q", got, want)
+		}
+		if store.listCalls != 1 {
+			t.Fatalf("expected 1 store.List() call after first Title(), got %d", store.listCalls)
+		}
+
+		// Advance less than the TTL and call repeatedly, as the render path
+		// does on a burst of frames. The memo must serve the cached count with
+		// no further store scans, even if the store's underlying data changed.
+		now = now.Add(pendingCountTTL - time.Millisecond)
+		store.records = nil // would count 0 if it re-scanned
+		for i := 0; i < 5; i++ {
+			if got, want := rt.Title(), "Reviews (2)"; got != want {
+				t.Fatalf("cached Title() = %q, want %q", got, want)
+			}
+		}
+		if store.listCalls != 1 {
+			t.Errorf("expected memo to suppress re-scans within TTL, got %d store.List() calls", store.listCalls)
+		}
+	})
+
+	t.Run("recomputes after TTL elapses", func(t *testing.T) {
+		records := []review.Record{
+			{Repo: "owner/repo-a", PR: 1, SpoolPath: "/tmp/a.md"},
+		}
+		withFakeSpoolInfoFunc(t, map[string]review.SpoolInfo{
+			"/tmp/a.md": {Found: true, DecisionState: review.ClassifySpoolState(true, false, "")},
+		})
+		store := &fakeReviewStore{records: records}
+		now := time.Unix(2000, 0)
+		rt := newPendingTab(store, &now)
+
+		if got, want := rt.Title(), "Reviews (1)"; got != want {
+			t.Fatalf("first Title() = %q, want %q", got, want)
+		}
+
+		// The pending review is decided and archived; after the TTL the badge
+		// must reflect the new state on the next render.
+		now = now.Add(pendingCountTTL)
+		store.records = nil
+		if got, want := rt.Title(), "Reviews"; got != want {
+			t.Errorf("Title() after TTL = %q, want %q", got, want)
+		}
+		if store.listCalls != 2 {
+			t.Errorf("expected a re-scan after the TTL elapsed, got %d store.List() calls", store.listCalls)
+		}
+	})
+
+	t.Run("List error within TTL keeps the prior cached count", func(t *testing.T) {
+		records := []review.Record{
+			{Repo: "owner/repo-a", PR: 1, SpoolPath: "/tmp/a.md"},
+		}
+		withFakeSpoolInfoFunc(t, map[string]review.SpoolInfo{
+			"/tmp/a.md": {Found: true, DecisionState: review.ClassifySpoolState(true, false, "")},
+		})
+		store := &fakeReviewStore{records: records}
+		now := time.Unix(3000, 0)
+		rt := newPendingTab(store, &now)
+
+		if got, want := rt.Title(), "Reviews (1)"; got != want {
+			t.Fatalf("first Title() = %q, want %q", got, want)
+		}
+
+		// Past the TTL a transient List error degrades to the bare title for
+		// that frame but must not clobber the memo — the next good frame
+		// within a fresh window still serves a computed count.
+		now = now.Add(pendingCountTTL)
+		store.listErr = errors.New("disk fell over")
+		if got := rt.Title(); got != "Reviews" {
+			t.Errorf("Title() on List error = %q, want %q", got, "Reviews")
+		}
+		if !rt.pendingCounted || rt.pendingCount != 1 {
+			t.Errorf("expected memo preserved on List error, got counted=%v count=%d", rt.pendingCounted, rt.pendingCount)
+		}
+	})
 }
 
 // TestReviewsTabManagerIntegration verifies the tab can be added to a

@@ -15,6 +15,13 @@ import (
 // emptyTimestampPlaceholder is rendered in place of an empty LastReviewedAt.
 const emptyTimestampPlaceholder = "—"
 
+// pendingCountTTL bounds how stale the Title() badge count may be. Title() is
+// on the every-frame render path; within one TTL window it serves a memoized
+// count instead of re-scanning the spool. 500ms is well below human perception
+// for a badge decrement yet collapses a burst of mouse-motion frames into a
+// single scan.
+const pendingCountTTL = 500 * time.Millisecond
+
 // Message strings shared by the styled View() and the plain-text
 // CopyableContent() so the two can never silently diverge (edit once, both
 // use it).
@@ -50,6 +57,20 @@ type ReviewsTab struct {
 	// cached so moveCursor() can step to an adjacent PR without re-reading the
 	// store on every keypress. Refreshed every renderTable().
 	lastOrder []string
+
+	// pendingCount memoizes the Title() badge count for a short window so the
+	// per-frame render path (RenderTabHeaders → Title(), invoked on every
+	// keypress/tick/resize and every mouse-motion frame under MouseModeAllMotion)
+	// does not repeat the store.List() + per-record spool reads on every frame.
+	// Title() recomputes only when the memo is older than pendingCountTTL, so
+	// the badge still decrements within a sub-second, human-invisible window
+	// after a decision is set or a review is archived — preserving the tab's
+	// no-separate-viewed-state design without the unbounded per-frame I/O.
+	// nowFunc is an injectable clock so tests can drive the TTL deterministically.
+	pendingCount   int
+	pendingCountAt time.Time
+	pendingCounted bool
+	nowFunc        func() time.Time
 }
 
 // recordKey is the stable identity of a row: "<repo>#<pr>".
@@ -62,9 +83,10 @@ func recordKey(rec review.Record) string {
 // accepted so tests can inject a fake store.
 func NewReviewsTab(id string, store review.StoreInterface, styles *Styles) *ReviewsTab {
 	return &ReviewsTab{
-		id:     id,
-		store:  store,
-		styles: styles,
+		id:      id,
+		store:   store,
+		styles:  styles,
+		nowFunc: time.Now,
 	}
 }
 
@@ -78,9 +100,70 @@ func (rt *ReviewsTab) Type() TabType {
 	return TabTypeReviews
 }
 
-// Title returns the tab title
+// Title returns the tab title, suffixed with a pending-review count when one
+// or more tracked PRs are awaiting a decision (DecisionState == "pending" —
+// landed in pending/, not yet archived to done/, no decision set).
+//
+// Title() sits on the every-frame render path (RenderTabHeaders calls it for
+// every tab, from View(), on every keypress/tick/resize and — under
+// MouseModeAllMotion — every mouse-motion frame). Recomputing the count means
+// a store.List() plus a spool read per record, so an unmemoized Title() would
+// scan the spool on every frame regardless of which tab is focused. Instead
+// the count is memoized for pendingCountTTL: within that window Title() returns
+// the cached value with zero I/O, and it recomputes on the first call after the
+// window elapses. The TTL is sub-second, so the badge still decrements
+// promptly (and invisibly to the eye) after a decision is set (p/r/R/d) or a
+// review is archived — keeping the no-separate-viewed-state design while
+// removing the per-frame I/O the review flagged. A store.List() error degrades
+// to the bare "Reviews" title (no error return to surface it through) and does
+// not poison the memo.
 func (rt *ReviewsTab) Title() string {
-	return "Reviews"
+	now := rt.now()
+	if rt.pendingCounted && now.Sub(rt.pendingCountAt) < pendingCountTTL {
+		return rt.formatTitle(rt.pendingCount)
+	}
+
+	records, err := rt.store.List()
+	if err != nil {
+		// Leave any prior memo untouched; a transient read error should not
+		// wipe a good count or force a re-scan on the very next frame.
+		return "Reviews"
+	}
+
+	// The count is order-independent, so skip sortedRecords here — resolveSpoolInfo
+	// operates correctly on the unsorted slice. Sorting is only done in
+	// View()/renderTable() where display order matters.
+	spoolInfo := rt.resolveSpoolInfo(records)
+
+	pending := 0
+	for _, info := range spoolInfo {
+		if info.DecisionState == "pending" {
+			pending++
+		}
+	}
+
+	rt.pendingCount = pending
+	rt.pendingCountAt = now
+	rt.pendingCounted = true
+
+	return rt.formatTitle(pending)
+}
+
+// now returns the current time via the injectable clock, defaulting to
+// time.Now for tabs constructed without one (e.g. zero-value in tests).
+func (rt *ReviewsTab) now() time.Time {
+	if rt.nowFunc == nil {
+		return time.Now()
+	}
+	return rt.nowFunc()
+}
+
+// formatTitle renders the tab title for a given pending count.
+func (rt *ReviewsTab) formatTitle(pending int) string {
+	if pending == 0 {
+		return "Reviews"
+	}
+	return fmt.Sprintf("Reviews (%d)", pending)
 }
 
 // IsClosable returns whether this tab can be closed
