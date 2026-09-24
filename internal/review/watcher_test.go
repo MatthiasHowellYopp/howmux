@@ -801,3 +801,99 @@ func TestWatcherInterval_EnrolledCount_ConcurrentWithPoll(t *testing.T) {
 	close(stop)
 	wg.Wait()
 }
+
+// TestWatcherEnrolledCount_ConcurrentWithRealStore is the production-store
+// counterpart to TestWatcherInterval_EnrolledCount_ConcurrentWithPoll, which
+// only exercises the mutex-guarded fakeStore. That double serializes every
+// List/Save/Remove behind a sync.Mutex, so `-race` there can never observe
+// the real *Store path — bare os.ReadDir/os.ReadFile in List() against
+// os.CreateTemp+Rename in Save() and os.RemoveAll in Remove(), with no
+// in-process synchronization. This test drives a real review.NewStore over a
+// t.TempDir() so EnrolledCount() (via store.List()) runs concurrently with
+// Save/Remove on the actual code path the footer and poll loop use in
+// production. Under `go test -race` it guards against a future change adding
+// unsynchronized shared in-process state to *Store; today it validates that
+// the concurrent filesystem access pattern the design spec calls safe does
+// not panic or corrupt, and that the count settles deterministically once
+// writers stop.
+func TestWatcherEnrolledCount_ConcurrentWithRealStore(t *testing.T) {
+	store := NewStore(t.TempDir())
+	watcher := NewWatcher(store, time.Minute, 5, "test-reviewer")
+
+	const nPRs = 8
+	mkRecord := func(pr int) Record {
+		return Record{
+			Repo:       "owner/repo",
+			PR:         pr,
+			URL:        fmt.Sprintf("https://github.com/owner/repo/pull/%d", pr),
+			Status:     StatusWatching,
+			EnrolledAt: time.Now().Format(time.RFC3339),
+		}
+	}
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+
+	// Writers: churn the store with Save/Remove of distinct PRs so List()
+	// races real create-temp+rename and remove-all directory mutations.
+	for pr := 1; pr <= nPRs; pr++ {
+		wg.Add(1)
+		go func(pr int) {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					if err := store.Save(mkRecord(pr)); err != nil {
+						t.Errorf("Save(pr=%d) failed: %v", pr, err)
+						return
+					}
+					if err := store.Remove("owner/repo", pr); err != nil {
+						t.Errorf("Remove(pr=%d) failed: %v", pr, err)
+						return
+					}
+				}
+			}
+		}(pr)
+	}
+
+	// Readers: hammer EnrolledCount()/Interval() (the render-path accessors)
+	// concurrently with the writers. The count fluctuates as records come and
+	// go; we only require it never panics and stays within [0, nPRs].
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_ = watcher.Interval()
+					if c := watcher.EnrolledCount(); c < 0 || c > nPRs {
+						t.Errorf("EnrolledCount() = %d, out of expected range [0,%d]", c, nPRs)
+						return
+					}
+				}
+			}
+		}()
+	}
+
+	time.Sleep(150 * time.Millisecond)
+	close(stop)
+	wg.Wait()
+
+	// Once all writers have stopped, drain any half-written state to a known
+	// terminal shape: remove every PR, then assert EnrolledCount settles to 0
+	// through the real store. This confirms the concurrent churn left no
+	// orphaned record dirs that List() would still count.
+	for pr := 1; pr <= nPRs; pr++ {
+		if err := store.Remove("owner/repo", pr); err != nil {
+			t.Fatalf("cleanup Remove(pr=%d) failed: %v", pr, err)
+		}
+	}
+	if got := watcher.EnrolledCount(); got != 0 {
+		t.Errorf("EnrolledCount() = %d after removing all records, want 0", got)
+	}
+}

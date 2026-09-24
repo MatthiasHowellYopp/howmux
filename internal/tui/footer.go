@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/matthiashowellyopp/howmux/internal/config"
 	"github.com/matthiashowellyopp/howmux/internal/review"
@@ -25,7 +26,34 @@ type FooterManager struct {
 	// transientMessage, when non-empty, is shown in the status row in place of
 	// the usual contextual info (e.g. the Ctrl+Y "Copied N lines" feedback).
 	transientMessage string
+
+	// enrolledCount caches the review watcher's EnrolledCount() so the
+	// footer render path does not hit the store (an os.ReadDir + per-record
+	// os.ReadFile/JSON-unmarshal in the production FS store) on every Bubble
+	// Tea redraw. View()/RenderFooter runs on the single UI goroutine and is
+	// called for every message (keystrokes, ticks, resize, agent output), so
+	// without this cache a busy UI turns each frame into synchronous disk I/O
+	// scaling O(enrolled PRs). The count only changes on poll/enroll/prune
+	// events, so a short TTL collapses a burst of redraws to at most one
+	// store.List() per window while keeping the displayed value fresh within
+	// ~1s regardless of which store instance performed the enroll (the
+	// watcher, the Reviews tab, and the enroll path each hold separate
+	// stateless FS-store instances over the same files — see tui.go).
+	enrolledCount        int
+	enrolledCountExpires time.Time
 }
+
+// enrolledCountTTL bounds how stale the footer's cached enrolled-PR count may
+// be. A var (not a const) so tests can shrink/zero it to exercise the
+// cache-miss path deterministically. 1s is short enough that enroll/prune is
+// reflected almost immediately, long enough that a burst of redraws within a
+// single frame-storm collapses to one store read.
+var enrolledCountTTL = time.Second
+
+// nowFunc is the clock seam for the enrolled-count TTL, mirroring the
+// package's other testable-time seams. Tests substitute a fake to drive the
+// cache expiry without real sleeps.
+var nowFunc = time.Now
 
 // SetTransientMessage sets (or clears, with "") a short-lived status-row message
 // that takes priority over the normal contextual info.
@@ -187,9 +215,27 @@ func (fm *FooterManager) renderReviewStatus() string {
 	}
 
 	interval := fm.reviewWatcher.Interval().String()
-	count := fm.reviewWatcher.EnrolledCount()
+	count := fm.enrolledCountCached()
 
 	return fmt.Sprintf("review: active (%s, %d enrolled)", interval, count)
+}
+
+// enrolledCountCached returns the review watcher's enrolled-PR count, reading
+// through a short-TTL cache so the render path performs at most one
+// store.List() per enrolledCountTTL window instead of one per redraw. It is
+// only ever called from RenderFooter on the single Bubble Tea UI goroutine,
+// so the unsynchronized field reads/writes are safe by construction (no
+// concurrent View()); see the enrolledCount field doc for the performance
+// rationale. reviewWatcher is guaranteed non-nil here because the sole caller
+// (renderReviewStatus) has already returned on the nil path.
+func (fm *FooterManager) enrolledCountCached() int {
+	now := nowFunc()
+	if now.Before(fm.enrolledCountExpires) {
+		return fm.enrolledCount
+	}
+	fm.enrolledCount = fm.reviewWatcher.EnrolledCount()
+	fm.enrolledCountExpires = now.Add(enrolledCountTTL)
+	return fm.enrolledCount
 }
 
 // renderPlanningInfo renders context usage and directory information for planning tabs
