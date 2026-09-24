@@ -108,6 +108,28 @@ func (w *Watcher) Running() bool {
 	return w.started
 }
 
+// Interval returns the configured poll interval.
+func (w *Watcher) Interval() time.Duration {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.pollInterval
+}
+
+// EnrolledCount returns the number of enrolled PR records currently tracked
+// by the watcher's store. Returns 0 if the store cannot be listed — this is a
+// display-only accessor, so it degrades to 0 rather than propagating an error
+// or panicking (mirrors the tolerant error handling already used elsewhere in
+// this file, e.g. pollOnce's logging.Error + continue pattern, minus the log
+// call since Interval/EnrolledCount are not given a logger context by the
+// issue and this is a lightweight, frequently-called render-path accessor).
+func (w *Watcher) EnrolledCount() int {
+	records, err := w.store.List()
+	if err != nil {
+		return 0
+	}
+	return len(records)
+}
+
 // pollLoop runs immediately, then on every pollInterval
 func (w *Watcher) pollLoop() {
 	defer w.wg.Done()

@@ -65,6 +65,31 @@ func (fs *fakeStore) Remove(repo string, pr int) error {
 	return nil
 }
 
+// failingListStore is a minimal StoreInterface fake whose List() always
+// returns an error, following the same small-dedicated-fake convention as
+// other error-injecting fakes in this file (e.g. saveSeqStore/failingSaveStore
+// in runner_test.go).
+type failingListStore struct{}
+
+// Verify failingListStore implements StoreInterface at compile time
+var _ StoreInterface = (*failingListStore)(nil)
+
+func (fs *failingListStore) List() ([]Record, error) {
+	return nil, fmt.Errorf("simulated list failure")
+}
+
+func (fs *failingListStore) Save(rec Record) error {
+	return nil
+}
+
+func (fs *failingListStore) Get(repo string, pr int) (Record, bool, error) {
+	return Record{}, false, nil
+}
+
+func (fs *failingListStore) Remove(repo string, pr int) error {
+	return nil
+}
+
 type fetchPRCall struct {
 	repo string
 	pr   int
@@ -661,5 +686,214 @@ func TestWatcherConcurrentDispatchRaceCondition(t *testing.T) {
 
 	if activeCount != 0 {
 		t.Errorf("expected 0 active reviews after completion, got %d", activeCount)
+	}
+}
+
+// TestWatcherInterval verifies Interval() returns the exact pollInterval
+// passed to NewWatcher.
+func TestWatcherInterval(t *testing.T) {
+	store := &fakeStore{}
+	want := 7 * time.Minute
+	watcher := NewWatcher(store, want, 5, "test-reviewer")
+
+	if got := watcher.Interval(); got != want {
+		t.Errorf("Interval() = %v, want %v", got, want)
+	}
+}
+
+// TestWatcherEnrolledCount_Empty verifies EnrolledCount() returns 0 for an
+// empty store.
+func TestWatcherEnrolledCount_Empty(t *testing.T) {
+	store := &fakeStore{}
+	watcher := NewWatcher(store, time.Minute, 5, "test-reviewer")
+
+	if got := watcher.EnrolledCount(); got != 0 {
+		t.Errorf("EnrolledCount() = %d, want 0 for empty store", got)
+	}
+}
+
+// TestWatcherEnrolledCount_NRecords verifies EnrolledCount() returns the
+// correct count for a store with N records.
+func TestWatcherEnrolledCount_NRecords(t *testing.T) {
+	store := &fakeStore{
+		records: []Record{
+			{Repo: "owner/repo", PR: 1, URL: "url1", Status: StatusWatching, EnrolledAt: time.Now().Format(time.RFC3339)},
+			{Repo: "owner/repo", PR: 2, URL: "url2", Status: StatusWatching, EnrolledAt: time.Now().Format(time.RFC3339)},
+			{Repo: "owner/repo", PR: 3, URL: "url3", Status: StatusWatching, EnrolledAt: time.Now().Format(time.RFC3339)},
+		},
+	}
+	watcher := NewWatcher(store, time.Minute, 5, "test-reviewer")
+
+	if got := watcher.EnrolledCount(); got != 3 {
+		t.Errorf("EnrolledCount() = %d, want 3", got)
+	}
+}
+
+// TestWatcherEnrolledCount_ListError verifies EnrolledCount() returns 0 (not
+// a panic, not a propagated error) when the store's List() fails.
+func TestWatcherEnrolledCount_ListError(t *testing.T) {
+	store := &failingListStore{}
+	watcher := NewWatcher(store, time.Minute, 5, "test-reviewer")
+
+	if got := watcher.EnrolledCount(); got != 0 {
+		t.Errorf("EnrolledCount() = %d, want 0 when List() errors", got)
+	}
+}
+
+// TestWatcherInterval_EnrolledCount_ConcurrentWithPoll exercises Interval()
+// and EnrolledCount() concurrently with Start()/poll activity, so `go test
+// -race` can observe the access pattern crossing the render-path/watcher
+// boundary described in the design spec's Concurrency Analysis.
+func TestWatcherInterval_EnrolledCount_ConcurrentWithPoll(t *testing.T) {
+	store := &fakeStore{
+		records: []Record{
+			{Repo: "owner/repo", PR: 1, URL: "url1", Status: StatusWatching, EnrolledAt: time.Now().Format(time.RFC3339)},
+			{Repo: "owner/repo", PR: 2, URL: "url2", Status: StatusWatching, EnrolledAt: time.Now().Format(time.RFC3339)},
+		},
+	}
+
+	origFetch := fetchPRFunc
+	origDispatch := dispatchReviewFunc
+	origRemove := removeRecordFunc
+	defer func() {
+		fetchPRFunc = origFetch
+		dispatchReviewFunc = origDispatch
+		removeRecordFunc = origRemove
+	}()
+
+	fetchPRFunc = func(repo string, pr int) (github.PR, error) {
+		return github.PR{
+			State:      "OPEN",
+			HeadRefOid: fmt.Sprintf("sha-%d", pr),
+		}, nil
+	}
+	dispatchReviewFunc = func(ctx context.Context, rec Record, headSHA string, store StoreInterface, tabWriter io.Writer) error {
+		return nil
+	}
+	removeRecordFunc = func(store StoreInterface, repo string, pr int) error {
+		return store.Remove(repo, pr)
+	}
+
+	watcher := NewWatcher(store, 10*time.Millisecond, 5, "test-reviewer")
+	watcher.Start()
+	defer watcher.Stop()
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_ = watcher.Interval()
+					_ = watcher.EnrolledCount()
+				}
+			}
+		}()
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	close(stop)
+	wg.Wait()
+}
+
+// TestWatcherEnrolledCount_ConcurrentWithRealStore is the production-store
+// counterpart to TestWatcherInterval_EnrolledCount_ConcurrentWithPoll, which
+// only exercises the mutex-guarded fakeStore. That double serializes every
+// List/Save/Remove behind a sync.Mutex, so `-race` there can never observe
+// the real *Store path — bare os.ReadDir/os.ReadFile in List() against
+// os.CreateTemp+Rename in Save() and os.RemoveAll in Remove(), with no
+// in-process synchronization. This test drives a real review.NewStore over a
+// t.TempDir() so EnrolledCount() (via store.List()) runs concurrently with
+// Save/Remove on the actual code path the footer and poll loop use in
+// production. Under `go test -race` it guards against a future change adding
+// unsynchronized shared in-process state to *Store; today it validates that
+// the concurrent filesystem access pattern the design spec calls safe does
+// not panic or corrupt, and that the count settles deterministically once
+// writers stop.
+func TestWatcherEnrolledCount_ConcurrentWithRealStore(t *testing.T) {
+	store := NewStore(t.TempDir())
+	watcher := NewWatcher(store, time.Minute, 5, "test-reviewer")
+
+	const nPRs = 8
+	mkRecord := func(pr int) Record {
+		return Record{
+			Repo:       "owner/repo",
+			PR:         pr,
+			URL:        fmt.Sprintf("https://github.com/owner/repo/pull/%d", pr),
+			Status:     StatusWatching,
+			EnrolledAt: time.Now().Format(time.RFC3339),
+		}
+	}
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+
+	// Writers: churn the store with Save/Remove of distinct PRs so List()
+	// races real create-temp+rename and remove-all directory mutations.
+	for pr := 1; pr <= nPRs; pr++ {
+		wg.Add(1)
+		go func(pr int) {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					if err := store.Save(mkRecord(pr)); err != nil {
+						t.Errorf("Save(pr=%d) failed: %v", pr, err)
+						return
+					}
+					if err := store.Remove("owner/repo", pr); err != nil {
+						t.Errorf("Remove(pr=%d) failed: %v", pr, err)
+						return
+					}
+				}
+			}
+		}(pr)
+	}
+
+	// Readers: hammer EnrolledCount()/Interval() (the render-path accessors)
+	// concurrently with the writers. The count fluctuates as records come and
+	// go; we only require it never panics and stays within [0, nPRs].
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_ = watcher.Interval()
+					if c := watcher.EnrolledCount(); c < 0 || c > nPRs {
+						t.Errorf("EnrolledCount() = %d, out of expected range [0,%d]", c, nPRs)
+						return
+					}
+				}
+			}
+		}()
+	}
+
+	time.Sleep(150 * time.Millisecond)
+	close(stop)
+	wg.Wait()
+
+	// Once all writers have stopped, drain any half-written state to a known
+	// terminal shape: remove every PR, then assert EnrolledCount settles to 0
+	// through the real store. This confirms the concurrent churn left no
+	// orphaned record dirs that List() would still count.
+	for pr := 1; pr <= nPRs; pr++ {
+		if err := store.Remove("owner/repo", pr); err != nil {
+			t.Fatalf("cleanup Remove(pr=%d) failed: %v", pr, err)
+		}
+	}
+	if got := watcher.EnrolledCount(); got != 0 {
+		t.Errorf("EnrolledCount() = %d after removing all records, want 0", got)
 	}
 }
