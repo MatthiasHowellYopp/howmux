@@ -151,10 +151,20 @@ func (s *Styles) GetPlanningInputStyle(focused bool, width int) lipgloss.Style {
 	return lipgloss.NewStyle()
 }
 
-// GetPlanningMessageStyle returns minimal message style with clean spacing
+// GetPlanningMessageStyle returns the per-message style, wrapped to width so
+// long lines soft-wrap inside the viewport instead of overflowing off the
+// right edge (the viewport clips/scrolls horizontally rather than wrapping,
+// so wrapping must happen here). A width <= 0 (pre-first-render) yields an
+// unwrapped style — the safe default until Resize supplies a real width.
 func (s *Styles) GetPlanningMessageStyle(role string, width int) lipgloss.Style {
+	var style lipgloss.Style
 	if role == "user" {
-		return s.PlanningUser
+		style = s.PlanningUser
+	} else {
+		style = s.PlanningAssistant
 	}
-	return s.PlanningAssistant
+	if width > 0 {
+		style = style.Width(width)
+	}
+	return style
 }

@@ -508,10 +508,17 @@ func (pt *PlanningTab) updateViewportContent() {
 			// Assistant messages with minimal formatting
 			assistantContent := msg.Content
 
-			// Add error styling for error messages (case-insensitive)
+			// Add error styling for error messages (case-insensitive).
+			// Both branches wrap to pt.width so long assistant/error lines
+			// soft-wrap in the viewport instead of running off the right edge
+			// (the viewport does not wrap — it clips/scrolls horizontally).
 			contentLower := strings.ToLower(assistantContent)
 			if strings.Contains(contentLower, "error:") {
-				assistantContent = pt.styles.PlanningError.Render(assistantContent)
+				errStyle := pt.styles.PlanningError
+				if pt.width > 0 {
+					errStyle = errStyle.Width(pt.width)
+				}
+				assistantContent = errStyle.Render(assistantContent)
 			} else {
 				assistantContent = messageStyle.Render(assistantContent)
 			}
@@ -530,7 +537,21 @@ func (pt *PlanningTab) updateViewportContent() {
 		streamingText := pt.currentResponse.String()
 		indicator := pt.styles.PlanningStreamingIndicator.Render("● ")
 
-		styledResponse := pt.styles.PlanningAssistant.Render(streamingText)
+		// Wrap the streaming text to the width remaining after the 2-column
+		// "● " indicator so the response soft-wraps inside the viewport
+		// instead of overflowing off the right edge. lipgloss.Width measures
+		// the indicator's visible cells (ANSI-aware) so the reserved gutter is
+		// correct regardless of styling.
+		assistantStyle := pt.styles.PlanningAssistant
+		if pt.width > 0 {
+			indicatorWidth := lipgloss.Width(indicator)
+			wrapWidth := pt.width - indicatorWidth
+			if wrapWidth < 1 {
+				wrapWidth = 1
+			}
+			assistantStyle = assistantStyle.Width(wrapWidth)
+		}
+		styledResponse := assistantStyle.Render(streamingText)
 		content.WriteString(indicator + styledResponse)
 	}
 
@@ -1022,6 +1043,13 @@ func (pt *PlanningTab) Resize(width, height int) {
 	if messageHeight > 0 {
 		pt.viewport.SetHeight(messageHeight)
 	}
+
+	// Re-wrap existing message content to the new width. updateViewportContent
+	// re-renders every message through the width-aware styles (see
+	// GetPlanningMessageStyle), so a resize reflows the conversation instead of
+	// leaving it wrapped to the previous width (which would overflow or leave a
+	// ragged right edge after the terminal shrinks/grows).
+	pt.updateViewportContent()
 }
 
 // SetCompleted sets the tab to completed state (successful GitHub issue creation)
