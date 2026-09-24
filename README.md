@@ -220,6 +220,7 @@ Both modes preserve their state when you switch, allowing seamless workflow tran
 - `R` — Rereview the review (opens the same notes composer; **Ctrl+D** re-runs the full lens fan-out with those notes and lands back in `pending/` with the decision cleared, **Esc** cancels)
 - `d` — Discard the review immediately (archives to `done/`, no confirm)
 - `n` — Edit the persisted single-line `decision_notes:` field directly (for reviews already marked `revise`/`rereview`)
+- `e` — Edit the selected review's full markdown body in `$EDITOR`; the edited body is written back to the spool file (front-matter preserved)
 
 **Application:**
 - `Ctrl+C` — Quit (immediate exit with cleanup; always available as an escape hatch)
