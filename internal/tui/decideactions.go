@@ -120,9 +120,9 @@ func (m model) dispatchDecideAction(rec review.Record, decision string) (model, 
 	case "post":
 		return m.startDecidePost(rec)
 	case "revise":
-		return m.launchDecideRevise(rec)
+		return m.openReviseCompose(rec, "revise")
 	case "rereview":
-		return m.launchDecideRereview(rec)
+		return m.openReviseCompose(rec, "rereview")
 	case "discard":
 		return m.launchDecideDiscard(rec)
 	default:
@@ -176,6 +176,48 @@ func (m model) startDecidePost(rec review.Record) (model, tea.Cmd) {
 	return m, nil
 }
 
+// openReviseCompose does NOT launch anything — it opens the in-app
+// multi-line notes composer for a "revise" or "rereview" decision,
+// pre-populated (best-effort) with any persisted decision_notes so the
+// manual-flow notes carry into the composer as a starting point. Nothing
+// runs until the user submits the composer (Ctrl+D) — handled by the
+// reviseComposeActive keypress-interception block in model.Update (tui.go),
+// which captures the typed multi-line notes and dispatches to
+// launchDecideRevise/launchDecideRereview with them threaded in-memory
+// (never written to the front-matter). Esc cancels with no action taken.
+// This is the revise/rereview analog of startDecidePost's confirm gate:
+// both defer the actual launch to a subsequent keypress in model.Update.
+func (m model) openReviseCompose(rec review.Record, action string) (model, tea.Cmd) {
+	homeDir, err := userHomeDirFunc()
+	if err != nil {
+		homeDir = ""
+	}
+	currentNotes := review.CurrentDecisionNotes(rec.SpoolPath, homeDir)
+
+	// Defensive lazy-init: the production model always constructs the
+	// composer (see newModel), but a directly-struct-literal model (some
+	// tests) may not — create one on demand rather than nil-panic.
+	if m.notesComposer == nil {
+		m.notesComposer = NewNotesComposer()
+	}
+
+	m.reviseComposeActive = true
+	m.reviseComposeTarget = rec
+	m.reviseComposeAction = action
+	m.notesComposer.SetValue(currentNotes)
+	m.sizeNotesComposer()
+
+	verb := "Revise"
+	if action == "rereview" {
+		verb = "Rereview"
+	}
+	if m.footerManager != nil {
+		m.footerManager.SetTransientMessage(fmt.Sprintf("%s notes for %s #%d (Ctrl+D run · Esc cancel)", verb, rec.Repo, rec.PR))
+	}
+
+	return m, m.notesComposer.Focus()
+}
+
 // countFindingsFunc wraps review's package-private countFindings via the
 // only exported surface available: PostReview builds the payload
 // internally, so the TUI layer cannot call the private function directly.
@@ -209,13 +251,17 @@ func launchDecidePostCmd(rec review.Record, _ string) tea.Cmd {
 }
 
 // launchDecideRevise builds the tea.Cmd for the "revise" action: an
-// immediate, no-confirm consolidator re-run via review.ReviseReview.
-func (m model) launchDecideRevise(rec review.Record) (model, tea.Cmd) {
+// immediate consolidator re-run via review.ReviseReview. inlineNotes are
+// the multi-line instructions the user typed into the in-app composer
+// (empty if they submitted the composer without typing anything, in which
+// case ReviseReview falls back to the persisted decision_notes). They are
+// passed straight to the seam and never persisted to the spool.
+func (m model) launchDecideRevise(rec review.Record, inlineNotes string) (model, tea.Cmd) {
 	m = m.appendActivity(m.styles.Activity.Render(fmt.Sprintf("Revising review for %s#%d...", rec.Repo, rec.PR)))
 	return m, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), decideReviseTimeout)
 		defer cancel()
-		newVerdict, err := reviseReviewFunc(ctx, rec)
+		newVerdict, err := reviseReviewFunc(ctx, rec, inlineNotes)
 		if err != nil {
 			return decideReviseErrorMsg{rec: rec, err: err}
 		}
@@ -224,14 +270,16 @@ func (m model) launchDecideRevise(rec review.Record) (model, tea.Cmd) {
 }
 
 // launchDecideRereview builds the tea.Cmd for the "rereview" action: an
-// immediate, no-confirm multi-lens fan-out (or a degrade to revise
-// behavior, if the diff file is unavailable) via review.RereviewReview.
-func (m model) launchDecideRereview(rec review.Record) (model, tea.Cmd) {
+// immediate multi-lens fan-out (or a degrade to revise behavior, if the
+// diff file is unavailable) via review.RereviewReview. inlineNotes are the
+// multi-line instructions the user typed into the in-app composer (empty if
+// none), threaded to the seam identically to launchDecideRevise.
+func (m model) launchDecideRereview(rec review.Record, inlineNotes string) (model, tea.Cmd) {
 	m = m.appendActivity(m.styles.Activity.Render(fmt.Sprintf("Re-reviewing %s#%d...", rec.Repo, rec.PR)))
 	return m, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), decideRereviewTimeout)
 		defer cancel()
-		newVerdict, degraded, err := rereviewReviewFunc(ctx, rec)
+		newVerdict, degraded, err := rereviewReviewFunc(ctx, rec, inlineNotes)
 		if err != nil {
 			return decideRereviewErrorMsg{rec: rec, err: err}
 		}
@@ -259,10 +307,14 @@ func (m model) launchDecideDiscard(rec review.Record) (model, tea.Cmd) {
 // runReviewFunc's/ensureCheckoutFunc's existing seam pattern in commands.go.
 var postReviewFunc = review.PostReview
 
-// reviseReviewFunc wraps review.ReviseReview for testability.
+// reviseReviewFunc wraps review.ReviseReview for testability. Its
+// inlineNotes parameter carries the multi-line notes typed into the in-app
+// composer (empty when the user submitted without typing anything).
 var reviseReviewFunc = review.ReviseReview
 
-// rereviewReviewFunc wraps review.RereviewReview for testability.
+// rereviewReviewFunc wraps review.RereviewReview for testability. Its
+// inlineNotes parameter carries the multi-line notes typed into the in-app
+// composer (empty when the user submitted without typing anything).
 var rereviewReviewFunc = review.RereviewReview
 
 // discardReviewFunc wraps review.DiscardReview for testability.

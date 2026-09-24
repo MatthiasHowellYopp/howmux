@@ -20,7 +20,7 @@ import (
 // here so revise/rereview/post-adjacent decide tests never actually shell
 // out to kiro-cli/gh via internal/review's own private seams, which are not
 // reachable from this package.
-func stubReviseReviewFunc(fn func(ctx context.Context, rec review.Record) (string, error)) func() {
+func stubReviseReviewFunc(fn func(ctx context.Context, rec review.Record, inlineNotes string) (string, error)) func() {
 	original := reviseReviewFunc
 	reviseReviewFunc = fn
 	return func() { reviseReviewFunc = original }
@@ -186,28 +186,54 @@ func TestHandleDecide_RowSelectedNoSpoolPath(t *testing.T) {
 func TestHandleDecide_ValidSpoolPath_WriterSuccess(t *testing.T) {
 	spoolPath := withFakeDecisionScript(t)
 
-	restore := stubReviseReviewFunc(func(ctx context.Context, rec review.Record) (string, error) {
+	var gotNotes string
+	restore := stubReviseReviewFunc(func(ctx context.Context, rec review.Record, inlineNotes string) (string, error) {
+		gotNotes = inlineNotes
 		return "APPROVE", nil
 	})
 	defer restore()
 
-	m := newDecideTestModel()
+	// revise now opens the multi-line notes composer instead of launching
+	// immediately; the launch happens on Ctrl+D. Use the fuller routing
+	// model so the composer keypress-interception path in model.Update has
+	// the input/footer plumbing it dereferences.
+	m := newDecideRoutingTestModel()
 	addReviewsTabWithRecord(m, review.Record{Repo: "owner/repo", PR: 7, SpoolPath: spoolPath})
 
-	result, cmd := m.handleDecide([]string{"revise"})
-	if cmd == nil {
-		t.Fatalf("expected a non-nil tea.Cmd for the 'revise' launch, got nil")
+	opened, _ := m.handleDecide([]string{"revise"})
+	if !opened.reviseComposeActive {
+		t.Fatalf("expected handleDecide(revise) to open the notes composer (reviseComposeActive=true)")
 	}
-	if !anyLineContains(result.activityLines, "Revising review for owner/repo#7...") {
-		t.Errorf("expected in-progress activity line, got: %v", result.activityLines)
+	if !opened.notesComposer.Focused() {
+		t.Fatalf("expected the composer to be focused after opening")
+	}
+
+	// Type multi-line notes into the composer, then submit with Ctrl+D.
+	opened.notesComposer.SetValue("recheck the auth flow\nand add a test")
+	submitted, cmd := opened.Update(tea.KeyPressMsg(tea.Key{Code: 'd', Mod: tea.ModCtrl}))
+	submittedModel, ok := submitted.(model)
+	if !ok {
+		t.Fatalf("Update did not return a model")
+	}
+	if submittedModel.reviseComposeActive {
+		t.Errorf("expected compose mode to exit after Ctrl+D, still active")
+	}
+	if cmd == nil {
+		t.Fatalf("expected a non-nil tea.Cmd for the 'revise' launch after Ctrl+D, got nil")
+	}
+	if !anyLineContains(submittedModel.activityLines, "Revising review for owner/repo#7...") {
+		t.Errorf("expected in-progress activity line, got: %v", submittedModel.activityLines)
 	}
 
 	msg := drainBatchForType[decideReviseCompleteMsg](t, cmd)
 	if msg.rec.PR != 7 || msg.newVerdict != "APPROVE" {
 		t.Errorf("unexpected decideReviseCompleteMsg: %+v", msg)
 	}
+	if gotNotes != "recheck the auth flow\nand add a test" {
+		t.Errorf("expected the typed multi-line notes to reach the seam, got %q", gotNotes)
+	}
 
-	updated, finalCmd := result.Update(msg)
+	updated, finalCmd := submittedModel.Update(msg)
 	if finalCmd != nil {
 		t.Errorf("expected nil cmd from decideReviseCompleteMsg handling, got %v", finalCmd)
 	}
@@ -223,21 +249,30 @@ func TestHandleDecide_ValidSpoolPath_WriterSuccess(t *testing.T) {
 func TestHandleDecide_ValidSpoolPath_WriterError(t *testing.T) {
 	spoolPath := withFakeDecisionScript(t)
 
-	restore := stubReviseReviewFunc(func(ctx context.Context, rec review.Record) (string, error) {
+	restore := stubReviseReviewFunc(func(ctx context.Context, rec review.Record, inlineNotes string) (string, error) {
 		return "", fmt.Errorf("revise failed for owner/repo#9: kiro-cli exited 3: spool file not found: /tmp/spool.md")
 	})
 	defer restore()
 
-	m := newDecideTestModel()
+	m := newDecideRoutingTestModel()
 	addReviewsTabWithRecord(m, review.Record{Repo: "owner/repo", PR: 9, SpoolPath: spoolPath})
 
-	result, cmd := m.handleDecide([]string{"revise"})
+	opened, _ := m.handleDecide([]string{"revise"})
+	if !opened.reviseComposeActive {
+		t.Fatalf("expected handleDecide(revise) to open the notes composer")
+	}
+
+	submitted, cmd := opened.Update(tea.KeyPressMsg(tea.Key{Code: 'd', Mod: tea.ModCtrl}))
+	submittedModel, ok := submitted.(model)
+	if !ok {
+		t.Fatalf("Update did not return a model")
+	}
 	if cmd == nil {
-		t.Fatalf("expected a non-nil tea.Cmd for the 'revise' launch, got nil")
+		t.Fatalf("expected a non-nil tea.Cmd for the 'revise' launch after Ctrl+D, got nil")
 	}
 
 	msg := drainBatchForType[decideReviseErrorMsg](t, cmd)
-	updated, finalCmd := result.Update(msg)
+	updated, finalCmd := submittedModel.Update(msg)
 	if finalCmd != nil {
 		t.Errorf("expected nil cmd from decideReviseErrorMsg handling, got %v", finalCmd)
 	}

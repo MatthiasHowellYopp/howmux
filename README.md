@@ -151,7 +151,9 @@ The review loop polls enrolled PRs periodically and triggers reviews when:
 - A review is requested from you
 - A new commit is pushed after the last review
 
-Setting a decision on a review with `decide` (`post`, `revise`, `rereview`, or `discard`) launches that action immediately for the selected review. `revise` and `rereview` re-run locally and land back in `pending/` with the decision cleared; `discard` archives to `done/` right away. `post` is the one irreversible step — it shows an inline `y/N` confirm (repo, PR number, and finding count) before publishing inline PR comments and archiving to `done/`; declining leaves the review untouched in `pending/` with no decision recorded.
+Setting a decision on a review with `decide` (`post`, `revise`, `rereview`, or `discard`) acts on the selected review. `revise` and `rereview` open a multi-line notes composer in howmux, pre-populated with any persisted `decision_notes`: type instructions for the reviser (optional), then **Ctrl+D** to run or **Esc** to cancel. The notes are passed to the reviser in-memory (multi-line supported) and are not written to the spool front-matter. Both re-run locally and land back in `pending/` with the decision cleared; `discard` archives to `done/` right away. `post` is the one irreversible step — it shows an inline `y/N` confirm (repo, PR number, and finding count) before publishing inline PR comments and archiving to `done/`; declining leaves the review untouched in `pending/` with no decision recorded.
+
+For the manual/headless flow, editing the single-line `decision_notes:` field in the spool front-matter directly still works: when the composer is left empty (or when a review is driven outside howmux), `revise`/`rereview` fall back to the persisted `decision_notes` value.
 
 ## CLI Usage
 
@@ -182,7 +184,7 @@ howmux
 | `stop <issue>` | Stop the agent working on a specific issue number |
 | `plan [desc]` | Start interactive planning session |
 | `review [PR_URL]` | Start PR review workflow (URL to enroll/review now, bare to start loop) |
-| `decide <post\|revise\|rereview\|discard>` | Launch the action immediately on the selected review (post shows an inline y/N confirm) |
+| `decide <post\|revise\|rereview\|discard>` | Launch the action on the selected review (post shows an inline y/N confirm; revise/rereview open a notes composer) |
 | `theme` | Show current theme |
 | `theme <name>` | Switch to theme |
 | `about` | Show version information and check for updates |
@@ -214,9 +216,10 @@ Both modes preserve their state when you switch, allowing seamless workflow tran
 
 **Reviews Tab (row selected):**
 - `p` — Post the review immediately (shows an inline y/N confirm with repo, PR number, and finding count before publishing)
-- `r` — Revise the review immediately (re-runs the consolidator, lands back in `pending/` with the decision cleared, no confirm)
-- `R` — Rereview the review immediately (re-runs the full lens fan-out, lands back in `pending/` with the decision cleared, no confirm)
+- `r` — Revise the review (opens a multi-line notes composer pre-populated with any persisted `decision_notes`; **Ctrl+D** runs the consolidator with those notes and lands back in `pending/` with the decision cleared, **Esc** cancels)
+- `R` — Rereview the review (opens the same notes composer; **Ctrl+D** re-runs the full lens fan-out with those notes and lands back in `pending/` with the decision cleared, **Esc** cancels)
 - `d` — Discard the review immediately (archives to `done/`, no confirm)
+- `n` — Edit the persisted single-line `decision_notes:` field directly (for reviews already marked `revise`/`rereview`)
 
 **Application:**
 - `Ctrl+C` — Quit (immediate exit with cleanup; always available as an escape hatch)

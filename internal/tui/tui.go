@@ -222,6 +222,27 @@ type model struct {
 	// full save behavior.
 	notesWriter *review.NotesWriter
 
+	// notesComposer is the multi-line textarea used by the
+	// revise/rereview-with-notes flow: pressing r/R (or `decide
+	// revise`/`decide rereview`) opens it, pre-populated with any persisted
+	// decision_notes, so the user can type multi-line instructions that are
+	// passed to the consolidator IN-MEMORY (never written to the
+	// single-line decision_notes front-matter — that stays NotesInput's
+	// manual-flow job). Submitting (Ctrl+D) runs the action; Esc cancels.
+	notesComposer *NotesComposer
+	// reviseComposeActive is true while the notesComposer is the active,
+	// highest-priority focus target — checked ahead of the notesEditActive
+	// block and Reviews-tab row-shortcut routing so p/r/R/d and Enter reach
+	// the textarea while composing rather than triggering row shortcuts.
+	reviseComposeActive bool
+	// reviseComposeTarget is the review the composed notes will act on, so
+	// the Ctrl+D submit path knows which spool file to revise/rereview
+	// without re-resolving the Reviews tab's current selection.
+	reviseComposeTarget review.Record
+	// reviseComposeAction is "revise" or "rereview" — which launch wrapper
+	// the Ctrl+D submit path dispatches to.
+	reviseComposeAction string
+
 	// bodyWriter replaces the markdown body of a PR-review spool file
 	// while preserving its front-matter block byte-for-byte (see
 	// internal/review/bodywriter.go). Invoked by the editorDoneMsg handler
@@ -371,6 +392,7 @@ func newModel(w *watcher.Watcher, m *agent.Manager, cfg *config.Config, logFile 
 		decisionWriter: review.NewDecisionWriter(),
 		notesInput:     NewNotesInput(),
 		notesWriter:    review.NewNotesWriter(),
+		notesComposer:  NewNotesComposer(),
 		bodyWriter:     review.NewBodyWriter(),
 	}
 }
@@ -513,6 +535,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Forward to tab manager with footer-aware resizing
 		m.tabManager.ResizeForFooter(msg.Width, msg.Height, footerHeight)
+
+		// Keep the revise/rereview notes composer sized to the current
+		// layout so its visible textarea tracks terminal resizes while
+		// active (and is correctly sized the next time it opens).
+		m.sizeNotesComposer()
 
 		// Recalculate overlay dimensions on resize
 		if m.activeOverlay != overlayNone {
@@ -1207,6 +1234,53 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+		// Revise/rereview compose-mode interception: while
+		// m.reviseComposeActive is true, the multi-line notesComposer is the
+		// highest-priority focus target — layered above notesEditActive and
+		// the Reviews-tab row shortcuts (so a bare p/r/R/d or Enter typed
+		// while composing reaches the textarea, not a row action). Esc
+		// cancels with NO action run; Ctrl+D submits the typed multi-line
+		// notes to the revise/rereview launch wrappers (which thread them
+		// in-memory to the consolidator, never to the front-matter). This
+		// block must run before the notesEditActive block below.
+		if m.reviseComposeActive {
+			switch msg.String() {
+			case "esc":
+				// Cancel: no revise/rereview is launched at all. Blur, drop
+				// out of compose mode, clear the footer transient message,
+				// and note the cancellation. The typed value is discarded
+				// (it was never persisted anywhere); re-opening the composer
+				// re-reads decision_notes from the spool.
+				m.notesComposer.Blur()
+				m.reviseComposeActive = false
+				if m.footerManager != nil {
+					m.footerManager.SetTransientMessage("")
+				}
+				m = m.appendActivity(m.styles.Activity.Render("Revise cancelled"))
+				return m, nil
+			case "ctrl+d":
+				// Submit: capture the typed multi-line notes and the target/
+				// action, exit compose mode, then dispatch to the matching
+				// launch wrapper with the notes threaded in-memory.
+				notes := m.notesComposer.Value()
+				target := m.reviseComposeTarget
+				action := m.reviseComposeAction
+				m.notesComposer.Blur()
+				m.reviseComposeActive = false
+				if m.footerManager != nil {
+					m.footerManager.SetTransientMessage("")
+				}
+				if action == "rereview" {
+					return m.launchDecideRereview(target, notes)
+				}
+				return m.launchDecideRevise(target, notes)
+			default:
+				var cmd tea.Cmd
+				m.notesComposer, cmd = m.notesComposer.Update(msg)
+				return m, cmd
+			}
+		}
+
 		// Notes-edit-mode interception: while m.notesEditActive is true, the
 		// decision_notes textinput (m.notesInput) is a third, even-higher-
 		// priority focus state layered above both footer-focus and
@@ -1570,6 +1644,56 @@ func (m model) clearOverlay() model {
 	return m
 }
 
+// notesComposerHeight is the visible textarea height (in rows) the
+// revise/rereview composer is sized to when active. A fixed, modest height
+// keeps the composer prominent without swallowing the whole screen; the
+// width tracks the terminal so long lines are visible.
+const notesComposerHeight = 6
+
+// sizeNotesComposer sizes the multi-line notes composer to the current
+// terminal width (leaving a small horizontal margin so its border/prompt
+// never clip the edge) and a fixed visible height. It is a no-op-safe
+// pointer receiver: it mutates m.notesComposer in place, so it is called on
+// the addressable model value inside Update. Guards against a zero width
+// (before the first WindowSizeMsg) by leaving the composer's own default
+// size untouched.
+func (m *model) sizeNotesComposer() {
+	if m.notesComposer == nil {
+		return
+	}
+	width := m.width - 4
+	if width <= 0 {
+		return
+	}
+	m.notesComposer.SetSize(width, notesComposerHeight)
+}
+
+// renderReviseComposer builds the bordered box shown while the
+// revise/rereview notes composer is active: a title line naming the action
+// and target PR, the live textarea view, and a hint line. It is layered
+// onto the view via layerOverlay (see View). The composer's own SetSize
+// (called on open and on resize) governs the textarea's visible width/
+// height; this method only wraps it in a titled border.
+func (m model) renderReviseComposer() string {
+	verb := "Revise"
+	if m.reviseComposeAction == "rereview" {
+		verb = "Rereview"
+	}
+	title := fmt.Sprintf("%s notes — %s #%d", verb, m.reviseComposeTarget.Repo, m.reviseComposeTarget.PR)
+	hint := "Ctrl+D run · Esc cancel"
+
+	body := lipgloss.JoinVertical(
+		lipgloss.Left,
+		m.styles.OverlayTitle.Render(title),
+		"",
+		m.notesComposer.View(),
+		"",
+		m.styles.Prompt.Render(hint),
+	)
+
+	return m.styles.OverlayBorder.Render(body)
+}
+
 func (m model) renderBaseView() string {
 	// Calculate activity height accounting for footer and tab header
 	footerHeight := m.footerManager.GetFooterHeight()
@@ -1643,6 +1767,18 @@ func (m model) View() tea.View {
 		if menuOverlay != "" {
 			content = m.layerMenuOverlay(content, menuOverlay)
 		}
+	}
+
+	// Render the revise/rereview notes composer as a centered, bordered
+	// box layered over the current view while compose mode is active. It
+	// reuses layerOverlay (the same centering machinery the help/activity
+	// overlays use) so the multi-line textarea and its live contents are
+	// actually visible — the single-line NotesInput only surfaces via the
+	// footer transient message, but a multi-line composer needs real
+	// on-screen lines.
+	if m.reviseComposeActive {
+		composer := m.renderReviseComposer()
+		content = m.layerOverlay(content, composer)
 	}
 
 	// Compose overlay if active (overlays work on any view)

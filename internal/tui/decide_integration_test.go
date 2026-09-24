@@ -609,73 +609,161 @@ func TestDecidePost_GhFailure_LeavesDecisionWrittenInPending(t *testing.T) {
 	}
 }
 
-// TestDecideRevise_ImmediateNoConfirm drives `decide revise` and asserts
-// the returned tea.Cmd is non-nil and, once drained, produces
-// decideReviseCompleteMsg WITHOUT any intervening confirm keypress — there
-// is no revise-confirm state field to even inspect, which is itself the
-// proof that no such gate exists.
-func TestDecideRevise_ImmediateNoConfirm(t *testing.T) {
-	m := newDecideTestModel()
-	addReviewsTabWithRecord(m, review.Record{Repo: "owner/repo", PR: 61, SpoolPath: "/tmp/does-not-matter.md"})
+// TestDecideRevise_OpensComposerThenLaunches drives `decide revise` and
+// asserts it OPENS the multi-line notes composer (reviseComposeActive=true)
+// rather than launching immediately, that Esc cancels with no seam call,
+// and that Ctrl+D launches the seam with the typed notes threaded in.
+func TestDecideRevise_OpensComposerThenLaunches(t *testing.T) {
+	t.Run("opens composer, does not launch immediately", func(t *testing.T) {
+		var seamCalls int
+		restore := stubReviseReviewFunc(func(ctx context.Context, rec review.Record, inlineNotes string) (string, error) {
+			seamCalls++
+			return "COMMENT", nil
+		})
+		defer restore()
 
-	restore := stubReviseReviewFunc(func(ctx context.Context, rec review.Record) (string, error) {
-		return "COMMENT", nil
+		m := newDecideRoutingTestModel()
+		addReviewsTabWithRecord(m, review.Record{Repo: "owner/repo", PR: 61, SpoolPath: "/tmp/does-not-matter.md"})
+
+		opened, _ := m.handleDecide([]string{"revise"})
+		if !opened.reviseComposeActive {
+			t.Fatalf("expected revise to open the composer (reviseComposeActive=true)")
+		}
+		if opened.reviseComposeAction != "revise" {
+			t.Errorf("reviseComposeAction = %q, want %q", opened.reviseComposeAction, "revise")
+		}
+		if seamCalls != 0 {
+			t.Errorf("expected the revise seam NOT to be called on open, got %d calls", seamCalls)
+		}
+		if opened.decidePostConfirmState != decidePostConfirmIdle {
+			t.Errorf("revise must never touch the post confirm-gate state, got %v", opened.decidePostConfirmState)
+		}
 	})
-	defer restore()
 
-	result, cmd := m.handleDecide([]string{"revise"})
-	if cmd == nil {
-		t.Fatalf("expected a non-nil tea.Cmd for the revise launch (no confirm gate), got nil")
-	}
+	t.Run("esc cancels with no seam call", func(t *testing.T) {
+		var seamCalls int
+		restore := stubReviseReviewFunc(func(ctx context.Context, rec review.Record, inlineNotes string) (string, error) {
+			seamCalls++
+			return "COMMENT", nil
+		})
+		defer restore()
 
-	msg := drainBatchForType[decideReviseCompleteMsg](t, cmd)
-	if msg.rec.PR != 61 || msg.newVerdict != "COMMENT" {
-		t.Errorf("unexpected decideReviseCompleteMsg: %+v", msg)
-	}
-	if result.decidePostConfirmState != decidePostConfirmIdle {
-		t.Errorf("revise must never touch the post confirm-gate state, got %v", result.decidePostConfirmState)
-	}
+		m := newDecideRoutingTestModel()
+		addReviewsTabWithRecord(m, review.Record{Repo: "owner/repo", PR: 61, SpoolPath: "/tmp/does-not-matter.md"})
+
+		opened, _ := m.handleDecide([]string{"revise"})
+		cancelled, cmd := opened.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+		cancelledModel, ok := cancelled.(model)
+		if !ok {
+			t.Fatalf("Update did not return a model")
+		}
+		if cancelledModel.reviseComposeActive {
+			t.Errorf("expected compose mode to exit after Esc")
+		}
+		if cmd != nil {
+			t.Errorf("expected no tea.Cmd after Esc (nothing launched), got %v", cmd)
+		}
+		if seamCalls != 0 {
+			t.Errorf("expected the revise seam NOT to be called on Esc-cancel, got %d calls", seamCalls)
+		}
+		if !anyLineContains(cancelledModel.activityLines, "Revise cancelled") {
+			t.Errorf("expected a 'Revise cancelled' activity line, got: %v", cancelledModel.activityLines)
+		}
+	})
+
+	t.Run("ctrl+d launches with the typed notes", func(t *testing.T) {
+		var gotNotes string
+		restore := stubReviseReviewFunc(func(ctx context.Context, rec review.Record, inlineNotes string) (string, error) {
+			gotNotes = inlineNotes
+			return "COMMENT", nil
+		})
+		defer restore()
+
+		m := newDecideRoutingTestModel()
+		addReviewsTabWithRecord(m, review.Record{Repo: "owner/repo", PR: 61, SpoolPath: "/tmp/does-not-matter.md"})
+
+		opened, _ := m.handleDecide([]string{"revise"})
+		opened.notesComposer.SetValue("line one\nline two")
+		submitted, cmd := opened.Update(tea.KeyPressMsg(tea.Key{Code: 'd', Mod: tea.ModCtrl}))
+		if cmd == nil {
+			t.Fatalf("expected a non-nil tea.Cmd for the revise launch after Ctrl+D, got nil")
+		}
+		submittedModel, ok := submitted.(model)
+		if !ok {
+			t.Fatalf("Update did not return a model")
+		}
+		if submittedModel.reviseComposeActive {
+			t.Errorf("expected compose mode to exit after Ctrl+D")
+		}
+
+		msg := drainBatchForType[decideReviseCompleteMsg](t, cmd)
+		if msg.rec.PR != 61 || msg.newVerdict != "COMMENT" {
+			t.Errorf("unexpected decideReviseCompleteMsg: %+v", msg)
+		}
+		if gotNotes != "line one\nline two" {
+			t.Errorf("expected the typed multi-line notes to reach the seam, got %q", gotNotes)
+		}
+	})
 }
 
-// TestDecideRereview_ImmediateNoConfirm mirrors
-// TestDecideRevise_ImmediateNoConfirm for the "rereview" action, including
-// a degraded-to-revise sub-case.
-func TestDecideRereview_ImmediateNoConfirm(t *testing.T) {
+// TestDecideRereview_OpensComposerThenLaunches mirrors
+// TestDecideRevise_OpensComposerThenLaunches for the "rereview" action,
+// including a degraded-to-revise sub-case on the launched seam.
+func TestDecideRereview_OpensComposerThenLaunches(t *testing.T) {
 	t.Run("full lens fan-out", func(t *testing.T) {
-		m := newDecideTestModel()
-		addReviewsTabWithRecord(m, review.Record{Repo: "owner/repo", PR: 62, SpoolPath: "/tmp/does-not-matter.md"})
-
-		restore := stubRereviewReviewFunc(func(ctx context.Context, rec review.Record) (string, bool, error) {
+		var gotNotes string
+		restore := stubRereviewReviewFunc(func(ctx context.Context, rec review.Record, inlineNotes string) (string, bool, error) {
+			gotNotes = inlineNotes
 			return "REQUEST_CHANGES", false, nil
 		})
 		defer restore()
 
-		result, cmd := m.handleDecide([]string{"rereview"})
+		m := newDecideRoutingTestModel()
+		addReviewsTabWithRecord(m, review.Record{Repo: "owner/repo", PR: 62, SpoolPath: "/tmp/does-not-matter.md"})
+
+		opened, _ := m.handleDecide([]string{"rereview"})
+		if !opened.reviseComposeActive || opened.reviseComposeAction != "rereview" {
+			t.Fatalf("expected rereview to open the composer with action=rereview, got active=%v action=%q", opened.reviseComposeActive, opened.reviseComposeAction)
+		}
+		if opened.decidePostConfirmState != decidePostConfirmIdle {
+			t.Errorf("rereview must never touch the post confirm-gate state, got %v", opened.decidePostConfirmState)
+		}
+
+		opened.notesComposer.SetValue("focus on concurrency")
+		submitted, cmd := opened.Update(tea.KeyPressMsg(tea.Key{Code: 'd', Mod: tea.ModCtrl}))
 		if cmd == nil {
-			t.Fatalf("expected a non-nil tea.Cmd for the rereview launch (no confirm gate), got nil")
+			t.Fatalf("expected a non-nil tea.Cmd for the rereview launch after Ctrl+D, got nil")
+		}
+		if sm, ok := submitted.(model); ok && sm.reviseComposeActive {
+			t.Errorf("expected compose mode to exit after Ctrl+D")
 		}
 
 		msg := drainBatchForType[decideRereviewCompleteMsg](t, cmd)
 		if msg.rec.PR != 62 || msg.newVerdict != "REQUEST_CHANGES" || msg.degradedToRevise {
 			t.Errorf("unexpected decideRereviewCompleteMsg: %+v", msg)
 		}
-		if result.decidePostConfirmState != decidePostConfirmIdle {
-			t.Errorf("rereview must never touch the post confirm-gate state, got %v", result.decidePostConfirmState)
+		if gotNotes != "focus on concurrency" {
+			t.Errorf("expected the typed notes to reach the rereview seam, got %q", gotNotes)
 		}
 	})
 
 	t.Run("degraded to revise when diff file is gone", func(t *testing.T) {
-		m := newDecideTestModel()
-		addReviewsTabWithRecord(m, review.Record{Repo: "owner/repo", PR: 63, SpoolPath: "/tmp/does-not-matter.md"})
-
-		restore := stubRereviewReviewFunc(func(ctx context.Context, rec review.Record) (string, bool, error) {
+		restore := stubRereviewReviewFunc(func(ctx context.Context, rec review.Record, inlineNotes string) (string, bool, error) {
 			return "APPROVE", true, nil
 		})
 		defer restore()
 
-		result, cmd := m.handleDecide([]string{"rereview"})
+		m := newDecideRoutingTestModel()
+		addReviewsTabWithRecord(m, review.Record{Repo: "owner/repo", PR: 63, SpoolPath: "/tmp/does-not-matter.md"})
+
+		opened, _ := m.handleDecide([]string{"rereview"})
+		submitted, cmd := opened.Update(tea.KeyPressMsg(tea.Key{Code: 'd', Mod: tea.ModCtrl}))
 		if cmd == nil {
-			t.Fatalf("expected a non-nil tea.Cmd for the rereview launch, got nil")
+			t.Fatalf("expected a non-nil tea.Cmd for the rereview launch after Ctrl+D, got nil")
+		}
+		submittedModel, ok := submitted.(model)
+		if !ok {
+			t.Fatalf("Update did not return a model")
 		}
 
 		msg := drainBatchForType[decideRereviewCompleteMsg](t, cmd)
@@ -683,7 +771,7 @@ func TestDecideRereview_ImmediateNoConfirm(t *testing.T) {
 			t.Fatalf("expected degradedToRevise=true, got %+v", msg)
 		}
 
-		final, finalCmd := result.Update(msg)
+		final, finalCmd := submittedModel.Update(msg)
 		if finalCmd != nil {
 			t.Errorf("expected nil cmd from decideRereviewCompleteMsg handling, got %v", finalCmd)
 		}
@@ -828,7 +916,7 @@ func stubPostReviewFunc(fn func(ctx context.Context, rec review.Record) (int, er
 
 // stubRereviewReviewFunc substitutes the package-level rereviewReviewFunc
 // seam (decideactions.go) with fn for the duration of a test.
-func stubRereviewReviewFunc(fn func(ctx context.Context, rec review.Record) (string, bool, error)) func() {
+func stubRereviewReviewFunc(fn func(ctx context.Context, rec review.Record, inlineNotes string) (string, bool, error)) func() {
 	original := rereviewReviewFunc
 	rereviewReviewFunc = fn
 	return func() { rereviewReviewFunc = original }

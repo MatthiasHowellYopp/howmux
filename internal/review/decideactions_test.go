@@ -809,7 +809,7 @@ func TestReviseReview_Success_ClearsDecisionAndRewritesBody(t *testing.T) {
 	newRaw := "some narration\n# Revised Review\n\nsrc/foo.py:1 - warning - x -> y\nVERDICT: REQUEST_CHANGES"
 	withFakeKiroOneshot(t, map[string]string{"review-consolidator": newRaw}, nil)
 
-	verdict, err := ReviseReview(context.Background(), rec)
+	verdict, err := ReviseReview(context.Background(), rec, "")
 	if err != nil {
 		t.Fatalf("ReviseReview() unexpected error: %v", err)
 	}
@@ -849,7 +849,7 @@ func TestReviseReview_NoNotesProvided_UsesPlaceholderText(t *testing.T) {
 		"review-consolidator": "# Revised\nVERDICT: COMMENT",
 	}, nil)
 
-	if _, err := ReviseReview(context.Background(), rec); err != nil {
+	if _, err := ReviseReview(context.Background(), rec, ""); err != nil {
 		t.Fatalf("ReviseReview() unexpected error: %v", err)
 	}
 
@@ -858,6 +858,77 @@ func TestReviseReview_NoNotesProvided_UsesPlaceholderText(t *testing.T) {
 	}
 	if !strings.Contains((*calls)[0].prompt, "(no notes provided)") {
 		t.Errorf("prompt = %q, want it to contain the literal placeholder %q", (*calls)[0].prompt, "(no notes provided)")
+	}
+}
+
+// TestReviseReview_InlineNotes_UsedVerbatimIncludingMultiline verifies that
+// non-blank inlineNotes are threaded into the consolidator prompt verbatim
+// (taking precedence over any persisted decision_notes) and that multi-line
+// notes are accepted without any newline rejection.
+func TestReviseReview_InlineNotes_UsedVerbatimIncludingMultiline(t *testing.T) {
+	base := t.TempDir()
+	spoolPath := writeFakeSpoolFile(t, base, map[string]string{
+		"repo": "owner/repo", "pr": "14", "verdict": "COMMENT", "decision": "revise",
+		// A persisted single-line note that must be IGNORED when inline
+		// notes are supplied.
+		"decision_notes": "persisted note that must not win",
+	}, "# Review\n\nfindings\nVERDICT: COMMENT\n")
+	rec := recordForSpool("owner/repo", 14, spoolPath)
+
+	calls := withFakeKiroOneshot(t, map[string]string{
+		"review-consolidator": "# Revised\nVERDICT: COMMENT",
+	}, nil)
+
+	inline := "First, tighten the error handling.\nSecond, add a test for the empty-input case."
+	if _, err := ReviseReview(context.Background(), rec, inline); err != nil {
+		t.Fatalf("ReviseReview() unexpected error: %v", err)
+	}
+
+	if len(*calls) != 1 {
+		t.Fatalf("expected exactly one kiroOneshotFunc call, got %d", len(*calls))
+	}
+	prompt := (*calls)[0].prompt
+	if !strings.Contains(prompt, inline) {
+		t.Errorf("prompt = %q, want it to contain the multi-line inline notes verbatim %q", prompt, inline)
+	}
+	if strings.Contains(prompt, "persisted note that must not win") {
+		t.Errorf("prompt included the persisted decision_notes even though inline notes were supplied: %q", prompt)
+	}
+	if strings.Contains(prompt, "(no notes provided)") {
+		t.Errorf("prompt used the no-notes placeholder despite non-blank inline notes: %q", prompt)
+	}
+}
+
+// TestReviseReview_BlankInlineNotes_FallsBackToPersisted verifies that a
+// blank inlineNotes argument falls back to the persisted decision_notes:
+// front-matter field (the manual-flow notes), rather than the no-notes
+// placeholder, when a persisted note exists.
+func TestReviseReview_BlankInlineNotes_FallsBackToPersisted(t *testing.T) {
+	base := t.TempDir()
+	spoolPath := writeFakeSpoolFile(t, base, map[string]string{
+		"repo": "owner/repo", "pr": "15", "verdict": "COMMENT", "decision": "revise",
+		"decision_notes": "recheck the auth flow please",
+	}, "# Review\n\nfindings\nVERDICT: COMMENT\n")
+	rec := recordForSpool("owner/repo", 15, spoolPath)
+
+	calls := withFakeKiroOneshot(t, map[string]string{
+		"review-consolidator": "# Revised\nVERDICT: COMMENT",
+	}, nil)
+
+	// Blank inline notes (and whitespace-only, to prove TrimSpace is used).
+	if _, err := ReviseReview(context.Background(), rec, "   \n  "); err != nil {
+		t.Fatalf("ReviseReview() unexpected error: %v", err)
+	}
+
+	if len(*calls) != 1 {
+		t.Fatalf("expected exactly one kiroOneshotFunc call, got %d", len(*calls))
+	}
+	prompt := (*calls)[0].prompt
+	if !strings.Contains(prompt, "recheck the auth flow please") {
+		t.Errorf("prompt = %q, want it to fall back to the persisted decision_notes", prompt)
+	}
+	if strings.Contains(prompt, "(no notes provided)") {
+		t.Errorf("prompt used the no-notes placeholder despite a persisted note being present: %q", prompt)
 	}
 }
 
@@ -876,7 +947,7 @@ func TestReviseReview_KiroCallFails_ReturnsError_SpoolUnchanged(t *testing.T) {
 
 	withFakeKiroOneshot(t, nil, map[string]error{"review-consolidator": fmt.Errorf("kiro-cli exited 1")})
 
-	_, callErr := ReviseReview(context.Background(), rec)
+	_, callErr := ReviseReview(context.Background(), rec, "")
 	if callErr == nil {
 		t.Fatal("ReviseReview() error = nil, want non-nil error on kiro-cli failure")
 	}
@@ -904,7 +975,7 @@ func TestRereviewReview_DiffFileMissing_DegradesToRevise(t *testing.T) {
 		"review-consolidator": "# Revised\nVERDICT: APPROVE",
 	}, nil)
 
-	verdict, degraded, err := RereviewReview(context.Background(), rec)
+	verdict, degraded, err := RereviewReview(context.Background(), rec, "")
 	if err != nil {
 		t.Fatalf("RereviewReview() unexpected error: %v", err)
 	}
@@ -935,7 +1006,7 @@ func TestRereviewReview_DiffFileEmpty_DegradesToRevise(t *testing.T) {
 		"review-consolidator": "# Revised\nVERDICT: APPROVE",
 	}, nil)
 
-	_, degraded, err := RereviewReview(context.Background(), rec)
+	_, degraded, err := RereviewReview(context.Background(), rec, "")
 	if err != nil {
 		t.Fatalf("RereviewReview() unexpected error: %v", err)
 	}
@@ -964,7 +1035,7 @@ func TestRereviewReview_DiffFileExists_FansOutToAllLenses(t *testing.T) {
 		"review-consolidator":      "# Consolidated\nVERDICT: REQUEST_CHANGES",
 	}, nil)
 
-	verdict, degraded, err := RereviewReview(context.Background(), rec)
+	verdict, degraded, err := RereviewReview(context.Background(), rec, "")
 	if err != nil {
 		t.Fatalf("RereviewReview() unexpected error: %v", err)
 	}
@@ -1016,7 +1087,7 @@ func TestRereviewReview_LensCallFails_PropagatesError(t *testing.T) {
 		"review-security-agent": fmt.Errorf("kiro-cli exited 1 for security lens"),
 	})
 
-	_, _, callErr := RereviewReview(context.Background(), rec)
+	_, _, callErr := RereviewReview(context.Background(), rec, "")
 	if callErr == nil {
 		t.Fatal("RereviewReview() error = nil, want non-nil error when a lens call fails")
 	}
@@ -1074,7 +1145,7 @@ func TestRereviewReview_LensCallFails_CancelsSiblings(t *testing.T) {
 		}
 	}
 
-	_, _, callErr := RereviewReview(context.Background(), rec)
+	_, _, callErr := RereviewReview(context.Background(), rec, "")
 	if callErr == nil {
 		t.Fatal("RereviewReview() error = nil, want non-nil when a lens fails")
 	}
@@ -1126,7 +1197,7 @@ func TestRereviewReview_LensFanOut_NoRaceCondition(t *testing.T) {
 		return fmt.Sprintf("output from %s", agentName), nil
 	}
 
-	verdict, degraded, err := RereviewReview(context.Background(), rec)
+	verdict, degraded, err := RereviewReview(context.Background(), rec, "")
 	if err != nil {
 		t.Fatalf("RereviewReview() unexpected error: %v", err)
 	}

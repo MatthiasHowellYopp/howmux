@@ -489,14 +489,23 @@ the whole review as your reply. End with a final line exactly:
 }
 
 // ReviseReview implements the "revise" decide action for a single review:
-// a consolidator-only re-run using the human's decision_notes. It reads
-// the current body + notes, calls the review-consolidator agent via
-// kiroOneshotFunc, extracts the new body/verdict, and rewrites the spool
-// file in place via RewriteSpoolEntry with the decision cleared (so the
-// file returns to pending/ for another human look). The spool file is
-// left completely untouched if the kiro-cli call fails — no partial
-// rewrite is ever written.
-func ReviseReview(ctx context.Context, rec Record) (newVerdict string, err error) {
+// a consolidator-only re-run using the human's revision notes. It reads
+// the current body, resolves the notes to feed the consolidator, calls the
+// review-consolidator agent via kiroOneshotFunc, extracts the new
+// body/verdict, and rewrites the spool file in place via RewriteSpoolEntry
+// with the decision cleared (so the file returns to pending/ for another
+// human look). The spool file is left completely untouched if the kiro-cli
+// call fails — no partial rewrite is ever written.
+//
+// Notes resolution: inlineNotes (typed into the in-app multi-line composer
+// at decide time) take precedence when non-blank — they are passed straight
+// into the consolidator prompt and are NOT persisted to the spool
+// front-matter. When inlineNotes is blank, ReviseReview falls back to the
+// persisted decision_notes: front-matter field (the manual-flow notes set
+// via the single-line notes editor). inlineNotes may contain newlines;
+// buildRevisePrompt interpolates them verbatim into a multi-line prompt, so
+// multi-line notes are accepted as-is.
+func ReviseReview(ctx context.Context, rec Record, inlineNotes string) (newVerdict string, err error) {
 	resolved, found, inDoneDir := resolveSpoolPath(rec.SpoolPath)
 	if !found {
 		return "", fmt.Errorf("no spool file for %s#%d: %s", rec.Repo, rec.PR, rec.SpoolPath)
@@ -509,7 +518,10 @@ func ReviseReview(ctx context.Context, rec Record) (newVerdict string, err error
 	if !info.Found {
 		return "", fmt.Errorf("failed to read spool body for %s#%d: %s", rec.Repo, rec.PR, resolved)
 	}
-	notes := CurrentDecisionNotes(resolved, "")
+	notes := inlineNotes
+	if strings.TrimSpace(notes) == "" {
+		notes = CurrentDecisionNotes(resolved, "")
+	}
 
 	prompt := buildRevisePrompt(body, notes)
 	raw, err := kiroOneshotFunc(ctx, "review-consolidator", prompt)
@@ -547,6 +559,13 @@ type lensResult struct {
 // reference's documented degrade path — and reports
 // degradedToRevise=true.
 //
+// Notes resolution mirrors ReviseReview: inlineNotes (typed into the
+// in-app multi-line composer at decide time) take precedence when
+// non-blank and are threaded through to both the lens-fan-out orientation
+// context and — on the degrade path — ReviseReview; they are never
+// persisted to the spool front-matter. When inlineNotes is blank, the
+// persisted decision_notes: front-matter field is used instead.
+//
 // Known inherited limitation (not new to this issue): the spool
 // front-matter does not carry a "language" key, so the language lens is
 // always resolved as "python", mirroring pr_review_finalize.py's own
@@ -565,7 +584,7 @@ type lensResult struct {
 // siblings on first failure, which is safe for concurrent use per the
 // context package's contract. This must remain race-free under
 // `go test -race`; see TestRereviewReview_LensFanOut_NoRaceCondition.
-func RereviewReview(ctx context.Context, rec Record) (newVerdict string, degradedToRevise bool, err error) {
+func RereviewReview(ctx context.Context, rec Record, inlineNotes string) (newVerdict string, degradedToRevise bool, err error) {
 	resolved, found, inDoneDir := resolveSpoolPath(rec.SpoolPath)
 	if !found {
 		return "", false, fmt.Errorf("no spool file for %s#%d: %s", rec.Repo, rec.PR, rec.SpoolPath)
@@ -589,11 +608,14 @@ func RereviewReview(ctx context.Context, rec Record) (newVerdict string, degrade
 	}
 
 	if !diffExists {
-		verdict, reviseErr := ReviseReview(ctx, rec)
+		verdict, reviseErr := ReviseReview(ctx, rec, inlineNotes)
 		return verdict, true, reviseErr
 	}
 
-	notes := CurrentDecisionNotes(resolved, "")
+	notes := inlineNotes
+	if strings.TrimSpace(notes) == "" {
+		notes = CurrentDecisionNotes(resolved, "")
+	}
 	if strings.TrimSpace(notes) == "" {
 		notes = "(none)"
 	}
