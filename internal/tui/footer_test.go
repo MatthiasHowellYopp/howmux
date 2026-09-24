@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -180,6 +181,109 @@ func TestNotesEditMode_SetsAndClearsFooterTransientMessage(t *testing.T) {
 
 		if got := resultModel.footerManager.transientMessage; got != "" {
 			t.Errorf("expected footer transient message to be cleared after Esc-cancel, got %q", got)
+		}
+	})
+}
+
+// TestFooterReviewStatus covers all four review-segment states: unavailable
+// (no SetReviewWatcher call), inactive (set but not started), active with 0
+// enrolled, and active with N>0 enrolled. Uses review.NewWatcher backed by a
+// real review.NewStore(t.TempDir()) — footer_test.go is in package tui, so it
+// cannot reach review's unexported fakeStore test double.
+func TestFooterReviewStatus(t *testing.T) {
+	newFooter := func(t *testing.T) *FooterManager {
+		cfg := &config.Config{Theme: "default"}
+		manager := agent.NewManager(cfg)
+		registry := NewCommandRegistry(manager)
+		theme := &config.Theme{}
+		styles := NewStyles(theme)
+		autocomplete := NewAutocompleteInput(registry, styles)
+		tabManager := NewTabManager()
+		w := watcher.New(cfg, manager)
+		return NewFooterManager(styles, cfg, w, autocomplete, tabManager)
+	}
+
+	t.Run("unavailable when SetReviewWatcher never called", func(t *testing.T) {
+		fm := newFooter(t)
+
+		got := fm.renderReviewStatus()
+		want := "review: unavailable"
+		if got != want {
+			t.Errorf("renderReviewStatus() = %q, want %q", got, want)
+		}
+		if base := fm.renderBaseInfo(); !strings.Contains(base, want) {
+			t.Errorf("renderBaseInfo() = %q, want it to contain %q", base, want)
+		}
+	})
+
+	t.Run("inactive when watcher set but not started", func(t *testing.T) {
+		fm := newFooter(t)
+		store := review.NewStore(t.TempDir())
+		rw := review.NewWatcher(store, time.Minute, 2, "test-reviewer")
+		fm.SetReviewWatcher(rw)
+
+		got := fm.renderReviewStatus()
+		want := "review: inactive"
+		if got != want {
+			t.Errorf("renderReviewStatus() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("active with 0 enrolled", func(t *testing.T) {
+		fm := newFooter(t)
+		store := review.NewStore(t.TempDir())
+		rw := review.NewWatcher(store, 5*time.Minute, 2, "test-reviewer")
+		rw.Start()
+		defer rw.Stop()
+		fm.SetReviewWatcher(rw)
+
+		got := fm.renderReviewStatus()
+		want := "review: active (5m0s, 0 enrolled)"
+		if got != want {
+			t.Errorf("renderReviewStatus() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("active with N>0 enrolled, no pluralization", func(t *testing.T) {
+		fm := newFooter(t)
+		store := review.NewStore(t.TempDir())
+		if err := store.Save(review.Record{
+			Repo:       "owner/repo",
+			PR:         1,
+			URL:        "https://github.com/owner/repo/pull/1",
+			Status:     review.StatusWatching,
+			EnrolledAt: time.Now().Format(time.RFC3339),
+		}); err != nil {
+			t.Fatalf("failed to save record: %v", err)
+		}
+		if err := store.Save(review.Record{
+			Repo:       "owner/repo",
+			PR:         2,
+			URL:        "https://github.com/owner/repo/pull/2",
+			Status:     review.StatusWatching,
+			EnrolledAt: time.Now().Format(time.RFC3339),
+		}); err != nil {
+			t.Fatalf("failed to save record: %v", err)
+		}
+		if err := store.Save(review.Record{
+			Repo:       "owner/repo",
+			PR:         3,
+			URL:        "https://github.com/owner/repo/pull/3",
+			Status:     review.StatusWatching,
+			EnrolledAt: time.Now().Format(time.RFC3339),
+		}); err != nil {
+			t.Fatalf("failed to save record: %v", err)
+		}
+
+		rw := review.NewWatcher(store, 5*time.Minute, 2, "test-reviewer")
+		rw.Start()
+		defer rw.Stop()
+		fm.SetReviewWatcher(rw)
+
+		got := fm.renderReviewStatus()
+		want := "review: active (5m0s, 3 enrolled)"
+		if got != want {
+			t.Errorf("renderReviewStatus() = %q, want %q", got, want)
 		}
 	})
 }

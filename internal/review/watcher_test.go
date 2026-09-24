@@ -65,6 +65,31 @@ func (fs *fakeStore) Remove(repo string, pr int) error {
 	return nil
 }
 
+// failingListStore is a minimal StoreInterface fake whose List() always
+// returns an error, following the same small-dedicated-fake convention as
+// other error-injecting fakes in this file (e.g. saveSeqStore/failingSaveStore
+// in runner_test.go).
+type failingListStore struct{}
+
+// Verify failingListStore implements StoreInterface at compile time
+var _ StoreInterface = (*failingListStore)(nil)
+
+func (fs *failingListStore) List() ([]Record, error) {
+	return nil, fmt.Errorf("simulated list failure")
+}
+
+func (fs *failingListStore) Save(rec Record) error {
+	return nil
+}
+
+func (fs *failingListStore) Get(repo string, pr int) (Record, bool, error) {
+	return Record{}, false, nil
+}
+
+func (fs *failingListStore) Remove(repo string, pr int) error {
+	return nil
+}
+
 type fetchPRCall struct {
 	repo string
 	pr   int
@@ -662,4 +687,117 @@ func TestWatcherConcurrentDispatchRaceCondition(t *testing.T) {
 	if activeCount != 0 {
 		t.Errorf("expected 0 active reviews after completion, got %d", activeCount)
 	}
+}
+
+// TestWatcherInterval verifies Interval() returns the exact pollInterval
+// passed to NewWatcher.
+func TestWatcherInterval(t *testing.T) {
+	store := &fakeStore{}
+	want := 7 * time.Minute
+	watcher := NewWatcher(store, want, 5, "test-reviewer")
+
+	if got := watcher.Interval(); got != want {
+		t.Errorf("Interval() = %v, want %v", got, want)
+	}
+}
+
+// TestWatcherEnrolledCount_Empty verifies EnrolledCount() returns 0 for an
+// empty store.
+func TestWatcherEnrolledCount_Empty(t *testing.T) {
+	store := &fakeStore{}
+	watcher := NewWatcher(store, time.Minute, 5, "test-reviewer")
+
+	if got := watcher.EnrolledCount(); got != 0 {
+		t.Errorf("EnrolledCount() = %d, want 0 for empty store", got)
+	}
+}
+
+// TestWatcherEnrolledCount_NRecords verifies EnrolledCount() returns the
+// correct count for a store with N records.
+func TestWatcherEnrolledCount_NRecords(t *testing.T) {
+	store := &fakeStore{
+		records: []Record{
+			{Repo: "owner/repo", PR: 1, URL: "url1", Status: StatusWatching, EnrolledAt: time.Now().Format(time.RFC3339)},
+			{Repo: "owner/repo", PR: 2, URL: "url2", Status: StatusWatching, EnrolledAt: time.Now().Format(time.RFC3339)},
+			{Repo: "owner/repo", PR: 3, URL: "url3", Status: StatusWatching, EnrolledAt: time.Now().Format(time.RFC3339)},
+		},
+	}
+	watcher := NewWatcher(store, time.Minute, 5, "test-reviewer")
+
+	if got := watcher.EnrolledCount(); got != 3 {
+		t.Errorf("EnrolledCount() = %d, want 3", got)
+	}
+}
+
+// TestWatcherEnrolledCount_ListError verifies EnrolledCount() returns 0 (not
+// a panic, not a propagated error) when the store's List() fails.
+func TestWatcherEnrolledCount_ListError(t *testing.T) {
+	store := &failingListStore{}
+	watcher := NewWatcher(store, time.Minute, 5, "test-reviewer")
+
+	if got := watcher.EnrolledCount(); got != 0 {
+		t.Errorf("EnrolledCount() = %d, want 0 when List() errors", got)
+	}
+}
+
+// TestWatcherInterval_EnrolledCount_ConcurrentWithPoll exercises Interval()
+// and EnrolledCount() concurrently with Start()/poll activity, so `go test
+// -race` can observe the access pattern crossing the render-path/watcher
+// boundary described in the design spec's Concurrency Analysis.
+func TestWatcherInterval_EnrolledCount_ConcurrentWithPoll(t *testing.T) {
+	store := &fakeStore{
+		records: []Record{
+			{Repo: "owner/repo", PR: 1, URL: "url1", Status: StatusWatching, EnrolledAt: time.Now().Format(time.RFC3339)},
+			{Repo: "owner/repo", PR: 2, URL: "url2", Status: StatusWatching, EnrolledAt: time.Now().Format(time.RFC3339)},
+		},
+	}
+
+	origFetch := fetchPRFunc
+	origDispatch := dispatchReviewFunc
+	origRemove := removeRecordFunc
+	defer func() {
+		fetchPRFunc = origFetch
+		dispatchReviewFunc = origDispatch
+		removeRecordFunc = origRemove
+	}()
+
+	fetchPRFunc = func(repo string, pr int) (github.PR, error) {
+		return github.PR{
+			State:      "OPEN",
+			HeadRefOid: fmt.Sprintf("sha-%d", pr),
+		}, nil
+	}
+	dispatchReviewFunc = func(ctx context.Context, rec Record, headSHA string, store StoreInterface, tabWriter io.Writer) error {
+		return nil
+	}
+	removeRecordFunc = func(store StoreInterface, repo string, pr int) error {
+		return store.Remove(repo, pr)
+	}
+
+	watcher := NewWatcher(store, 10*time.Millisecond, 5, "test-reviewer")
+	watcher.Start()
+	defer watcher.Stop()
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_ = watcher.Interval()
+					_ = watcher.EnrolledCount()
+				}
+			}
+		}()
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	close(stop)
+	wg.Wait()
 }

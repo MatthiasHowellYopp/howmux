@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/matthiashowellyopp/howmux/internal/config"
+	"github.com/matthiashowellyopp/howmux/internal/review"
 	"github.com/matthiashowellyopp/howmux/internal/session"
 	"github.com/matthiashowellyopp/howmux/internal/watcher"
 )
@@ -14,6 +15,7 @@ type FooterManager struct {
 	styles            *Styles
 	config            *config.Config
 	watcher           *watcher.Watcher
+	reviewWatcher     *review.Watcher
 	contextTracker    *ContextTracker
 	autocompleteInput *AutocompleteInput
 	tabManager        *TabManager
@@ -29,6 +31,15 @@ type FooterManager struct {
 // that takes priority over the normal contextual info.
 func (fm *FooterManager) SetTransientMessage(msg string) {
 	fm.transientMessage = msg
+}
+
+// SetReviewWatcher sets the review loop watcher reference used to render the
+// "review: ..." footer segment. Call this after constructing the
+// review.Watcher (NewFooterManager's signature and call site are unchanged;
+// this setter exists because review.Watcher is constructed after
+// FooterManager in tui.go).
+func (fm *FooterManager) SetReviewWatcher(rw *review.Watcher) {
+	fm.reviewWatcher = rw
 }
 
 // FooterContent represents the structured content for the footer
@@ -144,7 +155,8 @@ func (fm *FooterManager) renderStatusRow(activeTabType TabType) string {
 // renderBaseInfo renders the base information shown on all tabs
 func (fm *FooterManager) renderBaseInfo() string {
 	watcherStatus := fm.renderWatcherStatus()
-	return fmt.Sprintf("%s | theme: %s | Ctrl+Y copy · Ctrl+C quit", watcherStatus, fm.config.Theme)
+	reviewStatus := fm.renderReviewStatus()
+	return fmt.Sprintf("%s | theme: %s | %s | Ctrl+Y copy · Ctrl+C quit", watcherStatus, fm.config.Theme, reviewStatus)
 }
 
 // renderWatcherStatus formats the watcher status for display
@@ -161,6 +173,23 @@ func (fm *FooterManager) renderWatcherStatus() string {
 	interval := fm.config.PollInterval.String()
 
 	return fmt.Sprintf("watcher: active (%s, %s)", fm.config.Repo, interval)
+}
+
+// renderReviewStatus formats the PR review loop status for display, mirroring
+// renderWatcherStatus's nil → inactive → active progression.
+func (fm *FooterManager) renderReviewStatus() string {
+	if fm.reviewWatcher == nil {
+		return "review: unavailable"
+	}
+
+	if !fm.reviewWatcher.Running() {
+		return "review: inactive"
+	}
+
+	interval := fm.reviewWatcher.Interval().String()
+	count := fm.reviewWatcher.EnrolledCount()
+
+	return fmt.Sprintf("review: active (%s, %d enrolled)", interval, count)
 }
 
 // renderPlanningInfo renders context usage and directory information for planning tabs

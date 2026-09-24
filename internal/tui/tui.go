@@ -335,6 +335,7 @@ func newModel(w *watcher.Watcher, m *agent.Manager, cfg *config.Config, logFile 
 			"(set 'reviewer:' in .howmux/config.yaml or fix 'gh auth'). New-PR reviews still work."
 	}
 	reviewWatcher := review.NewWatcher(reviewStore, reviewPollInterval, 2, reviewer)
+	footerManager.SetReviewWatcher(reviewWatcher) // NEW — wires footer to the review watcher built above
 
 	initialActivity := make([]string, 0)
 	if reviewerNotice != "" {
