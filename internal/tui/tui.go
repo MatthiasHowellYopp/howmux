@@ -508,8 +508,8 @@ func (m model) isClickInFooterInput(mouseX, mouseY int) bool {
 	}
 
 	// Click must be after the prompt text
-	// The prompt is "kiro-krew> " from the textinput
-	prompt := "kiro-krew> "
+	// The prompt is "howmux> " from the textinput
+	prompt := "howmux> "
 	promptWidth := lipgloss.Width(prompt)
 
 	return mouseX >= promptWidth
