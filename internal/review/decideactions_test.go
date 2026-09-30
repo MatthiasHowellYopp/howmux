@@ -369,6 +369,39 @@ func TestPostReviewCommandFunc_GhError_WrapsStderr(t *testing.T) {
 	}
 }
 
+// TestPostReviewCommandFunc_GhError_SurfacesResponseBody verifies that when
+// gh exits non-zero and writes the field-level errors[] JSON to stdout (the
+// 422 response body — e.g. a comment whose line isn't part of the diff),
+// that body surfaces in the wrapped error rather than being discarded. This
+// is the actionable detail the previous cmd.Output() path threw away.
+func TestPostReviewCommandFunc_GhError_SurfacesResponseBody(t *testing.T) {
+	dir := t.TempDir()
+	fakeBin := filepath.Join(dir, "gh")
+	// gh prints the JSON response body to stdout on a 422 and a short HTTP
+	// status line to stderr, then exits non-zero.
+	body := `{"message":"Validation Failed","errors":[{"resource":"PullRequestReviewComment","field":"line","code":"invalid"}]}`
+	script := "#!/bin/sh\n" +
+		"echo 'HTTP 422: Unprocessable Entity' 1>&2\n" +
+		"echo '" + body + "'\n" +
+		"exit 1\n"
+	if err := os.WriteFile(fakeBin, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+	restorePath := prependPath(t, dir)
+	defer restorePath()
+
+	_, err := defaultPostReviewCommand(context.Background(), "/tmp/payload.json", "owner/repo", 42)
+	if err == nil {
+		t.Fatal("defaultPostReviewCommand() error = nil, want non-nil error")
+	}
+	if !strings.Contains(err.Error(), "Validation Failed") {
+		t.Errorf("error = %v, want it to contain gh's response-body message", err)
+	}
+	if !strings.Contains(err.Error(), `"field":"line"`) {
+		t.Errorf("error = %v, want it to contain the field-level errors[] detail", err)
+	}
+}
+
 // prependPath prepends dir to $PATH for the duration of the test, returning
 // a restore function. Used by the seam tests above so a fake "kiro-cli"/"gh"
 // script is found first, without touching the *Func seams (those tests
@@ -586,7 +619,7 @@ func TestBuildReviewPayload_MapsVerdictToEvent(t *testing.T) {
 	body := "src/foo.py:10 - warning - issue -> fix\n"
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, event, _, err := buildReviewPayload("owner/repo", 1, tt.verdict, body)
+			_, event, _, err := buildReviewPayload("owner/repo", 1, tt.verdict, body, nil)
 			if err != nil {
 				t.Fatalf("buildReviewPayload() unexpected error: %v", err)
 			}
@@ -600,7 +633,7 @@ func TestBuildReviewPayload_MapsVerdictToEvent(t *testing.T) {
 func TestBuildReviewPayload_ParsesFindingsIntoComments(t *testing.T) {
 	body := "# Review\n\nsrc/foo.py:10 - warning - unchecked error -> handle it\nsrc/bar.py:22 - nit - naming -> rename\n\nVERDICT: COMMENT\n"
 
-	payloadJSON, event, count, err := buildReviewPayload("owner/repo", 5, "COMMENT", body)
+	payloadJSON, event, count, err := buildReviewPayload("owner/repo", 5, "COMMENT", body, nil)
 	if err != nil {
 		t.Fatalf("buildReviewPayload() unexpected error: %v", err)
 	}
@@ -631,6 +664,339 @@ func TestBuildReviewPayload_ParsesFindingsIntoComments(t *testing.T) {
 	}
 	if decoded.Body != body {
 		t.Errorf("decoded.Body = %q, want the full original body verbatim", decoded.Body)
+	}
+}
+
+// --- Task 3: diff anchoring + 422 body-only fallback ------------------------
+
+func TestParseDiffCommentableLines(t *testing.T) {
+	diff := `diff --git a/src/foo.py b/src/foo.py
+index 111..222 100644
+--- a/src/foo.py
++++ b/src/foo.py
+@@ -1,3 +1,4 @@
+ unchanged one
+-removed line
++added two
++added three
+ unchanged four
+diff --git a/src/gone.py b/src/gone.py
+deleted file mode 100644
+--- a/src/gone.py
++++ /dev/null
+@@ -1,2 +0,0 @@
+-gone one
+-gone two
+`
+	got := parseDiffCommentableLines(diff)
+
+	foo, ok := got["src/foo.py"]
+	if !ok {
+		t.Fatalf("expected src/foo.py in commentable set, got keys %v", keysOf(got))
+	}
+	// New-file numbering: line 1 = "unchanged one", 2 = "added two",
+	// 3 = "added three", 4 = "unchanged four". The removed line has no
+	// new-file number and must not appear.
+	for _, want := range []int{1, 2, 3, 4} {
+		if !foo[want] {
+			t.Errorf("src/foo.py line %d: commentable = false, want true", want)
+		}
+	}
+	if foo[5] {
+		t.Errorf("src/foo.py line 5: commentable = true, want false (beyond hunk)")
+	}
+	// A deleted file (+++ /dev/null) contributes no commentable lines.
+	if lines, present := got["src/gone.py"]; present && len(lines) > 0 {
+		t.Errorf("src/gone.py should have no commentable lines, got %v", lines)
+	}
+}
+
+func keysOf(m map[string]map[int]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+// TestBuildReviewPayload_DiffAnchoring_FoldsUnanchored verifies that with a
+// commentable set, an on-diff finding is posted inline while an off-diff
+// finding is folded into the body instead of being emitted as a comment
+// (which would 422 the whole review).
+func TestBuildReviewPayload_DiffAnchoring_FoldsUnanchored(t *testing.T) {
+	body := "# Review\n\n" +
+		"src/foo.py:2 - warning - on the diff -> fix it\n" +
+		"src/foo.py:99 - warning - off the diff -> fix it too\n" +
+		"other.py:5 - nit - file not in diff -> rename\n\n" +
+		"VERDICT: COMMENT\n"
+
+	commentable := map[string]map[int]bool{
+		"src/foo.py": {2: true},
+	}
+
+	payloadJSON, _, count, err := buildReviewPayload("owner/repo", 1, "COMMENT", body, commentable)
+	if err != nil {
+		t.Fatalf("buildReviewPayload() unexpected error: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("commentCount = %d, want 1 (only src/foo.py:2 anchors)", count)
+	}
+
+	var decoded reviewPayload
+	if err := json.Unmarshal(payloadJSON, &decoded); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if len(decoded.Comments) != 1 {
+		t.Fatalf("inline comments = %d, want 1", len(decoded.Comments))
+	}
+	if decoded.Comments[0].Path != "src/foo.py" || decoded.Comments[0].Line != 2 {
+		t.Errorf("comment = %+v, want src/foo.py:2", decoded.Comments[0])
+	}
+	// The two off-diff findings must survive in the body, not vanish.
+	if !strings.Contains(decoded.Body, "src/foo.py:99") {
+		t.Errorf("body missing folded finding src/foo.py:99:\n%s", decoded.Body)
+	}
+	if !strings.Contains(decoded.Body, "other.py:5") {
+		t.Errorf("body missing folded finding other.py:5:\n%s", decoded.Body)
+	}
+	if !strings.Contains(decoded.Body, "Additional findings") {
+		t.Errorf("body missing the Additional findings section:\n%s", decoded.Body)
+	}
+}
+
+// TestBuildReviewPayload_NilCommentable_PostsAllInline confirms the
+// best-effort fallback: a nil commentable map means "no diff info", so every
+// finding is posted inline and the body is untouched (prior behavior).
+func TestBuildReviewPayload_NilCommentable_PostsAllInline(t *testing.T) {
+	body := "src/foo.py:2 - warning - a -> b\nsrc/foo.py:99 - nit - c -> d\n"
+	payloadJSON, _, count, err := buildReviewPayload("owner/repo", 1, "COMMENT", body, nil)
+	if err != nil {
+		t.Fatalf("buildReviewPayload() unexpected error: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("commentCount = %d, want 2 (nil commentable posts all)", count)
+	}
+	var decoded reviewPayload
+	if err := json.Unmarshal(payloadJSON, &decoded); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if decoded.Body != body {
+		t.Errorf("body = %q, want verbatim (no folding when commentable is nil)", decoded.Body)
+	}
+}
+
+// TestPostReview_422_FallsBackToBodyOnly verifies that when the first post
+// 422s, PostReview retries once with a comments-less payload so the review
+// still lands, and archives on the fallback's success.
+func TestPostReview_422_FallsBackToBodyOnly(t *testing.T) {
+	withFakeDecisionScript(t)
+	os.Setenv("HOWMUX_NO_HUMANIZE", "1")
+	defer os.Unsetenv("HOWMUX_NO_HUMANIZE")
+
+	base := t.TempDir()
+	// No diff_file, so buildReviewPayload posts the finding inline on the
+	// first attempt; the fake 422s it, forcing the body-only retry.
+	body := "# Review\n\nsrc/foo.py:10 - warning - issue -> fix\n\nVERDICT: COMMENT\n"
+	spoolPath := writeFakeSpoolFile(t, base, map[string]string{
+		"repo": "owner/repo", "pr": "42", "verdict": "COMMENT", "decision": "",
+	}, body)
+	rec := recordForSpool("owner/repo", 42, spoolPath)
+
+	// Custom fake: 422 the first call (which carries inline comments),
+	// succeed the second (body-only). Capture each payload's comment count.
+	orig := postReviewCommandFunc
+	defer func() { postReviewCommandFunc = orig }()
+	var commentCounts []int
+	postReviewCommandFunc = func(ctx context.Context, payloadFile string, repo string, pr int) ([]byte, error) {
+		data, readErr := os.ReadFile(payloadFile)
+		if readErr != nil {
+			t.Fatalf("fake gh: read payload: %v", readErr)
+		}
+		var p reviewPayload
+		if err := json.Unmarshal(data, &p); err != nil {
+			t.Fatalf("fake gh: unmarshal payload: %v", err)
+		}
+		commentCounts = append(commentCounts, len(p.Comments))
+		if len(p.Comments) > 0 {
+			return nil, fmt.Errorf("gh api pulls/reviews failed (exit 1): HTTP 422: Validation Failed: response body: line must be part of the diff")
+		}
+		return []byte(`{"id":1}`), nil
+	}
+
+	commentsPosted, err := PostReview(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("PostReview() unexpected error (should fall back to body-only): %v", err)
+	}
+	if commentsPosted != 0 {
+		t.Errorf("commentsPosted = %d, want 0 (body-only fallback posts no inline comments)", commentsPosted)
+	}
+	if len(commentCounts) != 2 {
+		t.Fatalf("gh calls = %d, want 2 (initial + body-only retry): %v", len(commentCounts), commentCounts)
+	}
+	if commentCounts[0] == 0 {
+		t.Errorf("first payload had 0 comments, want >0 (the inline attempt)")
+	}
+	if commentCounts[1] != 0 {
+		t.Errorf("second payload had %d comments, want 0 (body-only fallback)", commentCounts[1])
+	}
+
+	// Fallback succeeded, so the file must be archived to done/.
+	if _, statErr := os.Stat(spoolPath); !os.IsNotExist(statErr) {
+		t.Errorf("expected spool archived out of pending/, stat err = %v", statErr)
+	}
+	donePath := swapPendingDone(spoolPath, true)
+	if _, statErr := os.Stat(donePath); statErr != nil {
+		t.Errorf("expected archived file at %s: %v", donePath, statErr)
+	}
+}
+
+// TestPostReview_Non422Error_NoFallback verifies a non-422 failure (e.g. a
+// 500) is returned as-is without a body-only retry, and the file stays in
+// pending/ per the crash-recovery contract.
+func TestPostReview_Non422Error_NoFallback(t *testing.T) {
+	withFakeDecisionScript(t)
+	os.Setenv("HOWMUX_NO_HUMANIZE", "1")
+	defer os.Unsetenv("HOWMUX_NO_HUMANIZE")
+
+	base := t.TempDir()
+	body := "# Review\n\nsrc/foo.py:10 - warning - issue -> fix\n\nVERDICT: COMMENT\n"
+	spoolPath := writeFakeSpoolFile(t, base, map[string]string{
+		"repo": "owner/repo", "pr": "43", "verdict": "COMMENT", "decision": "",
+	}, body)
+	rec := recordForSpool("owner/repo", 43, spoolPath)
+
+	ghCalls := withFakeGhPost(t, nil, fmt.Errorf("gh api pulls/reviews failed (exit 1): HTTP 500: Server Error"))
+
+	_, err := PostReview(context.Background(), rec)
+	if err == nil {
+		t.Fatal("PostReview() error = nil, want non-nil on 500")
+	}
+	if len(*ghCalls) != 1 {
+		t.Errorf("gh calls = %d, want 1 (no fallback on non-422)", len(*ghCalls))
+	}
+	if _, statErr := os.Stat(spoolPath); statErr != nil {
+		t.Errorf("expected spool to remain in pending/ after 500, stat err = %v", statErr)
+	}
+}
+
+// TestDowngradeEventToComment verifies the event field is rewritten to
+// COMMENT while body and comments are preserved, and that an already-COMMENT
+// payload signals no-op.
+func TestDowngradeEventToComment(t *testing.T) {
+	orig, err := json.Marshal(reviewPayload{
+		Event: "APPROVE",
+		Body:  "looks good",
+		Comments: []reviewComment{
+			{Path: "a.go", Line: 3, Body: "nit"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	got, ok := downgradeEventToComment(orig)
+	if !ok {
+		t.Fatal("downgradeEventToComment() ok = false, want true for APPROVE")
+	}
+	var p reviewPayload
+	if err := json.Unmarshal(got, &p); err != nil {
+		t.Fatalf("unmarshal downgraded: %v", err)
+	}
+	if p.Event != "COMMENT" {
+		t.Errorf("event = %q, want COMMENT", p.Event)
+	}
+	if len(p.Comments) != 1 || p.Comments[0].Line != 3 {
+		t.Errorf("downgrade altered comments: %+v", p.Comments)
+	}
+	if !strings.Contains(p.Body, "looks good") {
+		t.Errorf("downgrade dropped original body: %q", p.Body)
+	}
+	if !strings.Contains(p.Body, "APPROVE") || !strings.Contains(strings.ToLower(p.Body), "your own pull request") {
+		t.Errorf("downgrade did not add the explanatory note: %q", p.Body)
+	}
+
+	// Already COMMENT → no-op.
+	commentPayload, _ := json.Marshal(reviewPayload{Event: "COMMENT", Body: "x"})
+	if _, ok := downgradeEventToComment(commentPayload); ok {
+		t.Error("downgradeEventToComment() ok = true for COMMENT, want false (no-op)")
+	}
+}
+
+func TestIsOwnPRReviewError(t *testing.T) {
+	own := fmt.Errorf("gh api pulls/reviews failed (exit 1): HTTP 422: Validation Failed: response body: Review cannot approve your own pull request")
+	if !isOwnPRReviewError(own) {
+		t.Error("isOwnPRReviewError() = false, want true for own-PR message")
+	}
+	other := fmt.Errorf("gh api pulls/reviews failed (exit 1): HTTP 422: line must be part of the diff")
+	if isOwnPRReviewError(other) {
+		t.Error("isOwnPRReviewError() = true, want false for a non-own-PR 422")
+	}
+	if isOwnPRReviewError(nil) {
+		t.Error("isOwnPRReviewError(nil) = true, want false")
+	}
+}
+
+// TestPostReview_OwnPR_DowngradesToComment verifies that an APPROVE review
+// rejected because it's the poster's own PR is retried as COMMENT and lands.
+func TestPostReview_OwnPR_DowngradesToComment(t *testing.T) {
+	withFakeDecisionScript(t)
+	os.Setenv("HOWMUX_NO_HUMANIZE", "1")
+	defer os.Unsetenv("HOWMUX_NO_HUMANIZE")
+
+	base := t.TempDir()
+	body := "# Review\n\nsrc/foo.py:10 - warning - issue -> fix\n\nVERDICT: APPROVE\n"
+	spoolPath := writeFakeSpoolFile(t, base, map[string]string{
+		"repo": "owner/repo", "pr": "50", "verdict": "APPROVE", "decision": "",
+	}, body)
+	rec := recordForSpool("owner/repo", 50, spoolPath)
+
+	orig := postReviewCommandFunc
+	defer func() { postReviewCommandFunc = orig }()
+	var events []string
+	var commentBodies []string
+	postReviewCommandFunc = func(ctx context.Context, payloadFile string, repo string, pr int) ([]byte, error) {
+		data, readErr := os.ReadFile(payloadFile)
+		if readErr != nil {
+			t.Fatalf("fake gh: read payload: %v", readErr)
+		}
+		var p reviewPayload
+		if err := json.Unmarshal(data, &p); err != nil {
+			t.Fatalf("fake gh: unmarshal: %v", err)
+		}
+		events = append(events, p.Event)
+		commentBodies = append(commentBodies, p.Body)
+		if p.Event == "APPROVE" || p.Event == "REQUEST_CHANGES" {
+			return nil, fmt.Errorf("gh api pulls/reviews failed (exit 1): HTTP 422: Validation Failed: response body: Review cannot approve your own pull request")
+		}
+		return []byte(`{"id":1}`), nil
+	}
+
+	commentsPosted, err := PostReview(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("PostReview() unexpected error (should downgrade to COMMENT): %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("gh calls = %d, want 2 (APPROVE attempt + COMMENT retry): %v", len(events), events)
+	}
+	if events[0] != "APPROVE" {
+		t.Errorf("first event = %q, want APPROVE", events[0])
+	}
+	if events[1] != "COMMENT" {
+		t.Errorf("second event = %q, want COMMENT (downgraded)", events[1])
+	}
+	// The downgraded (COMMENT) payload must carry the explanatory note.
+	if !strings.Contains(commentBodies[1], "APPROVE") || !strings.Contains(strings.ToLower(commentBodies[1]), "your own pull request") {
+		t.Errorf("downgraded body missing explanatory note:\n%s", commentBodies[1])
+	}
+	// Inline comment preserved through the downgrade.
+	if commentsPosted != 1 {
+		t.Errorf("commentsPosted = %d, want 1 (comment survives the downgrade)", commentsPosted)
+	}
+
+	// Downgrade succeeded → archived to done/.
+	donePath := swapPendingDone(spoolPath, true)
+	if _, statErr := os.Stat(donePath); statErr != nil {
+		t.Errorf("expected archived file at %s: %v", donePath, statErr)
 	}
 }
 

@@ -102,26 +102,125 @@ func defaultKiroOneshot(ctx context.Context, agentName string, prompt string) (s
 var postReviewCommandFunc = defaultPostReviewCommand
 
 // defaultPostReviewCommand shells to `gh api
-// repos/<repo>/pulls/<pr>/reviews --method POST --input <payloadFile>`,
-// following tool-routing.md's documented rule for posting arrays/nested
-// JSON bodies via --input rather than --field. Returns gh's stdout (the
-// JSON response) on success, or a wrapped error including gh's stderr on
-// failure — mirroring fetchDiffFunc's exec.ExitError-unwrapping pattern.
+// repos/<repo>/pulls/<pr>/reviews --method POST --input <payloadFile>
+// --verbose`, following tool-routing.md's documented rule for posting
+// arrays/nested JSON bodies via --input rather than --field. Returns gh's
+// stdout (the JSON response) on success, or a wrapped error on failure —
+// mirroring fetchDiffFunc's exec.ExitError-unwrapping pattern.
+//
+// --verbose makes gh dump the full HTTP request/response (headers plus
+// bodies) to stderr, and both stdout and stderr are captured into their
+// own buffers rather than via cmd.Output(). The reason is a 422 from the
+// reviews endpoint: GitHub returns a field-level errors[] array in the
+// response body explaining exactly which comment failed to anchor (e.g.
+// "pull_request_review_thread.line must be part of the diff"), and where
+// that body lands depends on gh's mode — the JSON response body on stdout,
+// the --verbose HTTP transcript on stderr. Capturing and wrapping BOTH
+// guarantees the actionable field-level detail surfaces in the returned
+// error instead of a bare "exit 1", which is what the previous
+// cmd.Output()/exitErr.Stderr path discarded.
 func defaultPostReviewCommand(ctx context.Context, payloadFile string, repo string, pr int) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "gh", "api",
 		fmt.Sprintf("repos/%s/pulls/%d/reviews", repo, pr),
 		"--method", "POST",
 		"--input", payloadFile,
+		"--verbose",
 	)
-	output, err := cmd.Output()
+
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
 	if err != nil {
+		detail := strings.TrimSpace(stderr.String())
+		if body := strings.TrimSpace(stdout.String()); body != "" {
+			// gh's JSON response body (the field-level errors[] on a 422)
+			// lands on stdout; append it so the actionable detail is never
+			// lost, even when --verbose's transcript on stderr is empty.
+			if detail != "" {
+				detail += "\n"
+			}
+			detail += "response body: " + body
+		}
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return nil, fmt.Errorf("gh api pulls/reviews failed (exit %d): %s: %w",
-				exitErr.ExitCode(), strings.TrimSpace(string(exitErr.Stderr)), err)
+				exitErr.ExitCode(), detail, err)
 		}
-		return nil, fmt.Errorf("gh api pulls/reviews failed: %w", err)
+		return nil, fmt.Errorf("gh api pulls/reviews failed: %s: %w", detail, err)
 	}
-	return output, nil
+	return []byte(stdout.String()), nil
+}
+
+// is422 reports whether err (a wrapped postReviewCommandFunc failure) came
+// from a GitHub 422 Unprocessable Entity. gh surfaces the status both as
+// "HTTP 422" in the --verbose transcript and, on the reviews endpoint, as a
+// "Validation Failed" message in the JSON response body; matching either
+// (case-insensitively) keeps the check robust to which stream carried the
+// detail. Used by PostReview to decide whether a body-only retry is worth
+// attempting — other failures (network, auth, 5xx) should surface as-is.
+func is422(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "422") ||
+		strings.Contains(msg, "unprocessable entity") ||
+		strings.Contains(msg, "validation failed")
+}
+
+// isOwnPRReviewError reports whether err came from GitHub rejecting an
+// APPROVE or REQUEST_CHANGES review on the poster's OWN pull request.
+// GitHub returns a 422 with the message "Review cannot approve your own pull
+// request" (or "... request changes on your own pull request"); the only
+// review event a self-authored PR accepts is COMMENT. PostReview uses this
+// to auto-downgrade the event to COMMENT and retry, rather than failing the
+// whole post. Matching on "your own pull request" keeps it specific to this
+// case and off other 422s (off-diff comment lines, bad paths).
+func isOwnPRReviewError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "your own pull request")
+}
+
+// downgradeEventToComment rewrites a marshaled review payload's "event"
+// field to "COMMENT" and prepends a visible note to the body explaining
+// that the intended verdict couldn't be posted because GitHub blocks
+// APPROVE / REQUEST_CHANGES on the poster's own PR. Returns the re-marshaled
+// JSON and true on success. Used by PostReview to retry a review GitHub
+// rejected for that reason. The inline comments are preserved byte-for-byte;
+// only the disposition changes and the note is added, so it's obvious in the
+// posted review that the verdict was intended to be APPROVE/REQUEST_CHANGES.
+// Returns (nil, false) if the input isn't the expected payload shape or is
+// already a COMMENT (no-op), so the caller can fall through untouched.
+func downgradeEventToComment(payloadJSON []byte) ([]byte, bool) {
+	var p reviewPayload
+	if err := json.Unmarshal(payloadJSON, &p); err != nil {
+		return nil, false
+	}
+	if p.Event == "COMMENT" {
+		// Already COMMENT — a downgrade wouldn't change anything, so signal
+		// no-op rather than pointlessly re-posting an identical payload.
+		return nil, false
+	}
+
+	intended := p.Event
+	verb := "approve"
+	if intended == "REQUEST_CHANGES" {
+		verb = "request changes on"
+	}
+	note := fmt.Sprintf(
+		"> **Note:** this review was intended as **%s** but GitHub does not allow you to %s your own pull request, so it was posted as a comment.\n\n",
+		intended, verb)
+
+	p.Event = "COMMENT"
+	p.Body = note + p.Body
+	out, err := json.Marshal(p)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
 }
 
 // lookPathForDecideActionsFunc resolves a tool on PATH, mirroring
@@ -296,17 +395,110 @@ type reviewPayload struct {
 	Comments []reviewComment `json:"comments"`
 }
 
+// diffHunkHeaderRe matches a unified-diff hunk header, capturing the
+// RIGHT-side (new-file) start line and optional line count:
+// "@@ -a,b +c,d @@" -> c is group 1, d (may be absent, defaults to 1) is
+// group 2. The trailing section heading after the second @@ is ignored.
+var diffHunkHeaderRe = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)
+
+// parseDiffCommentableLines walks a unified diff (as produced by
+// `gh pr diff`) and returns, per file path, the set of RIGHT-side line
+// numbers a GitHub review comment may anchor to. GitHub only accepts an
+// inline comment whose line is part of the diff on the new-file side —
+// added ('+') lines and unchanged context (' ') lines both qualify;
+// removed ('-') lines do not (they have no new-file line number). Anchoring
+// to any other line is exactly what triggers the 422
+// "line must be part of the diff" the caller is guarding against.
+//
+// File paths are taken from the "+++ b/<path>" header (the new-file side),
+// with the leading "b/" stripped, matching the path shape GitHub expects in
+// the comment "path" field. A "+++ /dev/null" (deleted file) contributes no
+// commentable lines. Malformed hunk headers are skipped rather than
+// aborting the whole parse, so one odd hunk never suppresses anchoring for
+// the rest of the diff.
+func parseDiffCommentableLines(diff string) map[string]map[int]bool {
+	result := map[string]map[int]bool{}
+	var curFile string
+	var newLine int
+	inHunk := false
+
+	for _, line := range strings.Split(diff, "\n") {
+		switch {
+		case strings.HasPrefix(line, "+++ "):
+			target := strings.TrimSpace(strings.TrimPrefix(line, "+++ "))
+			// Strip a leading "b/" (git's new-file prefix); "/dev/null"
+			// means the file was deleted and has no commentable lines.
+			target = strings.TrimPrefix(target, "b/")
+			if target == "/dev/null" {
+				curFile = ""
+			} else {
+				curFile = target
+				if _, ok := result[curFile]; !ok {
+					result[curFile] = map[int]bool{}
+				}
+			}
+			inHunk = false
+
+		case strings.HasPrefix(line, "@@"):
+			m := diffHunkHeaderRe.FindStringSubmatch(line)
+			if m == nil {
+				inHunk = false
+				continue
+			}
+			start, err := strconv.Atoi(m[1])
+			if err != nil {
+				inHunk = false
+				continue
+			}
+			newLine = start
+			inHunk = true
+
+		case inHunk && curFile != "":
+			// Within a hunk, track new-file line numbers. Added ('+') and
+			// context (' ') lines advance the new-file counter and are
+			// commentable; removed ('-') lines do not advance it and are
+			// not commentable. Anything else (e.g. "\ No newline at end of
+			// file") is ignored without advancing.
+			switch {
+			case strings.HasPrefix(line, "+"):
+				result[curFile][newLine] = true
+				newLine++
+			case strings.HasPrefix(line, " "):
+				result[curFile][newLine] = true
+				newLine++
+			case strings.HasPrefix(line, "-"):
+				// removed line: no new-file number, do not advance
+			}
+		}
+	}
+	return result
+}
+
 // buildReviewPayload parses findings out of body (reusing findingLineRe,
 // the same line-matching regex countFindings uses) into one inline
 // GitHub review comment per finding, maps verdict to the GitHub review
 // "event" per verdictEvent, and marshals the whole thing into the JSON
 // shape gh api pulls/reviews expects. Returns the marshaled payload, the
 // resolved event, and the number of comments produced.
-func buildReviewPayload(repo string, pr int, verdict string, body string) (payloadJSON []byte, event string, commentCount int, err error) {
+//
+// When commentable is non-nil (a diff was available and parsed), a finding
+// is only emitted as an inline comment if its file:line lands on the
+// RIGHT side of the diff per commentable — this is the fix for the 422
+// "line must be part of the diff" that GitHub rejects the whole review
+// with when even one comment can't anchor. Findings that can't be anchored
+// are not dropped: they are appended to the review body under an "Additional
+// findings" section so the developer still sees them, just not inline.
+//
+// When commentable is nil (no diff_file, or it couldn't be read/parsed),
+// behavior is unchanged: every parsed finding becomes an inline comment
+// (best effort — the previous behavior, preserved so a missing diff never
+// silently strips inline comments that would have anchored fine).
+func buildReviewPayload(repo string, pr int, verdict string, body string, commentable map[string]map[int]bool) (payloadJSON []byte, event string, commentCount int, err error) {
 	event = verdictEvent(verdict)
 
 	matches := findingLineRe.FindAllStringSubmatch(body, -1)
 	comments := make([]reviewComment, 0, len(matches))
+	var unanchored []string
 	for _, m := range matches {
 		file := m[1]
 		line, convErr := strconv.Atoi(m[2])
@@ -316,16 +508,37 @@ func buildReviewPayload(repo string, pr int, verdict string, body string) (paylo
 		severity := strings.ToLower(strings.TrimSpace(m[3]))
 		issue := strings.TrimSpace(m[4])
 		fix := strings.TrimSpace(m[5])
+		commentBody := fmt.Sprintf("%s: %s → %s", severity, issue, fix)
+
+		if commentable != nil {
+			lines, fileInDiff := commentable[file]
+			if !fileInDiff || !lines[line] {
+				// Can't anchor to the diff — GitHub would 422 the whole
+				// review. Fold it into the body instead of dropping it.
+				unanchored = append(unanchored,
+					fmt.Sprintf("- `%s:%d` — %s", file, line, commentBody))
+				continue
+			}
+		}
+
 		comments = append(comments, reviewComment{
 			Path: file,
 			Line: line,
-			Body: fmt.Sprintf("%s: %s → %s", severity, issue, fix),
+			Body: commentBody,
 		})
+	}
+
+	finalBody := body
+	if len(unanchored) > 0 {
+		finalBody = body +
+			"\n\n---\n\n### Additional findings (not on the diff)\n\n" +
+			"These reference lines outside this PR's diff, so they couldn't be posted inline:\n\n" +
+			strings.Join(unanchored, "\n")
 	}
 
 	payload := reviewPayload{
 		Event:    event,
-		Body:     body,
+		Body:     finalBody,
 		Comments: comments,
 	}
 
@@ -404,30 +617,102 @@ func PostReview(ctx context.Context, rec Record) (commentsPosted int, err error)
 
 	humanized := humanizeReviewBody(ctx, body)
 
-	payloadJSON, _, commentCount, err := buildReviewPayload(rec.Repo, rec.PR, info.Verdict, humanized)
+	// Load the saved PR diff (if the spool recorded one) and parse the set
+	// of RIGHT-side lines each file exposes. buildReviewPayload uses this to
+	// only anchor inline comments to lines GitHub will accept; findings off
+	// the diff fold into the review body instead. A missing/unreadable
+	// diff_file yields a nil map, which buildReviewPayload treats as "no
+	// anchoring info" and posts every finding inline (prior best-effort
+	// behavior) — the body-only fallback below still covers a resulting 422.
+	var commentable map[string]map[int]bool
+	if data, readErr := os.ReadFile(resolved); readErr == nil {
+		if diffFile := ParseSpoolFrontMatter(data)["diff_file"]; diffFile != "" {
+			if diffData, diffErr := os.ReadFile(diffFile); diffErr == nil {
+				commentable = parseDiffCommentableLines(string(diffData))
+			}
+		}
+	}
+
+	payloadJSON, _, commentCount, err := buildReviewPayload(rec.Repo, rec.PR, info.Verdict, humanized, commentable)
 	if err != nil {
 		return 0, fmt.Errorf("failed to build review payload for %s#%d: %w", rec.Repo, rec.PR, err)
 	}
 
-	tmp, err := os.CreateTemp("", fmt.Sprintf("pr-review-payload-%d-*.json", rec.PR))
-	if err != nil {
-		return 0, fmt.Errorf("failed to create temp payload file: %w", err)
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
-	if _, err := tmp.Write(payloadJSON); err != nil {
-		tmp.Close()
-		return 0, fmt.Errorf("failed to write temp payload file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return 0, fmt.Errorf("failed to close temp payload file: %w", err)
+	// postPayload writes a marshaled payload to a throwaway temp file and
+	// POSTs it via the seam. Factored out so the body-only fallback below
+	// can reuse the exact same write+post path with a second payload.
+	postPayload := func(pj []byte) error {
+		tmp, err := os.CreateTemp("", fmt.Sprintf("pr-review-payload-%d-*.json", rec.PR))
+		if err != nil {
+			return fmt.Errorf("failed to create temp payload file: %w", err)
+		}
+		tmpPath := tmp.Name()
+		defer os.Remove(tmpPath)
+		if _, err := tmp.Write(pj); err != nil {
+			tmp.Close()
+			return fmt.Errorf("failed to write temp payload file: %w", err)
+		}
+		if err := tmp.Close(); err != nil {
+			return fmt.Errorf("failed to close temp payload file: %w", err)
+		}
+		_, err = postReviewCommandFunc(ctx, tmpPath, rec.Repo, rec.PR)
+		return err
 	}
 
-	if _, err := postReviewCommandFunc(ctx, tmpPath, rec.Repo, rec.PR); err != nil {
+	postErr := postPayload(payloadJSON)
+
+	if postErr != nil && isOwnPRReviewError(postErr) {
+		// GitHub forbids APPROVE / REQUEST_CHANGES on your OWN pull request
+		// ("Review cannot approve/request changes on your own pull request")
+		// — the only event self-authored PRs accept is COMMENT. Downgrade
+		// the event to COMMENT and retry once. The findings, verdict prose,
+		// and inline comments are all preserved; only the review's blocking
+		// disposition changes, which GitHub was rejecting outright anyway.
+		if downgraded, ok := downgradeEventToComment(payloadJSON); ok {
+			if dgErr := postPayload(downgraded); dgErr == nil {
+				postErr = nil
+			} else {
+				// Keep going to the body-only fallback below using the
+				// downgraded error (e.g. own-PR AND an off-diff comment).
+				postErr = dgErr
+				payloadJSON = downgraded
+			}
+		}
+	}
+
+	if postErr != nil && commentCount > 0 && is422(postErr) {
+		// GitHub rejected the review with a 422 despite our best effort to
+		// anchor comments (a comment line the diff parser accepted may still
+		// be unmappable to a diff position — e.g. a line inside an
+		// expanded/collapsed hunk GitHub treats differently). Rather than
+		// lose the entire review, retry once with a comments-less payload so
+		// the summary + verdict still land. The individual findings remain
+		// in the body prose, so nothing is silently dropped.
+		// An empty (non-nil) commentable map anchors nothing, so every
+		// finding folds into the body prose and the payload carries zero
+		// inline comments — exactly the body-only review we want to retry.
+		fallbackJSON, _, _, buildErr := buildReviewPayload(rec.Repo, rec.PR, info.Verdict, humanized, map[string]map[int]bool{})
+		if buildErr == nil {
+			// If we already downgraded the event above, keep it downgraded
+			// on the body-only retry too, otherwise GitHub would reject it
+			// for the same own-PR reason.
+			if isOwnPRReviewError(postErr) {
+				if dg, ok := downgradeEventToComment(fallbackJSON); ok {
+					fallbackJSON = dg
+				}
+			}
+			if fbErr := postPayload(fallbackJSON); fbErr == nil {
+				commentCount = 0
+				postErr = nil
+			}
+		}
+	}
+
+	if postErr != nil {
 		// Deliberately do NOT archive: decision: post is already recorded
 		// (crash-recovery contract) — the file stays in pending/ so a retry
 		// of PostReview can pick it up again.
-		return 0, fmt.Errorf("failed to post review for %s#%d: %w", rec.Repo, rec.PR, err)
+		return 0, fmt.Errorf("failed to post review for %s#%d: %w", rec.Repo, rec.PR, postErr)
 	}
 
 	if err := archiveToDone(resolved); err != nil {
