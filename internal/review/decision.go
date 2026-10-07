@@ -7,6 +7,7 @@ import "github.com/matthiashowellyopp/howmux/internal/github"
 //
 // Rules:
 // - PR merged or closed → ActionPrune
+// - Previously classified unsupported-language → ActionSkip (unless terminal, which still prunes above)
 // - No stored record / never reviewed → ActionReview
 // - Open + review requested for me + request not already serviced → ActionReview
 // - Open + not requested (or request already serviced) → ActionSkip
@@ -18,6 +19,21 @@ func decideReviewAction(pr github.PR, rec Record, reviewer string) ReviewAction 
 	// Rule 1: PR is terminal (merged or closed) → prune from tracking
 	if pr.IsTerminal() {
 		return ActionPrune
+	}
+
+	// Rule 1b: Previously classified as unsupported-language → skip.
+	// This is a deliberate, documented exception to this function's
+	// general "does not read Status" design: StatusUnsupported is the one
+	// Status value decideReviewAction must read, specifically to stop the
+	// silent retry loop described in issue #123 — a record stuck here has
+	// (and will keep) an empty LastReviewedSHA, so without this check
+	// Rule 2 below would re-dispatch ActionReview on every poll forever.
+	// Must stay AFTER the terminal/prune check above (a merged/closed PR
+	// must still be pruned even if it was unsupported) and BEFORE Rule 2
+	// (which would otherwise re-fire on the permanently-empty
+	// LastReviewedSHA).
+	if rec.Status == StatusUnsupported {
+		return ActionSkip
 	}
 
 	// Rule 2: Never reviewed (empty LastReviewedSHA) → review

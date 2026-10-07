@@ -68,6 +68,14 @@ func TestRecordValidation(t *testing.T) {
 		}
 	})
 
+	t.Run("StatusUnsupported is accepted", func(t *testing.T) {
+		rec := validRecord
+		rec.Status = StatusUnsupported
+		if err := rec.Validate(); err != nil {
+			t.Errorf("StatusUnsupported should be a valid status: %v", err)
+		}
+	})
+
 	t.Run("invalid status", func(t *testing.T) {
 		rec := validRecord
 		rec.Status = "invalid"

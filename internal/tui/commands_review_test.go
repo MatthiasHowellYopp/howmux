@@ -814,6 +814,139 @@ func TestHandleReview_URLForm_AlreadyEnrolled(t *testing.T) {
 	}
 }
 
+func TestHandleReview_ReenrollUnsupported_ResetsToWatching(t *testing.T) {
+	// Issue #123, Task 5: re-enrolling a PR stuck in StatusUnsupported must
+	// explicitly and durably reset it to StatusWatching, immediately after
+	// rec = existing, before any dedup-check logic runs.
+
+	// Skip if assets are missing
+	if err := review.CheckReviewAssets(filepath.Join(os.Getenv("HOME"), ".kiro")); err != nil {
+		t.Skipf("Skipping test - review assets not available: %v", err)
+	}
+
+	// Skip if gh is not available (needed for GetPR)
+	if _, err := exec.LookPath("gh"); err != nil {
+		t.Skipf("Skipping test - gh CLI not available")
+	}
+
+	m := newTestModel()
+	defer m.reviewWatcher.Stop()
+
+	// Pre-enroll a PR in the store with Status: StatusUnsupported
+	store := review.NewDefaultStore()
+	existingRec := review.Record{
+		Repo:       "owner/repo",
+		PR:         123,
+		URL:        "https://github.com/owner/repo/pull/123",
+		Status:     review.StatusUnsupported,
+		EnrolledAt: time.Now().Format(time.RFC3339),
+		ReviewDir:  ".worktrees/review-owner-repo-123",
+	}
+	if err := store.Save(existingRec); err != nil {
+		t.Fatalf("Failed to pre-enroll PR: %v", err)
+	}
+	defer store.Remove("owner/repo", 123)
+
+	// Call handleReview with the already-enrolled, unsupported PR URL
+	_, _ = m.handleReview([]string{"https://github.com/owner/repo/pull/123"})
+
+	// Read the record back via the store (not the in-memory rec the handler held)
+	rec, found, err := store.Get("owner/repo", 123)
+	if err != nil {
+		t.Fatalf("Failed to retrieve record: %v", err)
+	}
+	if !found {
+		t.Fatalf("Expected record to still be found in store")
+	}
+	if rec.Status != review.StatusWatching {
+		t.Errorf("Expected Status to be reset to StatusWatching, got %s", rec.Status)
+	}
+}
+
+func TestHandleReview_ReenrollNonUnsupported_StatusUnaffected(t *testing.T) {
+	// Issue #123, Task 5: re-enrolling a PR with a non-unsupported status
+	// must leave the existing dedup-check behavior unchanged (same SHA ->
+	// skip, no review invoked).
+
+	// Skip if assets are missing
+	if err := review.CheckReviewAssets(filepath.Join(os.Getenv("HOME"), ".kiro")); err != nil {
+		t.Skipf("Skipping test - review assets not available: %v", err)
+	}
+
+	// Mock getPRFunc to return a specific SHA
+	oldGetPR := getPRFunc
+	oldRunReview := runReviewFunc
+	defer func() {
+		getPRFunc = oldGetPR
+		runReviewFunc = oldRunReview
+	}()
+
+	testSHA := "abc123def456"
+	mockPR := github.PR{HeadRefOid: testSHA}
+	getPRFunc = func(repo string, pr int) (github.PR, error) {
+		return mockPR, nil
+	}
+
+	// Track if review was invoked (should NOT be called)
+	reviewInvoked := false
+	runReviewFunc = func(ctx context.Context, rec review.Record, headSHA string, storeImpl review.StoreInterface, tabWriter io.Writer) error {
+		reviewInvoked = true
+		return nil
+	}
+
+	// Create and save a record with a non-unsupported status (StatusReviewed,
+	// matching the existing dedup tests in this file) and
+	// LastServicedRequest = testSHA
+	store := review.NewDefaultStore()
+	existingRec := review.Record{
+		Repo:                "owner/repo",
+		PR:                  123,
+		URL:                 "https://github.com/owner/repo/pull/123",
+		Status:              review.StatusReviewed,
+		LastServicedRequest: testSHA, // Same as what the mock PR will return
+		EnrolledAt:          time.Now().Format(time.RFC3339),
+		ReviewDir:           ".worktrees/review-owner-repo-123",
+	}
+	if err := store.Save(existingRec); err != nil {
+		t.Fatalf("Failed to pre-enroll PR: %v", err)
+	}
+	defer store.Remove("owner/repo", 123)
+
+	m := newTestModel()
+	defer m.reviewWatcher.Stop()
+
+	result, _ := m.handleReview([]string{"https://github.com/owner/repo/pull/123"})
+
+	// Should have skip message - existing dedup behavior unaffected
+	found := false
+	for _, line := range result.activityLines {
+		if contains(line, "already reviewed at") && contains(line, "nothing new to review") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Expected 'nothing new to review' skip message, got: %v", result.activityLines)
+	}
+
+	// Review should NOT have been invoked
+	if reviewInvoked {
+		t.Errorf("Review was invoked when it should have been skipped due to same SHA")
+	}
+
+	// Status should remain StatusReviewed (not touched by the unsupported-reset logic)
+	rec, foundInStore, err := store.Get("owner/repo", 123)
+	if err != nil {
+		t.Fatalf("Failed to retrieve record: %v", err)
+	}
+	if !foundInStore {
+		t.Fatalf("Expected record to still be found in store")
+	}
+	if rec.Status != review.StatusReviewed {
+		t.Errorf("Expected Status to remain StatusReviewed, got %s", rec.Status)
+	}
+}
+
 func TestHandleReview_URLForm_EnrollNewPR(t *testing.T) {
 	// Skip if assets are missing
 	if err := review.CheckReviewAssets(filepath.Join(os.Getenv("HOME"), ".kiro")); err != nil {

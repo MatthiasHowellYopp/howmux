@@ -1039,6 +1039,19 @@ func (m model) handleReview(args []string) (model, tea.Cmd) {
 		m = m.appendActivity(m.styles.Warning.Render(fmt.Sprintf("PR #%d already enrolled (status: %s)", prNum, existing.Status)))
 		rec = existing
 
+		// Re-enrolling is the documented recovery path for a PR stuck in
+		// StatusUnsupported (issue #123): explicitly reset it to
+		// StatusWatching here, immediately and durably, rather than relying
+		// on RunReview's incidental StatusReviewing overwrite a few lines
+		// later to mask the stale on-disk value.
+		if rec.Status == review.StatusUnsupported {
+			rec.Status = review.StatusWatching
+			if err := store.Save(rec); err != nil {
+				m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("Failed to reset PR #%d status: %v", prNum, err)))
+				return m, nil
+			}
+		}
+
 		// Fix #5: Re-review bypasses dedup - check if head SHA was already serviced
 		// Fetch PR metadata for head SHA first
 		prData, err := getPRFunc(fullRepo, prNum)

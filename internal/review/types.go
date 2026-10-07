@@ -10,10 +10,11 @@ import (
 type Status string
 
 const (
-	StatusWatching  Status = "watching"  // Enrolled, waiting for review trigger
-	StatusReviewing Status = "reviewing" // Review in progress
-	StatusReviewed  Status = "reviewed"  // Reviewed at a SHA, awaiting the next push (non-terminal)
-	StatusDone      Status = "done"      // Terminal: PR merged/closed
+	StatusWatching    Status = "watching"    // Enrolled, waiting for review trigger
+	StatusReviewing   Status = "reviewing"   // Review in progress
+	StatusReviewed    Status = "reviewed"    // Reviewed at a SHA, awaiting the next push (non-terminal)
+	StatusDone        Status = "done"        // Terminal: PR merged/closed
+	StatusUnsupported Status = "unsupported" // Diff language unsupported/undetectable by pr_review.py; not re-dispatched until re-enrolled
 )
 
 // ReviewAction represents the action to take for a PR during a watch poll
@@ -53,7 +54,7 @@ func (r *Record) Validate() error {
 	if r.Status == "" {
 		return fmt.Errorf("status is required")
 	}
-	if r.Status != StatusWatching && r.Status != StatusReviewing && r.Status != StatusReviewed && r.Status != StatusDone {
+	if r.Status != StatusWatching && r.Status != StatusReviewing && r.Status != StatusReviewed && r.Status != StatusDone && r.Status != StatusUnsupported {
 		return fmt.Errorf("invalid status: %s", r.Status)
 	}
 	if r.EnrolledAt == "" {
