@@ -3,6 +3,7 @@ package review
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -1718,5 +1719,433 @@ func TestRunReview_Notify_ErrorDoesNotFailRunReview(t *testing.T) {
 		// notifyFunc was invoked as expected; its error was swallowed.
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for notifyFunc to be called")
+	}
+}
+
+// TestRunReview_UnsupportedLanguage_SetsStatus verifies that when
+// runReviewToolFunc fails and its stderr contains the
+// "could not determine the language from the diff" marker,
+// RunReview persists StatusUnsupported (not StatusWatching) and returns
+// an error satisfying errors.Is(err, errUnsupportedLanguage). No spool
+// file / worktree side effects occur, since this function never creates
+// either regardless of the failure branch taken.
+func TestRunReview_UnsupportedLanguage_SetsStatus(t *testing.T) {
+	origFetchDiff := fetchDiffFunc
+	origRunReviewTool := runReviewToolFunc
+	origTimeNow := timeNow
+	defer func() {
+		fetchDiffFunc = origFetchDiff
+		runReviewToolFunc = origRunReviewTool
+		timeNow = origTimeNow
+	}()
+
+	fixedTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	timeNow = func() time.Time { return fixedTime }
+
+	fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+		return os.WriteFile(outputFile, []byte("fake diff"), 0644)
+	}
+
+	const stderrMsg = "Error: could not determine the language from the diff (no dominant supported file type). Re-run with an explicit language: astro, go, java, node, python."
+	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+		io.WriteString(stderrWriter, stderrMsg)
+		return nil, fmt.Errorf("command failed (exit 2)")
+	}
+
+	baseDir := t.TempDir()
+	store := NewStore(baseDir)
+
+	rec := Record{
+		Repo:       "owner/repo",
+		PR:         50,
+		URL:        "https://github.com/owner/repo/pull/50",
+		Status:     StatusWatching,
+		EnrolledAt: time.Now().Format(time.RFC3339),
+		ReviewDir:  "/tmp/review-50",
+	}
+
+	ctx := context.Background()
+	err := RunReview(ctx, rec, "sha50", store, io.Discard)
+	if err == nil {
+		t.Fatal("expected error from unsupported-language failure")
+	}
+	if !errors.Is(err, errUnsupportedLanguage) {
+		t.Errorf("expected errors.Is(err, errUnsupportedLanguage) to be true, got: %v", err)
+	}
+
+	updated, found, getErr := store.Get("owner/repo", 50)
+	if getErr != nil {
+		t.Fatalf("failed to check record: %v", getErr)
+	}
+	if !found {
+		t.Fatal("expected record to exist")
+	}
+	if updated.Status != StatusUnsupported {
+		t.Errorf("expected record Status %q, got %q", StatusUnsupported, updated.Status)
+	}
+	// No spool path should have been set — this function never reaches
+	// that code on the unsupported-language branch.
+	if updated.SpoolPath != "" {
+		t.Errorf("expected no SpoolPath to be set, got %q", updated.SpoolPath)
+	}
+}
+
+// TestRunReview_UnsupportedLanguage_ExplicitMarker verifies the second
+// documented marker ("unsupported language '") is also classified
+// correctly, with the same assertions as the first marker's test.
+func TestRunReview_UnsupportedLanguage_ExplicitMarker(t *testing.T) {
+	origFetchDiff := fetchDiffFunc
+	origRunReviewTool := runReviewToolFunc
+	origTimeNow := timeNow
+	defer func() {
+		fetchDiffFunc = origFetchDiff
+		runReviewToolFunc = origRunReviewTool
+		timeNow = origTimeNow
+	}()
+
+	fixedTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	timeNow = func() time.Time { return fixedTime }
+
+	fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+		return os.WriteFile(outputFile, []byte("fake diff"), 0644)
+	}
+
+	const stderrMsg = "Error: unsupported language 'cpp'. Supported: astro, go, java, node, python."
+	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+		io.WriteString(stderrWriter, stderrMsg)
+		return nil, fmt.Errorf("command failed (exit 2)")
+	}
+
+	baseDir := t.TempDir()
+	store := NewStore(baseDir)
+
+	rec := Record{
+		Repo:       "owner/repo",
+		PR:         51,
+		URL:        "https://github.com/owner/repo/pull/51",
+		Status:     StatusWatching,
+		EnrolledAt: time.Now().Format(time.RFC3339),
+		ReviewDir:  "/tmp/review-51",
+	}
+
+	ctx := context.Background()
+	err := RunReview(ctx, rec, "sha51", store, io.Discard)
+	if err == nil {
+		t.Fatal("expected error from unsupported-language failure")
+	}
+	if !errors.Is(err, errUnsupportedLanguage) {
+		t.Errorf("expected errors.Is(err, errUnsupportedLanguage) to be true, got: %v", err)
+	}
+
+	updated, found, getErr := store.Get("owner/repo", 51)
+	if getErr != nil {
+		t.Fatalf("failed to check record: %v", getErr)
+	}
+	if !found {
+		t.Fatal("expected record to exist")
+	}
+	if updated.Status != StatusUnsupported {
+		t.Errorf("expected record Status %q, got %q", StatusUnsupported, updated.Status)
+	}
+}
+
+// TestRunReview_MissingDiffFile_NotMisclassified is the explicit
+// regression guard for acceptance criterion 3: a marker-free stderr
+// message (e.g. a missing-diff-file error, also exit code 2) must NOT be
+// classified as unsupported-language. The record must still revert to
+// StatusWatching exactly as before this issue, and the returned error
+// must still read "pr_review.py invocation failed" with no
+// errUnsupportedLanguage wrapping.
+func TestRunReview_MissingDiffFile_NotMisclassified(t *testing.T) {
+	origFetchDiff := fetchDiffFunc
+	origRunReviewTool := runReviewToolFunc
+	origTimeNow := timeNow
+	defer func() {
+		fetchDiffFunc = origFetchDiff
+		runReviewToolFunc = origRunReviewTool
+		timeNow = origTimeNow
+	}()
+
+	fixedTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	timeNow = func() time.Time { return fixedTime }
+
+	fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+		return os.WriteFile(outputFile, []byte("fake diff"), 0644)
+	}
+
+	const stderrMsg = "Error: diff file not found: /tmp/pr-1-abc.diff"
+	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+		io.WriteString(stderrWriter, stderrMsg)
+		return nil, fmt.Errorf("command failed (exit 2)")
+	}
+
+	baseDir := t.TempDir()
+	store := NewStore(baseDir)
+
+	rec := Record{
+		Repo:       "owner/repo",
+		PR:         52,
+		URL:        "https://github.com/owner/repo/pull/52",
+		Status:     StatusWatching,
+		EnrolledAt: time.Now().Format(time.RFC3339),
+		ReviewDir:  "/tmp/review-52",
+	}
+
+	ctx := context.Background()
+	err := RunReview(ctx, rec, "sha52", store, io.Discard)
+	if err == nil {
+		t.Fatal("expected error from review tool failure")
+	}
+	if errors.Is(err, errUnsupportedLanguage) {
+		t.Errorf("expected errors.Is(err, errUnsupportedLanguage) to be false for a missing-diff-file failure, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "pr_review.py invocation failed") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+
+	updated, found, getErr := store.Get("owner/repo", 52)
+	if getErr != nil {
+		t.Fatalf("failed to check record: %v", getErr)
+	}
+	if !found {
+		t.Fatal("expected record to exist")
+	}
+	if updated.Status != StatusWatching {
+		t.Errorf("expected record reverted to StatusWatching (unchanged behavior), got %q", updated.Status)
+	}
+}
+
+// TestRunReview_UnsupportedLanguage_FiresNotification verifies that
+// notifyFunc is called exactly once on the unsupported-language path, with
+// a message containing the repo, PR number, and the classified reason
+// text. It also verifies a notifyFunc error does not change RunReview's
+// returned error. Synchronization uses the existing channel/select-based
+// installFakeNotifyRecorder/waitForNotify helpers (no time.Sleep),
+// matching the #117 notify test pattern already in this file.
+func TestRunReview_UnsupportedLanguage_FiresNotification(t *testing.T) {
+	origFetchDiff := fetchDiffFunc
+	origRunReviewTool := runReviewToolFunc
+	origTimeNow := timeNow
+	defer func() {
+		fetchDiffFunc = origFetchDiff
+		runReviewToolFunc = origRunReviewTool
+		timeNow = origTimeNow
+	}()
+
+	fixedTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	timeNow = func() time.Time { return fixedTime }
+
+	fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+		return os.WriteFile(outputFile, []byte("fake diff"), 0644)
+	}
+
+	const stderrMsg = "Error: could not determine the language from the diff (no dominant supported file type)."
+	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+		io.WriteString(stderrWriter, stderrMsg)
+		return nil, fmt.Errorf("command failed (exit 2)")
+	}
+
+	calls, done := installFakeNotifyRecorder(t)
+
+	baseDir := t.TempDir()
+	store := NewStore(baseDir)
+
+	rec := Record{
+		Repo:       "notifyowner/notifyrepo",
+		PR:         53,
+		URL:        "https://github.com/notifyowner/notifyrepo/pull/53",
+		Status:     StatusWatching,
+		EnrolledAt: time.Now().Format(time.RFC3339),
+		ReviewDir:  "/tmp/review-53",
+	}
+
+	ctx := context.Background()
+	err := RunReview(ctx, rec, "sha53", store, io.Discard)
+	if err == nil {
+		t.Fatal("expected error from unsupported-language failure")
+	}
+	if !errors.Is(err, errUnsupportedLanguage) {
+		t.Errorf("expected errors.Is(err, errUnsupportedLanguage) to be true, got: %v", err)
+	}
+
+	call, ok := waitForNotify(t, done, 2*time.Second)
+	if !ok {
+		t.Fatal("timed out waiting for notifyFunc to be called")
+	}
+
+	if call.title != "howmux" {
+		t.Errorf("expected notification title %q, got %q", "howmux", call.title)
+	}
+	if !strings.Contains(call.message, "notifyowner/notifyrepo") {
+		t.Errorf("expected notification message to contain repo, got %q", call.message)
+	}
+	if !strings.Contains(call.message, "#53") {
+		t.Errorf("expected notification message to contain PR number, got %q", call.message)
+	}
+	if !strings.Contains(call.message, stderrMsg) {
+		t.Errorf("expected notification message to contain the classified reason, got %q", call.message)
+	}
+
+	// Give any accidental duplicate/async second call a chance to land
+	// before asserting exactly one call was recorded.
+	select {
+	case extra := <-done:
+		t.Fatalf("expected exactly one notifyFunc call, got an extra one: %+v", extra)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if got := calls(); len(got) != 1 {
+		t.Fatalf("expected exactly 1 recorded notifyFunc call, got %d: %+v", len(got), got)
+	}
+}
+
+// TestRunReview_UnsupportedLanguage_FiresNotification_NotifyErrorIgnored
+// verifies that a notifyFunc-returned error on the unsupported path does
+// not leak into or change RunReview's returned error — it still returns
+// the errUnsupportedLanguage-wrapped error, unaffected by the
+// notification failure.
+func TestRunReview_UnsupportedLanguage_FiresNotification_NotifyErrorIgnored(t *testing.T) {
+	origFetchDiff := fetchDiffFunc
+	origRunReviewTool := runReviewToolFunc
+	origTimeNow := timeNow
+	origNotify := notifyFunc
+	defer func() {
+		fetchDiffFunc = origFetchDiff
+		runReviewToolFunc = origRunReviewTool
+		timeNow = origTimeNow
+		notifyFunc = origNotify
+	}()
+
+	fixedTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	timeNow = func() time.Time { return fixedTime }
+
+	fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+		return os.WriteFile(outputFile, []byte("fake diff"), 0644)
+	}
+
+	const stderrMsg = "Error: unsupported language 'cpp'."
+	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+		io.WriteString(stderrWriter, stderrMsg)
+		return nil, fmt.Errorf("command failed (exit 2)")
+	}
+
+	notifyCalled := make(chan struct{}, 1)
+	notifyFunc = func(title, message string) error {
+		notifyCalled <- struct{}{}
+		return fmt.Errorf("simulated osascript failure")
+	}
+
+	baseDir := t.TempDir()
+	store := NewStore(baseDir)
+
+	rec := Record{
+		Repo:       "notifyowner/notifyrepo",
+		PR:         54,
+		URL:        "https://github.com/notifyowner/notifyrepo/pull/54",
+		Status:     StatusWatching,
+		EnrolledAt: time.Now().Format(time.RFC3339),
+		ReviewDir:  "/tmp/review-54",
+	}
+
+	ctx := context.Background()
+	err := RunReview(ctx, rec, "sha54", store, io.Discard)
+	if err == nil {
+		t.Fatal("expected error from unsupported-language failure")
+	}
+	if !errors.Is(err, errUnsupportedLanguage) {
+		t.Errorf("expected errors.Is(err, errUnsupportedLanguage) to be true even though notifyFunc errored, got: %v", err)
+	}
+
+	select {
+	case <-notifyCalled:
+		// notifyFunc was invoked as expected; its error was swallowed.
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for notifyFunc to be called")
+	}
+}
+
+// TestRunReview_UnsupportedLanguage_StreamsToTabWriter verifies that the
+// stderr tee does not suppress or truncate the live tab-writer stream:
+// using a bytes.Buffer as the tabWriter argument, after an
+// unsupported-language failure the tab writer's buffer must contain the
+// full stderr text runReviewToolFunc wrote.
+func TestRunReview_UnsupportedLanguage_StreamsToTabWriter(t *testing.T) {
+	origFetchDiff := fetchDiffFunc
+	origRunReviewTool := runReviewToolFunc
+	origTimeNow := timeNow
+	defer func() {
+		fetchDiffFunc = origFetchDiff
+		runReviewToolFunc = origRunReviewTool
+		timeNow = origTimeNow
+	}()
+
+	fixedTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	timeNow = func() time.Time { return fixedTime }
+
+	fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+		return os.WriteFile(outputFile, []byte("fake diff"), 0644)
+	}
+
+	const stderrMsg = "Error: could not determine the language from the diff (no dominant supported file type). Re-run with an explicit language: astro, go, java, node, python."
+	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+		io.WriteString(stderrWriter, stderrMsg)
+		return nil, fmt.Errorf("command failed (exit 2)")
+	}
+
+	baseDir := t.TempDir()
+	store := NewStore(baseDir)
+
+	rec := Record{
+		Repo:       "owner/repo",
+		PR:         55,
+		URL:        "https://github.com/owner/repo/pull/55",
+		Status:     StatusWatching,
+		EnrolledAt: time.Now().Format(time.RFC3339),
+		ReviewDir:  "/tmp/review-55",
+	}
+
+	var tabBuf bytes.Buffer
+
+	ctx := context.Background()
+	err := RunReview(ctx, rec, "sha55", store, &tabBuf)
+	if err == nil {
+		t.Fatal("expected error from unsupported-language failure")
+	}
+	if !errors.Is(err, errUnsupportedLanguage) {
+		t.Errorf("expected errors.Is(err, errUnsupportedLanguage) to be true, got: %v", err)
+	}
+
+	if !strings.Contains(tabBuf.String(), stderrMsg) {
+		t.Errorf("expected tab writer to still contain full stderr output, got: %q", tabBuf.String())
+	}
+}
+
+// TestClassifyUnsupportedLanguage exercises the pure classification
+// helper directly, including the empty-input edge case.
+func TestClassifyUnsupportedLanguage(t *testing.T) {
+	tests := []struct {
+		name        string
+		stderrText  string
+		wantMatched bool
+	}{
+		{"undetected language marker", "Error: could not determine the language from the diff (no dominant supported file type).", true},
+		{"explicit unsupported language marker", "Error: unsupported language 'cpp'. Supported: astro, go, java, node, python.", true},
+		{"missing diff file, no marker", "Error: diff file not found: /tmp/pr-1-abc.diff", false},
+		{"empty input", "", false},
+		{"whitespace only", "   \n\t  ", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reason, matched := classifyUnsupportedLanguage(tt.stderrText)
+			if matched != tt.wantMatched {
+				t.Errorf("classifyUnsupportedLanguage(%q) matched = %v, want %v", tt.stderrText, matched, tt.wantMatched)
+			}
+			if matched && reason != strings.TrimSpace(tt.stderrText) {
+				t.Errorf("classifyUnsupportedLanguage(%q) reason = %q, want trimmed input", tt.stderrText, reason)
+			}
+			if !matched && reason != "" {
+				t.Errorf("classifyUnsupportedLanguage(%q) reason = %q, want empty on no match", tt.stderrText, reason)
+			}
+		})
 	}
 }

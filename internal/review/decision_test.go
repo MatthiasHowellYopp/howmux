@@ -202,6 +202,36 @@ func TestDecideReviewAction(t *testing.T) {
 			reviewer: "test-reviewer", // Lowercase
 			want:     ActionReview,
 		},
+		{
+			name: "StatusUnsupported + open PR → skip (not review, despite empty LastReviewedSHA)",
+			pr: github.PR{
+				State:      "OPEN",
+				HeadRefOid: "new-sha",
+			},
+			rec: Record{
+				Repo:            "owner/repo",
+				PR:              1,
+				Status:          StatusUnsupported,
+				LastReviewedSHA: "", // would normally trigger Rule 2 → ActionReview
+			},
+			reviewer: reviewer,
+			want:     ActionSkip,
+		},
+		{
+			name: "StatusUnsupported + terminal PR → prune wins over skip",
+			pr: github.PR{
+				State:      "MERGED",
+				MergedAt:   &now,
+				HeadRefOid: "abc123",
+			},
+			rec: Record{
+				Repo:   "owner/repo",
+				PR:     1,
+				Status: StatusUnsupported,
+			},
+			reviewer: reviewer,
+			want:     ActionPrune,
+		},
 	}
 
 	for _, tt := range tests {
@@ -297,4 +327,52 @@ func TestDecideReviewAction_StaleReviewingRecordIsStillReviewable(t *testing.T) 
 			}
 		}
 	})
+}
+
+// TestDecideReviewAction_StatusUnsupported_OpenPR_Skips confirms the fix for
+// issue #123's silent retry loop: a record stuck on StatusUnsupported has an
+// empty LastReviewedSHA and will keep it forever (nothing on the unsupported
+// path ever sets it), so without the new Rule 1b, Rule 2 would re-dispatch
+// ActionReview on every poll. An open (non-terminal) PR with such a record
+// must return ActionSkip instead.
+func TestDecideReviewAction_StatusUnsupported_OpenPR_Skips(t *testing.T) {
+	reviewer := "test-reviewer"
+	pr := github.PR{
+		State:      "OPEN",
+		HeadRefOid: "new-sha",
+	}
+	rec := Record{
+		Repo:            "owner/repo",
+		PR:              1,
+		Status:          StatusUnsupported,
+		LastReviewedSHA: "",
+	}
+
+	got := decideReviewAction(pr, rec, reviewer)
+	if got != ActionSkip {
+		t.Errorf("decideReviewAction() = %v, want %v", got, ActionSkip)
+	}
+}
+
+// TestDecideReviewAction_StatusUnsupported_TerminalPR_StillPrunes confirms
+// the required rule ordering: the terminal/prune check (Rule 1) must still
+// win over the unsupported-skip check (Rule 1b) for a merged or closed PR.
+func TestDecideReviewAction_StatusUnsupported_TerminalPR_StillPrunes(t *testing.T) {
+	reviewer := "test-reviewer"
+	now := time.Now()
+	pr := github.PR{
+		State:      "MERGED",
+		MergedAt:   &now,
+		HeadRefOid: "abc123",
+	}
+	rec := Record{
+		Repo:   "owner/repo",
+		PR:     1,
+		Status: StatusUnsupported,
+	}
+
+	got := decideReviewAction(pr, rec, reviewer)
+	if got != ActionPrune {
+		t.Errorf("decideReviewAction() = %v, want %v", got, ActionPrune)
+	}
 }

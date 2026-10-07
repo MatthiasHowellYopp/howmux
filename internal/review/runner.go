@@ -1,7 +1,9 @@
 package review
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -94,6 +96,50 @@ func validateSpoolPath(p string) error {
 	return nil
 }
 
+// unsupportedLanguageMarkers are the exact pr_review.py stderr substrings
+// that indicate an unsupported-or-undetectable-language failure, per the
+// issue #123 contract. pr_review.py uses exit code 2 for several
+// DISTINCT conditions (diff-not-found, language-undetected,
+// explicit-unsupported-language) — exit code alone cannot distinguish
+// them, so classification must match on these stderr substrings. Any
+// exit-2 (or other) failure whose stderr does NOT contain one of these
+// markers is a generic failure and must fall through to the existing
+// revertToWatching path unchanged — in particular, a missing-diff-file
+// failure (also exit 2) must NOT match here.
+var unsupportedLanguageMarkers = []string{
+	"could not determine the language from the diff",
+	"unsupported language '",
+}
+
+// errUnsupportedLanguage is a sentinel error RunReview wraps and returns
+// on the unsupported-language path, so callers (and tests) can detect
+// this specific condition via errors.Is without string-matching the
+// returned error's text.
+var errUnsupportedLanguage = errors.New("unsupported language")
+
+// classifyUnsupportedLanguage reports whether stderrText (the captured
+// stderr from a failed pr_review.py invocation) matches one of
+// unsupportedLanguageMarkers, and if so, returns the trimmed stderr text
+// itself as the human-readable reason (it already IS the message
+// pr_review.py printed, e.g. "Error: could not determine the language
+// from the diff (no dominant supported file type). Re-run with an
+// explicit language: astro, go, java, node, python."). Returns ("",
+// false) for every other failure, including a missing-diff-file error,
+// so that case continues to revertToWatching via the existing generic
+// path.
+func classifyUnsupportedLanguage(stderrText string) (reason string, matched bool) {
+	trimmed := strings.TrimSpace(stderrText)
+	if trimmed == "" {
+		return "", false
+	}
+	for _, marker := range unsupportedLanguageMarkers {
+		if strings.Contains(trimmed, marker) {
+			return trimmed, true
+		}
+	}
+	return "", false
+}
+
 // revertToWatching reverts rec to StatusWatching and persists it, used on
 // every error exit from RunReview so a record can never remain stuck on
 // StatusReviewing after a failed/aborted review attempt. A Save failure
@@ -105,6 +151,26 @@ func revertToWatching(storeImpl StoreInterface, rec Record) {
 	if err := storeImpl.Save(rec); err != nil {
 		logging.Warn("failed to revert record to StatusWatching after review error", "repo", rec.Repo, "pr", rec.PR, "error", err)
 	}
+}
+
+// notifyUnsupported fires a best-effort, non-blocking notification that a
+// review attempt failed because the diff's language is unsupported or
+// undetectable, mirroring the exact goroutine/local-copy pattern RunReview's
+// success-path notification already uses (see notifyFunc's seam doc
+// comment above): read notifyFunc into a local on the caller's
+// goroutine, close over the local (not the package global) inside the
+// spawned goroutine, and log-and-continue on failure — never propagate.
+// This runs on the unsupported-classification path only; every other
+// error path in RunReview (generic failures via revertToWatching) fires
+// no notification at all, unchanged from before this issue.
+func notifyUnsupported(rec Record, reason string) {
+	notifyFn := notifyFunc
+	go func(repo string, pr int, reason string) {
+		msg := fmt.Sprintf("Review skipped: %s #%d is an unsupported language (%s)", repo, pr, reason)
+		if err := notifyFn("howmux", msg); err != nil {
+			logging.Warn("failed to send unsupported-language notification", "repo", repo, "pr", pr, "error", err)
+		}
+	}(rec.Repo, rec.PR, reason)
 }
 
 // RunReview orchestrates a complete PR review via subprocess invocation of pr_review.py
@@ -156,9 +222,24 @@ func RunReview(ctx context.Context, rec Record, headSHA string, storeImpl StoreI
 
 	logging.Debug("invoking pr_review.py", "argv", strings.Join(argv, " "))
 
-	// Run pr_review.py with stderr streaming to tabWriter and stdout capture
-	stdoutLines, err := runReviewToolFunc(ctx, argv, tabWriter)
+	// Run pr_review.py with stderr streaming to tabWriter and stdout capture.
+	// Tee stderr into a local buffer alongside tabWriter so the live stream
+	// is unchanged, but the full stderr text is available after the call
+	// returns for unsupported-language classification (see
+	// classifyUnsupportedLanguage below).
+	var stderrBuf bytes.Buffer
+	teeWriter := io.MultiWriter(tabWriter, &stderrBuf)
+
+	stdoutLines, err := runReviewToolFunc(ctx, argv, teeWriter)
 	if err != nil {
+		if reason, ok := classifyUnsupportedLanguage(stderrBuf.String()); ok {
+			rec.Status = StatusUnsupported
+			if saveErr := storeImpl.Save(rec); saveErr != nil {
+				logging.Warn("failed to persist StatusUnsupported", "repo", rec.Repo, "pr", rec.PR, "error", saveErr)
+			}
+			notifyUnsupported(rec, reason)
+			return fmt.Errorf("%w: %s", errUnsupportedLanguage, reason)
+		}
 		revertToWatching(storeImpl, rec)
 		return fmt.Errorf("pr_review.py invocation failed: %w", err)
 	}

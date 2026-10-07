@@ -1006,6 +1006,90 @@ func TestReviewsTabSelectedRowStatusStaysLegible(t *testing.T) {
 	}
 }
 
+// TestReviewsTabUnsupportedStatusStyling verifies styleStatus renders a
+// StatusUnsupported row visibly differently from a StatusWatching row,
+// following the same ANSI-prefix comparison pattern
+// TestReviewsTabSelectedRowStatusStaysLegible already uses in this file
+// (render each status with its respective style, extract the ANSI
+// color-prefix before the status text, and assert the two differ) rather
+// than inventing a new assertion mechanism. Also confirms StatusUnsupported
+// renders with the same Error style used by renderError elsewhere in this
+// file.
+func TestReviewsTabUnsupportedStatusStyling(t *testing.T) {
+	styles := testReviewsStyles()
+	rt := NewReviewsTab("reviews", &fakeReviewStore{}, styles)
+
+	// Call styleStatus directly with selectedIdx not matching i, so both
+	// statuses render via their normal per-status branch rather than
+	// selectedStatusStyle (the highlight-row override exercised separately by
+	// TestReviewsTabSelectedRowStatusStaysLegible).
+	unsupportedRendered := rt.styleStatus(0, -1, review.StatusUnsupported, string(review.StatusUnsupported))
+	watchingRendered := rt.styleStatus(0, -1, review.StatusWatching, string(review.StatusWatching))
+
+	ansiPrefix := func(rendered, text string) string {
+		idx := strings.Index(rendered, text)
+		if idx == -1 {
+			return rendered
+		}
+		return rendered[:idx]
+	}
+
+	unsupportedPrefix := ansiPrefix(unsupportedRendered, string(review.StatusUnsupported))
+	watchingPrefix := ansiPrefix(watchingRendered, string(review.StatusWatching))
+
+	// Precondition, matching the #112 regression test's own guard: this
+	// test only means anything when lipgloss is actually emitting ANSI
+	// color. A colorless environment (NO_COLOR, non-TTY CI, Ascii profile)
+	// collapses both prefixes to "" and would make the assertions below
+	// pass without verifying anything — fail loudly instead.
+	if unsupportedPrefix == "" || watchingPrefix == "" {
+		t.Fatalf("color rendering appears disabled (prefixes empty): this test cannot verify unsupported/watching styling differ without ANSI color; check the lipgloss color profile / NO_COLOR")
+	}
+
+	if unsupportedPrefix == watchingPrefix {
+		t.Errorf("expected StatusUnsupported to render with a different color prefix than StatusWatching, both got %q", unsupportedPrefix)
+	}
+
+	// Confirm StatusUnsupported specifically matches styles.Error's own
+	// rendering, and StatusWatching specifically matches styles.Prompt's —
+	// not just "different from each other" but each exactly as specified.
+	wantUnsupported := styles.Error.Render(string(review.StatusUnsupported))
+	if unsupportedRendered != wantUnsupported {
+		t.Errorf("styleStatus(StatusUnsupported) = %q, want %q (styles.Error.Render)", unsupportedRendered, wantUnsupported)
+	}
+	wantWatching := styles.Prompt.Render(string(review.StatusWatching))
+	if watchingRendered != wantWatching {
+		t.Errorf("styleStatus(StatusWatching) = %q, want %q (styles.Prompt.Render)", watchingRendered, wantWatching)
+	}
+}
+
+// TestReviewsTabCopyableContentUnsupportedNoTruncation verifies the
+// plain-text CopyableContent path renders the literal "unsupported" status
+// in full, with no truncation, mirroring
+// TestReviewsTabCopyableContentParity's existing pattern of asserting the
+// plain-text rebuild contains each record's string(Status) verbatim. The
+// STATUS column width (reviewsColStatus = 12) exceeds len("unsupported")
+// (11), so no truncation should occur.
+func TestReviewsTabCopyableContentUnsupportedNoTruncation(t *testing.T) {
+	records := []review.Record{
+		{Repo: "owner/repo-a", PR: 1, Status: review.StatusUnsupported},
+	}
+	store := &fakeReviewStore{records: records}
+	rt := NewReviewsTab("reviews", store, testReviewsStyles())
+
+	content := rt.CopyableContent()
+
+	if !strings.Contains(content, "unsupported") {
+		t.Errorf("expected CopyableContent to contain the literal status %q untruncated, got %q", "unsupported", content)
+	}
+	// Also assert against truncation: a truncated form of the word must
+	// not somehow substitute for the whole value (defensive against a
+	// future off-by-one in column width).
+	if strings.Contains(content, "unsupporte ") {
+		t.Errorf("CopyableContent appears to have truncated %q, got %q", "unsupported", content)
+	}
+}
+
 // TestReviewsTabHighlightStaleKey verifies that when selectedKey names a PR no
 // longer present, the render reconciles to the first row rather than
 // highlighting nothing or panicking.

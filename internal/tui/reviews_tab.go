@@ -403,6 +403,8 @@ func (rt *ReviewsTab) styleStatus(i int, selectedIdx int, status review.Status, 
 		return rt.styles.Success.Render(text)
 	case review.StatusReviewing:
 		return rt.styles.Warning.Render(text)
+	case review.StatusUnsupported:
+		return rt.styles.Error.Render(text)
 	case review.StatusWatching, review.StatusReviewed:
 		return rt.styles.Prompt.Render(text)
 	default:
