@@ -106,6 +106,17 @@ func validateSpoolPath(p string) error {
 // markers is a generic failure and must fall through to the existing
 // revertToWatching path unchanged — in particular, a missing-diff-file
 // failure (also exit 2) must NOT match here.
+//
+// Coupling (deliberate, on the record): these substrings are matched
+// against pr_review.py's human-readable stderr text, not a structured
+// code, because the tool exposes no machine-readable signal for this
+// condition today. If pr_review.py (in ai-resources) rewords either
+// message, classification silently stops matching and an unsupported PR
+// reverts to the generic retry path again. Keep these markers in sync
+// with that tool; a structured sentinel (e.g. an UNSUPPORTED_LANGUAGE
+// stderr tag) would remove the coupling and is the preferred long-term
+// fix — tracked alongside the spool-path sentinel follow-up noted on
+// validateSpoolPath above.
 var unsupportedLanguageMarkers = []string{
 	"could not determine the language from the diff",
 	"unsupported language '",

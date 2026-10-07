@@ -319,6 +319,12 @@ func TestDecideReviewAction_StaleReviewingRecordIsStillReviewable(t *testing.T) 
 			LastServicedRequest: "old-sha", // request for new-sha is unserviced → ActionReview
 		}
 
+		// StatusUnsupported is deliberately omitted here: it is the one
+		// status decideReviewAction DOES read (Rule 1b → ActionSkip, issue
+		// #123), so it is NOT invariant and must not be added to this slice.
+		// Its behavior is covered separately by
+		// TestDecideReviewAction_StatusUnsupported_OpenPR_Skips and
+		// _TerminalPR_StillPrunes.
 		for _, status := range []Status{StatusWatching, StatusReviewing, StatusReviewed, StatusDone} {
 			rec := base
 			rec.Status = status
