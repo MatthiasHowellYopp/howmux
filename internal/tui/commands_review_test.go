@@ -863,6 +863,56 @@ func TestHandleReview_ReenrollUnsupported_ResetsToWatching(t *testing.T) {
 	}
 }
 
+func TestHandleReview_ReenrollDiffTooLarge_ResetsToWatching(t *testing.T) {
+	// Re-enrolling a PR stuck in StatusDiffTooLarge must explicitly and
+	// durably reset it to StatusWatching, immediately after rec = existing,
+	// before any dedup-check logic runs — mirroring the StatusUnsupported
+	// recovery path.
+
+	// Skip if assets are missing
+	if err := review.CheckReviewAssets(filepath.Join(os.Getenv("HOME"), ".kiro")); err != nil {
+		t.Skipf("Skipping test - review assets not available: %v", err)
+	}
+
+	// Skip if gh is not available (needed for GetPR)
+	if _, err := exec.LookPath("gh"); err != nil {
+		t.Skipf("Skipping test - gh CLI not available")
+	}
+
+	m := newTestModel()
+	defer m.reviewWatcher.Stop()
+
+	// Pre-enroll a PR in the store with Status: StatusDiffTooLarge
+	store := review.NewDefaultStore()
+	existingRec := review.Record{
+		Repo:       "owner/repo",
+		PR:         123,
+		URL:        "https://github.com/owner/repo/pull/123",
+		Status:     review.StatusDiffTooLarge,
+		EnrolledAt: time.Now().Format(time.RFC3339),
+		ReviewDir:  ".worktrees/review-owner-repo-123",
+	}
+	if err := store.Save(existingRec); err != nil {
+		t.Fatalf("Failed to pre-enroll PR: %v", err)
+	}
+	defer store.Remove("owner/repo", 123)
+
+	// Call handleReview with the already-enrolled, diff-too-large PR URL
+	_, _ = m.handleReview([]string{"https://github.com/owner/repo/pull/123"})
+
+	// Read the record back via the store (not the in-memory rec the handler held)
+	rec, found, err := store.Get("owner/repo", 123)
+	if err != nil {
+		t.Fatalf("Failed to retrieve record: %v", err)
+	}
+	if !found {
+		t.Fatalf("Expected record to still be found in store")
+	}
+	if rec.Status != review.StatusWatching {
+		t.Errorf("Expected Status to be reset to StatusWatching, got %s", rec.Status)
+	}
+}
+
 func TestHandleReview_ReenrollNonUnsupported_StatusUnaffected(t *testing.T) {
 	// Issue #123, Task 5: re-enrolling a PR with a non-unsupported status
 	// must leave the existing dedup-check behavior unchanged (same SHA ->

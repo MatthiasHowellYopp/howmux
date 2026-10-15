@@ -1849,7 +1849,136 @@ func TestRunReview_UnsupportedLanguage_ExplicitMarker(t *testing.T) {
 	}
 }
 
-// TestRunReview_MissingDiffFile_NotMisclassified is the explicit
+// TestRunReview_DiffTooLarge_SetsStatus verifies that when fetchDiffFunc
+// fails with an error whose text contains a diff-too-large marker (gh pr
+// diff → HTTP 406, diff exceeds the 20k-line cap), RunReview persists the
+// terminal StatusDiffTooLarge (not StatusWatching) and returns an error
+// satisfying errors.Is(err, errDiffTooLarge). pr_review.py is never invoked
+// on this path, so runReviewToolFunc is left to fail the test if it is
+// called.
+func TestRunReview_DiffTooLarge_SetsStatus(t *testing.T) {
+	origFetchDiff := fetchDiffFunc
+	origRunReviewTool := runReviewToolFunc
+	origTimeNow := timeNow
+	defer func() {
+		fetchDiffFunc = origFetchDiff
+		runReviewToolFunc = origRunReviewTool
+		timeNow = origTimeNow
+	}()
+
+	fixedTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	timeNow = func() time.Time { return fixedTime }
+
+	// Mirror fetchDiffFunc's real error shape: it wraps gh's stderr into the
+	// returned error, so the 406/too_large text is present in err.Error().
+	fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+		return fmt.Errorf("gh pr diff failed (exit 1): could not find pull request diff: HTTP 406: Sorry, the diff exceeded the maximum number of lines (20000)\nPullRequest.diff too_large")
+	}
+
+	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+		t.Fatal("runReviewToolFunc must not be called when the diff fetch fails")
+		return nil, nil
+	}
+
+	baseDir := t.TempDir()
+	store := NewStore(baseDir)
+
+	rec := Record{
+		Repo:       "owner/repo",
+		PR:         67,
+		URL:        "https://github.com/owner/repo/pull/67",
+		Status:     StatusWatching,
+		EnrolledAt: time.Now().Format(time.RFC3339),
+		ReviewDir:  "/tmp/review-67",
+	}
+
+	ctx := context.Background()
+	err := RunReview(ctx, rec, "sha67", store, io.Discard)
+	if err == nil {
+		t.Fatal("expected error from diff-too-large failure")
+	}
+	if !errors.Is(err, errDiffTooLarge) {
+		t.Errorf("expected errors.Is(err, errDiffTooLarge) to be true, got: %v", err)
+	}
+
+	updated, found, getErr := store.Get("owner/repo", 67)
+	if getErr != nil {
+		t.Fatalf("failed to check record: %v", getErr)
+	}
+	if !found {
+		t.Fatal("expected record to exist")
+	}
+	if updated.Status != StatusDiffTooLarge {
+		t.Errorf("expected record Status %q, got %q", StatusDiffTooLarge, updated.Status)
+	}
+	if updated.SpoolPath != "" {
+		t.Errorf("expected no SpoolPath to be set, got %q", updated.SpoolPath)
+	}
+}
+
+// TestRunReview_GenericFetchFailure_RevertsToWatching is the regression
+// guard that a marker-free diff-fetch failure (e.g. network error, auth
+// failure) is NOT misclassified as diff-too-large: the record must revert
+// to StatusWatching exactly as before this change, and the returned error
+// must read "failed to fetch PR diff" with no errDiffTooLarge wrapping.
+func TestRunReview_GenericFetchFailure_RevertsToWatching(t *testing.T) {
+	origFetchDiff := fetchDiffFunc
+	origRunReviewTool := runReviewToolFunc
+	origTimeNow := timeNow
+	defer func() {
+		fetchDiffFunc = origFetchDiff
+		runReviewToolFunc = origRunReviewTool
+		timeNow = origTimeNow
+	}()
+
+	fixedTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	timeNow = func() time.Time { return fixedTime }
+
+	fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+		return fmt.Errorf("gh pr diff failed (exit 1): fatal: unable to access repository: Could not resolve host: github.com")
+	}
+
+	runReviewToolFunc = func(ctx context.Context, argv []string, stderrWriter io.Writer) ([]string, error) {
+		t.Fatal("runReviewToolFunc must not be called when the diff fetch fails")
+		return nil, nil
+	}
+
+	baseDir := t.TempDir()
+	store := NewStore(baseDir)
+
+	rec := Record{
+		Repo:       "owner/repo",
+		PR:         68,
+		URL:        "https://github.com/owner/repo/pull/68",
+		Status:     StatusWatching,
+		EnrolledAt: time.Now().Format(time.RFC3339),
+		ReviewDir:  "/tmp/review-68",
+	}
+
+	ctx := context.Background()
+	err := RunReview(ctx, rec, "sha68", store, io.Discard)
+	if err == nil {
+		t.Fatal("expected error from generic fetch failure")
+	}
+	if errors.Is(err, errDiffTooLarge) {
+		t.Errorf("generic fetch failure must NOT be classified as errDiffTooLarge, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "failed to fetch PR diff") {
+		t.Errorf("expected 'failed to fetch PR diff' error, got: %v", err)
+	}
+
+	updated, found, getErr := store.Get("owner/repo", 68)
+	if getErr != nil {
+		t.Fatalf("failed to check record: %v", getErr)
+	}
+	if !found {
+		t.Fatal("expected record to exist")
+	}
+	if updated.Status != StatusWatching {
+		t.Errorf("expected record to revert to StatusWatching, got %q", updated.Status)
+	}
+}
+
 // regression guard for acceptance criterion 3: a marker-free stderr
 // message (e.g. a missing-diff-file error, also exit code 2) must NOT be
 // classified as unsupported-language. The record must still revert to
@@ -2145,6 +2274,37 @@ func TestClassifyUnsupportedLanguage(t *testing.T) {
 			}
 			if !matched && reason != "" {
 				t.Errorf("classifyUnsupportedLanguage(%q) reason = %q, want empty on no match", tt.stderrText, reason)
+			}
+		})
+	}
+}
+
+// TestClassifyDiffTooLarge exercises the pure diff-too-large classification
+// helper directly, covering both markers, a marker-free failure, and the
+// empty/whitespace edge cases.
+func TestClassifyDiffTooLarge(t *testing.T) {
+	tests := []struct {
+		name        string
+		errText     string
+		wantMatched bool
+	}{
+		{"gh too_large tag", "gh pr diff failed (exit 1): PullRequest.diff too_large", true},
+		{"http 406 sentence", "gh pr diff failed (exit 1): HTTP 406: Sorry, the diff exceeded the maximum number of lines (20000)", true},
+		{"generic fetch failure, no marker", "gh pr diff failed (exit 1): Could not resolve host: github.com", false},
+		{"empty input", "", false},
+		{"whitespace only", "   \n\t  ", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reason, matched := classifyDiffTooLarge(tt.errText)
+			if matched != tt.wantMatched {
+				t.Errorf("classifyDiffTooLarge(%q) matched = %v, want %v", tt.errText, matched, tt.wantMatched)
+			}
+			if matched && reason != strings.TrimSpace(tt.errText) {
+				t.Errorf("classifyDiffTooLarge(%q) reason = %q, want trimmed input", tt.errText, reason)
+			}
+			if !matched && reason != "" {
+				t.Errorf("classifyDiffTooLarge(%q) reason = %q, want empty on no match", tt.errText, reason)
 			}
 		})
 	}

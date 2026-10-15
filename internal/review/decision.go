@@ -8,6 +8,7 @@ import "github.com/matthiashowellyopp/howmux/internal/github"
 // Rules:
 // - PR merged or closed → ActionPrune
 // - Previously classified unsupported-language → ActionSkip (unless terminal, which still prunes above)
+// - Previously classified diff-too-large → ActionSkip (unless terminal, which still prunes above)
 // - No stored record / never reviewed → ActionReview
 // - Open + review requested for me + request not already serviced → ActionReview
 // - Open + not requested (or request already serviced) → ActionSkip
@@ -33,6 +34,17 @@ func decideReviewAction(pr github.PR, rec Record, reviewer string) ReviewAction 
 	// (which would otherwise re-fire on the permanently-empty
 	// LastReviewedSHA).
 	if rec.Status == StatusUnsupported {
+		return ActionSkip
+	}
+
+	// Rule 1c: Previously classified as diff-too-large → skip. Same rationale
+	// and the same deliberate exception to the "does not read Status" design
+	// as Rule 1b above: a PR whose diff exceeds GitHub's 20k-line API cap
+	// keeps an empty LastReviewedSHA, so without this check Rule 2 would
+	// re-dispatch ActionReview on every poll forever (the watching↔reviewing
+	// loop). Ordered after the terminal/prune check (a merged/closed PR must
+	// still be pruned) and before Rule 2.
+	if rec.Status == StatusDiffTooLarge {
 		return ActionSkip
 	}
 

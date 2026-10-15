@@ -232,6 +232,35 @@ func TestDecideReviewAction(t *testing.T) {
 			reviewer: reviewer,
 			want:     ActionPrune,
 		},
+		{
+			name: "StatusDiffTooLarge + open PR → skip (not review, despite empty LastReviewedSHA)",
+			pr: github.PR{
+				State:      "OPEN",
+				HeadRefOid: "new-sha",
+			},
+			rec: Record{
+				Repo:            "owner/repo",
+				PR:              1,
+				Status:          StatusDiffTooLarge,
+				LastReviewedSHA: "", // would normally trigger Rule 2 → ActionReview
+			},
+			reviewer: reviewer,
+			want:     ActionSkip,
+		},
+		{
+			name: "StatusDiffTooLarge + terminal PR → prune wins over skip",
+			pr: github.PR{
+				State:      "CLOSED",
+				HeadRefOid: "abc123",
+			},
+			rec: Record{
+				Repo:   "owner/repo",
+				PR:     1,
+				Status: StatusDiffTooLarge,
+			},
+			reviewer: reviewer,
+			want:     ActionPrune,
+		},
 	}
 
 	for _, tt := range tests {
@@ -325,6 +354,10 @@ func TestDecideReviewAction_StaleReviewingRecordIsStillReviewable(t *testing.T) 
 		// Its behavior is covered separately by
 		// TestDecideReviewAction_StatusUnsupported_OpenPR_Skips and
 		// _TerminalPR_StillPrunes.
+		//
+		// StatusDiffTooLarge is omitted for the same reason: Rule 1c reads it
+		// (→ ActionSkip), so it is not invariant either. Its behavior is
+		// covered by the StatusDiffTooLarge table cases above.
 		for _, status := range []Status{StatusWatching, StatusReviewing, StatusReviewed, StatusDone} {
 			rec := base
 			rec.Status = status

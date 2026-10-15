@@ -151,6 +151,53 @@ func classifyUnsupportedLanguage(stderrText string) (reason string, matched bool
 	return "", false
 }
 
+// diffTooLargeMarkers are the substrings in a failed `gh pr diff` error that
+// identify GitHub's "diff too large" condition: the PR's diff exceeds the
+// 20,000-line cap the diff API enforces, so `gh pr diff` exits non-zero with
+// an HTTP 406 and produces no diff at all. This is NOT a transient failure —
+// the diff stays too large on every subsequent poll — so, like the
+// unsupported-language case, it must be classified into a terminal status
+// rather than taking the generic revertToWatching retry path (which would
+// re-dispatch forever on the permanently-empty LastReviewedSHA, blipping the
+// Reviews tab watching↔reviewing on every poll).
+//
+// Coupling (deliberate, on the record): these substrings are matched against
+// the `gh` CLI's human-readable stderr text (surfaced through fetchDiffFunc's
+// wrapped error), not a structured code, because `gh pr diff` exposes no
+// machine-readable signal for this condition. "too_large" is `gh`'s own
+// short tag for it and is the most stable of the two; the HTTP-406 sentence
+// is matched as a fallback. If a future `gh` reword drops both, classification
+// silently stops matching and the PR reverts to the generic retry loop again —
+// keep these in sync with the `gh` CLI's output.
+var diffTooLargeMarkers = []string{
+	"too_large",
+	"the diff exceeded the maximum number of lines",
+}
+
+// errDiffTooLarge is a sentinel error RunReview wraps and returns on the
+// diff-too-large path, so callers (and tests) can detect this specific
+// condition via errors.Is without string-matching the returned error's text —
+// mirroring errUnsupportedLanguage.
+var errDiffTooLarge = errors.New("diff too large")
+
+// classifyDiffTooLarge reports whether errText (the text of a failed
+// fetchDiffFunc error, which embeds `gh pr diff`'s stderr) matches one of
+// diffTooLargeMarkers, and if so returns a trimmed human-readable reason.
+// Returns ("", false) for every other fetch failure, so those continue to
+// revertToWatching via the existing generic path unchanged.
+func classifyDiffTooLarge(errText string) (reason string, matched bool) {
+	trimmed := strings.TrimSpace(errText)
+	if trimmed == "" {
+		return "", false
+	}
+	for _, marker := range diffTooLargeMarkers {
+		if strings.Contains(trimmed, marker) {
+			return trimmed, true
+		}
+	}
+	return "", false
+}
+
 // revertToWatching reverts rec to StatusWatching and persists it, used on
 // every error exit from RunReview so a record can never remain stuck on
 // StatusReviewing after a failed/aborted review attempt. A Save failure
@@ -180,6 +227,21 @@ func notifyUnsupported(rec Record, reason string) {
 		msg := fmt.Sprintf("Review skipped: %s #%d is an unsupported language (%s)", repo, pr, reason)
 		if err := notifyFn("howmux", msg); err != nil {
 			logging.Warn("failed to send unsupported-language notification", "repo", repo, "pr", pr, "error", err)
+		}
+	}(rec.Repo, rec.PR, reason)
+}
+
+// notifyDiffTooLarge fires a best-effort, non-blocking notification that a
+// review attempt was skipped because the PR's diff exceeds GitHub's diff-API
+// line cap. It mirrors notifyUnsupported exactly (same goroutine/local-copy of
+// notifyFunc, log-and-continue on failure, never propagate), and runs on the
+// diff-too-large classification path only.
+func notifyDiffTooLarge(rec Record, reason string) {
+	notifyFn := notifyFunc
+	go func(repo string, pr int, reason string) {
+		msg := fmt.Sprintf("Review skipped: %s #%d diff is too large to fetch (%s)", repo, pr, reason)
+		if err := notifyFn("howmux", msg); err != nil {
+			logging.Warn("failed to send diff-too-large notification", "repo", repo, "pr", pr, "error", err)
 		}
 	}(rec.Repo, rec.PR, reason)
 }
@@ -216,6 +278,20 @@ func RunReview(ctx context.Context, rec Record, headSHA string, storeImpl StoreI
 
 	// Fetch PR diff via gh CLI
 	if err := fetchDiffFunc(ctx, owner, repo, rec.PR, diffPath); err != nil {
+		// A "diff too large" failure (gh pr diff → HTTP 406, diff exceeds the
+		// 20k-line API cap) is permanent for this diff, not transient. Classify
+		// it into the terminal StatusDiffTooLarge so decideReviewAction stops
+		// re-dispatching it on every poll — mirroring the unsupported-language
+		// path below. Any other fetch failure is (potentially) transient and
+		// falls through to the generic revertToWatching retry path unchanged.
+		if reason, ok := classifyDiffTooLarge(err.Error()); ok {
+			rec.Status = StatusDiffTooLarge
+			if saveErr := storeImpl.Save(rec); saveErr != nil {
+				logging.Warn("failed to persist StatusDiffTooLarge", "repo", rec.Repo, "pr", rec.PR, "error", saveErr)
+			}
+			notifyDiffTooLarge(rec, reason)
+			return fmt.Errorf("%w: %s", errDiffTooLarge, reason)
+		}
 		revertToWatching(storeImpl, rec)
 		return fmt.Errorf("failed to fetch PR diff: %w", err)
 	}

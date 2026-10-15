@@ -1090,6 +1090,60 @@ func TestReviewsTabCopyableContentUnsupportedNoTruncation(t *testing.T) {
 	}
 }
 
+// TestReviewsTabDiffTooLargeStatusStyling mirrors
+// TestReviewsTabUnsupportedStatusStyling for StatusDiffTooLarge: it renders
+// via its normal (non-selected) per-status branch and asserts it uses the
+// same Error style, visibly different from a neutral StatusWatching row.
+func TestReviewsTabDiffTooLargeStatusStyling(t *testing.T) {
+	styles := testReviewsStyles()
+	rt := NewReviewsTab("reviews", &fakeReviewStore{}, styles)
+
+	diffTooLargeRendered := rt.styleStatus(0, -1, review.StatusDiffTooLarge, string(review.StatusDiffTooLarge))
+	watchingRendered := rt.styleStatus(0, -1, review.StatusWatching, string(review.StatusWatching))
+
+	ansiPrefix := func(rendered, text string) string {
+		idx := strings.Index(rendered, text)
+		if idx == -1 {
+			return rendered
+		}
+		return rendered[:idx]
+	}
+
+	diffTooLargePrefix := ansiPrefix(diffTooLargeRendered, string(review.StatusDiffTooLarge))
+	watchingPrefix := ansiPrefix(watchingRendered, string(review.StatusWatching))
+
+	if diffTooLargePrefix == "" || watchingPrefix == "" {
+		t.Fatalf("color rendering appears disabled (prefixes empty): this test cannot verify diff-too-large/watching styling differ without ANSI color; check the lipgloss color profile / NO_COLOR")
+	}
+
+	if diffTooLargePrefix == watchingPrefix {
+		t.Errorf("expected StatusDiffTooLarge to render with a different color prefix than StatusWatching, both got %q", diffTooLargePrefix)
+	}
+
+	wantDiffTooLarge := styles.Error.Render(string(review.StatusDiffTooLarge))
+	if diffTooLargeRendered != wantDiffTooLarge {
+		t.Errorf("styleStatus(StatusDiffTooLarge) = %q, want %q (styles.Error.Render)", diffTooLargeRendered, wantDiffTooLarge)
+	}
+}
+
+// TestReviewsTabCopyableContentDiffTooLargeNoTruncation verifies the
+// plain-text CopyableContent path renders the literal "diff too large"
+// status in full. "diff too large" is 14 chars; reviewsColStatus (15) must
+// accommodate it without truncation.
+func TestReviewsTabCopyableContentDiffTooLargeNoTruncation(t *testing.T) {
+	records := []review.Record{
+		{Repo: "owner/repo-a", PR: 1, Status: review.StatusDiffTooLarge},
+	}
+	store := &fakeReviewStore{records: records}
+	rt := NewReviewsTab("reviews", store, testReviewsStyles())
+
+	content := rt.CopyableContent()
+
+	if !strings.Contains(content, "diff too large") {
+		t.Errorf("expected CopyableContent to contain the literal status %q untruncated, got %q", "diff too large", content)
+	}
+}
+
 // TestReviewsTabHighlightStaleKey verifies that when selectedKey names a PR no
 // longer present, the render reconciles to the first row rather than
 // highlighting nothing or panicking.

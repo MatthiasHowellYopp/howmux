@@ -241,7 +241,7 @@ func (rt *ReviewsTab) renderError(err error) string {
 const (
 	reviewsColRepo          = 30
 	reviewsColPR            = 8
-	reviewsColStatus        = 12
+	reviewsColStatus        = 15 // widest status: "diff too large" (14) + 1 pad
 	reviewsColLastReviewed  = 19 // width of "2006-01-02 15:04:05"
 	reviewsColSpoolPath     = 40
 	reviewsColVerdict       = 16
@@ -403,7 +403,7 @@ func (rt *ReviewsTab) styleStatus(i int, selectedIdx int, status review.Status, 
 		return rt.styles.Success.Render(text)
 	case review.StatusReviewing:
 		return rt.styles.Warning.Render(text)
-	case review.StatusUnsupported:
+	case review.StatusUnsupported, review.StatusDiffTooLarge:
 		return rt.styles.Error.Render(text)
 	case review.StatusWatching, review.StatusReviewed:
 		return rt.styles.Prompt.Render(text)

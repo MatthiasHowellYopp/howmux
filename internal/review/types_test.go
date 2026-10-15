@@ -76,6 +76,14 @@ func TestRecordValidation(t *testing.T) {
 		}
 	})
 
+	t.Run("StatusDiffTooLarge is accepted", func(t *testing.T) {
+		rec := validRecord
+		rec.Status = StatusDiffTooLarge
+		if err := rec.Validate(); err != nil {
+			t.Errorf("StatusDiffTooLarge should be a valid status: %v", err)
+		}
+	})
+
 	t.Run("invalid status", func(t *testing.T) {
 		rec := validRecord
 		rec.Status = "invalid"
