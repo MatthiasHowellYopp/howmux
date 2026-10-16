@@ -466,6 +466,30 @@ VERDICT: REQUEST_CHANGES
 			wantTotal:     2,
 			wantBreakdown: "2 nits",
 		},
+		{
+			// Regression: the real consolidator output on Bit-Quill/flowdra#88
+			// decorated every finding with a markdown bullet, backticked
+			// file:line, and a "(non-blocking)" severity qualifier — a shape
+			// the original regex matched zero of, so every finding fell through
+			// to the block body instead of posting inline.
+			name: "markdown bullet + backticked path + severity qualifier (flowdra#88)",
+			body: "# Consolidated Review\n\n" +
+				"- `internal/config/project_detect.go:61` - low (non-blocking) - the git helper drops stderr -> capture stderr and fold it in.\n" +
+				"- `internal/config/project_detect.go:53` - low (non-blocking) - branch guard swallows errors -> check ctx.Err() before swallowing.\n\n" +
+				"VERDICT: APPROVE\n",
+			wantTotal: 2,
+			// The breakdown keys off the bare severity word, ignoring the
+			// "(non-blocking)" qualifier; "low" is not one of the counted
+			// severities (critical/warning/nit), so the breakdown is empty
+			// even though both lines are counted in the total.
+			wantBreakdown: "",
+		},
+		{
+			name:          "numbered list marker and bare path",
+			body:          "1. src/foo.py:10 - warning - unchecked error -> handle it\n2) src/bar.py:22 - nit - naming -> rename\n",
+			wantTotal:     2,
+			wantBreakdown: "1 warning, 1 nit",
+		},
 	}
 
 	for _, tt := range tests {
@@ -664,6 +688,50 @@ func TestBuildReviewPayload_ParsesFindingsIntoComments(t *testing.T) {
 	}
 	if decoded.Body != body {
 		t.Errorf("decoded.Body = %q, want the full original body verbatim", decoded.Body)
+	}
+}
+
+// TestBuildReviewPayload_ParsesDecoratedFindings is the direct regression for
+// the Bit-Quill/flowdra#88 block-comment bug: the consolidator emitted
+// findings as markdown bullets with a backticked file:line and a
+// "(non-blocking)" severity qualifier, which the original finding regex did
+// not match — so zero inline comments were produced and everything landed in
+// the review body. This asserts the decorated shape now parses into inline
+// comments, anchors to the right file:line, and keeps the qualifier in the
+// posted comment body.
+func TestBuildReviewPayload_ParsesDecoratedFindings(t *testing.T) {
+	body := "# Consolidated Review — owner/repo PR #88\n\n" +
+		"Summary prose that is not a finding.\n\n" +
+		"- `internal/config/project_detect.go:61` - low (non-blocking) - the git helper drops stderr -> capture stderr and fold it in.\n" +
+		"- `internal/config/project_detect.go:53` - low (non-blocking) - branch guard swallows errors -> check ctx.Err() before swallowing.\n\n" +
+		"VERDICT: APPROVE\n"
+
+	payloadJSON, event, count, err := buildReviewPayload("owner/repo", 88, "APPROVE", body, nil)
+	if err != nil {
+		t.Fatalf("buildReviewPayload() unexpected error: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("commentCount = %d, want 2 (both decorated findings should parse inline)", count)
+	}
+	if event != "APPROVE" {
+		t.Errorf("event = %q, want APPROVE", event)
+	}
+
+	var decoded reviewPayload
+	if err := json.Unmarshal(payloadJSON, &decoded); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if len(decoded.Comments) != 2 {
+		t.Fatalf("inline comments = %d, want 2", len(decoded.Comments))
+	}
+	if decoded.Comments[0].Path != "internal/config/project_detect.go" || decoded.Comments[0].Line != 61 {
+		t.Errorf("comment[0] = %+v, want internal/config/project_detect.go:61", decoded.Comments[0])
+	}
+	// The "(non-blocking)" qualifier must survive into the posted comment
+	// body rather than being silently dropped when the severity word is
+	// extracted.
+	if !strings.Contains(decoded.Comments[0].Body, "low (non-blocking)") {
+		t.Errorf("comment[0].Body = %q, want it to retain the severity qualifier", decoded.Comments[0].Body)
 	}
 }
 

@@ -235,9 +235,39 @@ var lookPathForDecideActionsFunc = exec.LookPath
 // findingLineRe matches a single review finding line of the form
 // "file:line - severity - issue -> fix" (both hyphen and em-dash
 // separators are accepted, per review-poster.md's documented format and
-// pr_review_finalize.py's own comment). Capture groups: file, line,
-// severity, issue, fix.
-var findingLineRe = regexp.MustCompile(`(?m)^\s*(\S+):(\d+)\s*[-—]\s*(\w+)\s*[-—]\s*(.+?)\s*(?:->|→)\s*(.+?)\s*$`)
+// pr_review_finalize.py's own comment).
+//
+// The consolidator (ai-resources' review-consolidator) is an LLM, so the
+// lines it emits vary in surface form around that core shape. This regex is
+// deliberately tolerant of the decorations the consolidator actually
+// produces in the wild, so real findings parse into inline comments instead
+// of silently falling through to the review body (the block-comment-only
+// regression seen on Bit-Quill/flowdra#88, where every finding looked like
+// "- `path:line` - low (non-blocking) - … -> …" and matched nothing):
+//
+//   - an optional leading markdown list marker ("- ", "* ", "+ ", "1. ",
+//     "1) ") is stripped,
+//   - the file:line may be wrapped in backticks (`path:line`),
+//   - the severity word may carry a trailing parenthetical qualifier such as
+//     "(non-blocking)".
+//
+// Capture groups:
+//
+//	1 file      2 line      3 severity (bare word)
+//	4 severity-qualifier parenthetical, e.g. " (non-blocking)" (may be empty)
+//	5 issue     6 suggested fix
+//
+// Group 4 is captured rather than discarded so the posted comment body can
+// keep the qualifier ("low (non-blocking): …"), while the severity tally in
+// countFindings keys off the bare word in group 3.
+var findingLineRe = regexp.MustCompile(
+	`(?m)^\s*(?:[-*+]\s+|\d+[.)]\s+)?` + // optional list marker
+		"`?" + `(\S+?):(\d+)` + "`?" + // file:line, optional backticks
+		`\s*[-—]\s*` +
+		`(\w+)` + // severity word
+		`(\s*\([^)]*\))?` + // optional "(qualifier)"
+		`\s*[-—]\s*` +
+		`(.+?)\s*(?:->|→)\s*(.+?)\s*$`)
 
 // countFindings counts finding lines in a review body — lines matching
 // findingLineRe — and composes a short severity breakdown like "2
@@ -506,9 +536,18 @@ func buildReviewPayload(repo string, pr int, verdict string, body string, commen
 			continue
 		}
 		severity := strings.ToLower(strings.TrimSpace(m[3]))
-		issue := strings.TrimSpace(m[4])
-		fix := strings.TrimSpace(m[5])
-		commentBody := fmt.Sprintf("%s: %s → %s", severity, issue, fix)
+		// m[4] is the optional "(qualifier)" after the severity word (e.g.
+		// " (non-blocking)"); keep it on the posted severity label so the
+		// comment reads "low (non-blocking): …" rather than dropping the
+		// author-facing qualifier. Empty for the plain "file:line - sev - …"
+		// shape.
+		severityLabel := severity
+		if qualifier := strings.TrimSpace(m[4]); qualifier != "" {
+			severityLabel += " " + qualifier
+		}
+		issue := strings.TrimSpace(m[5])
+		fix := strings.TrimSpace(m[6])
+		commentBody := fmt.Sprintf("%s: %s → %s", severityLabel, issue, fix)
 
 		if commentable != nil {
 			lines, fileInDiff := commentable[file]
