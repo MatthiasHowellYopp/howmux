@@ -697,8 +697,8 @@ func TestBuildReviewPayload_ParsesFindingsIntoComments(t *testing.T) {
 // "(non-blocking)" severity qualifier, which the original finding regex did
 // not match — so zero inline comments were produced and everything landed in
 // the review body. This asserts the decorated shape now parses into inline
-// comments, anchors to the right file:line, and keeps the qualifier in the
-// posted comment body.
+// comments, anchors to the right file:line, and posts the normalized
+// severity keyword as the comment prefix.
 func TestBuildReviewPayload_ParsesDecoratedFindings(t *testing.T) {
 	body := "# Consolidated Review — owner/repo PR #88\n\n" +
 		"Summary prose that is not a finding.\n\n" +
@@ -727,11 +727,115 @@ func TestBuildReviewPayload_ParsesDecoratedFindings(t *testing.T) {
 	if decoded.Comments[0].Path != "internal/config/project_detect.go" || decoded.Comments[0].Line != 61 {
 		t.Errorf("comment[0] = %+v, want internal/config/project_detect.go:61", decoded.Comments[0])
 	}
-	// The "(non-blocking)" qualifier must survive into the posted comment
-	// body rather than being silently dropped when the severity word is
-	// extracted.
-	if !strings.Contains(decoded.Comments[0].Body, "low (non-blocking)") {
-		t.Errorf("comment[0].Body = %q, want it to retain the severity qualifier", decoded.Comments[0].Body)
+	// Severity is normalized to the bare keyword ("low"); the "(non-blocking)"
+	// qualifier is dropped from the prefix, but the finding's issue/fix text is
+	// preserved in full.
+	wantBody := "low: the git helper drops stderr → capture stderr and fold it in."
+	if decoded.Comments[0].Body != wantBody {
+		t.Errorf("comment[0].Body = %q, want %q", decoded.Comments[0].Body, wantBody)
+	}
+}
+
+// TestBuildReviewPayload_RealConsolidatorShapes feeds the payload builder the
+// exact finding-line shapes seen in recent real reviews (Bit-Quill/flowdra
+// #78/#81/#84/#85/#86) that the original strict regex matched zero of, so the
+// whole review posted as a single block instead of inline comments. Each must
+// now anchor to the correct file and (first) line and post a non-empty body.
+func TestBuildReviewPayload_RealConsolidatorShapes(t *testing.T) {
+	tests := []struct {
+		name     string
+		line     string
+		wantFile string
+		wantLine int
+		wantBody string
+	}{
+		{
+			name:     "clean single-line (flowdra#85)",
+			line:     "- `internal/agent/runid_unix_test.go:1606` - Low - wraps a constant pattern in fmt.Sprintf -> Drop the wrapper.",
+			wantFile: "internal/agent/runid_unix_test.go",
+			wantLine: 1606,
+			wantBody: "low: wraps a constant pattern in fmt.Sprintf → Drop the wrapper.",
+		},
+		{
+			name:     "line range anchors to first line + compound severity (flowdra#86)",
+			line:     "- `internal/agent/golden_e2e_test.go:621-622` - low/medium (test correctness) - the assertion only checks suffix -> Assert the branch artifact.",
+			wantFile: "internal/agent/golden_e2e_test.go",
+			wantLine: 621,
+			wantBody: "low: the assertion only checks suffix → Assert the branch artifact.",
+		},
+		{
+			name:     "bolded severity (flowdra#81)",
+			line:     "- `internal/supervise/supervise.go:11` - **Medium** - the recovery logs only the panic value -> Capture the stack in the recover block.",
+			wantFile: "internal/supervise/supervise.go",
+			wantLine: 11,
+			wantBody: "medium: the recovery logs only the panic value → Capture the stack in the recover block.",
+		},
+		{
+			name:     "unclosed backtick around file:line (flowdra#84)",
+			line:     "- `cmd/flowdra/cmd/project_test.go:331 - Low - asserts whole-buffer substrings -> Split output into lines.",
+			wantFile: "cmd/flowdra/cmd/project_test.go",
+			wantLine: 331,
+			wantBody: "low: asserts whole-buffer substrings → Split output into lines.",
+		},
+		{
+			name:     "no severity middle and no arrow (flowdra#78)",
+			line:     "  - `internal/inference/stub_route_test.go:70` — single-digit string(rune('0'+seq)) idiom; fragile if seq >= 10 later. Suggest fmt.Sprintf.",
+			wantFile: "internal/inference/stub_route_test.go",
+			wantLine: 70,
+			wantBody: "single-digit string(rune('0'+seq)) idiom; fragile if seq >= 10 later. Suggest fmt.Sprintf.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := "# Consolidated Review\n\n" + tt.line + "\n\nVERDICT: COMMENT\n"
+			payloadJSON, _, count, err := buildReviewPayload("owner/repo", 1, "COMMENT", body, nil)
+			if err != nil {
+				t.Fatalf("buildReviewPayload() error: %v", err)
+			}
+			if count != 1 {
+				t.Fatalf("commentCount = %d, want 1 (the finding should anchor inline)", count)
+			}
+			var decoded reviewPayload
+			if err := json.Unmarshal(payloadJSON, &decoded); err != nil {
+				t.Fatalf("unmarshal payload: %v", err)
+			}
+			if len(decoded.Comments) != 1 {
+				t.Fatalf("inline comments = %d, want 1", len(decoded.Comments))
+			}
+			c := decoded.Comments[0]
+			if c.Path != tt.wantFile || c.Line != tt.wantLine {
+				t.Errorf("anchor = %s:%d, want %s:%d", c.Path, c.Line, tt.wantFile, tt.wantLine)
+			}
+			if c.Body != tt.wantBody {
+				t.Errorf("comment body = %q, want %q", c.Body, tt.wantBody)
+			}
+		})
+	}
+}
+
+// TestBuildReviewPayload_MultiLocationFoldsToBody documents the one shape
+// this parser deliberately does NOT try to anchor: a finding naming two
+// file:line locations in one bullet (flowdra#81's coverage-gap finding),
+// e.g. "`a.go:251`, `b.go:930` - Medium - …". A GitHub review comment
+// anchors to exactly one location, and the comma-separated second reference
+// makes the single-anchor extraction ambiguous — rather than widen the
+// regex (and risk false positives on ordinary prose), we leave this shape
+// unmatched so it stays in the review body. The durable fix is upstream: the
+// review-consolidator prompt now instructs one location per finding line.
+// This test pins the current behavior so a future regex change that starts
+// matching it is a conscious decision, not an accident.
+func TestBuildReviewPayload_MultiLocationFoldsToBody(t *testing.T) {
+	body := "# Consolidated Review\n\n" +
+		"- `internal/acp/client.go:251`, `internal/agent/manager.go:930` - **Medium** - coverage gap on the panic path -> add a call-site test.\n\n" +
+		"VERDICT: COMMENT\n"
+
+	_, _, count, err := buildReviewPayload("owner/repo", 1, "COMMENT", body, nil)
+	if err != nil {
+		t.Fatalf("buildReviewPayload() error: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("commentCount = %d, want 0 (multi-location line is not single-anchorable)", count)
 	}
 }
 
