@@ -19,6 +19,8 @@ package review
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"strings"
 
 	"github.com/matthiashowellyopp/howmux/internal/logging"
@@ -197,4 +199,67 @@ func ownerAllowed(repo string, owners []string) bool {
 		}
 	}
 	return false
+}
+
+// runAutoPostGate is the default runAutoPostGateFunc seam implementation the
+// watcher calls after a successful review. It gathers the inputs
+// EvaluateAndMaybePost needs — the freshly-updated record (for SpoolPath and
+// LastReviewedSHA), the spool body + verdict, the spool's reviewed_sha, and the
+// PR diff — then runs the gate.
+//
+// It is intentionally tolerant: a review already succeeded and landed in the
+// spool, so a problem gathering gate inputs (record vanished, spool unreadable,
+// diff fetch failed) must NOT undo that — it returns an error the caller logs,
+// and the review simply stays in pending/ for a human (the safe default).
+func runAutoPostGate(ctx context.Context, rec Record, headSHA string, store StoreInterface, cfg AutoPostConfig) (GateResult, error) {
+	// Re-load the record RunReview just updated, so SpoolPath / LastReviewedSHA
+	// reflect the completed review.
+	updated, found, err := store.Get(rec.Repo, rec.PR)
+	if err != nil {
+		return GateResult{}, fmt.Errorf("auto-post gate: reload record: %w", err)
+	}
+	if !found {
+		return GateResult{}, fmt.Errorf("auto-post gate: record for %s#%d vanished after review", rec.Repo, rec.PR)
+	}
+	if updated.SpoolPath == "" {
+		return GateResult{}, fmt.Errorf("auto-post gate: no spool path on record for %s#%d", rec.Repo, rec.PR)
+	}
+
+	body, info := ReadSpoolBody(updated.SpoolPath, "")
+	if !info.Found {
+		return GateResult{}, fmt.Errorf("auto-post gate: cannot read spool body for %s#%d: %s", rec.Repo, rec.PR, updated.SpoolPath)
+	}
+
+	// reviewed_sha from the spool front-matter (RunReview stamps it). Fall back
+	// to the record's LastReviewedSHA if the front-matter lacks it.
+	reviewedSHA := updated.LastReviewedSHA
+	if data, readErr := os.ReadFile(updated.SpoolPath); readErr == nil {
+		if fm := ParseSpoolFrontMatter(data)["reviewed_sha"]; fm != "" {
+			reviewedSHA = fm
+		}
+	}
+
+	// Fetch the PR diff to a temp file, then read it back. The guardrail's
+	// anchoring check and the auditor both need it.
+	parts := strings.SplitN(rec.Repo, "/", 2)
+	if len(parts) != 2 {
+		return GateResult{}, fmt.Errorf("auto-post gate: invalid repo %q", rec.Repo)
+	}
+	diffFile, err := os.CreateTemp("", fmt.Sprintf("autopost-diff-%d-*.diff", rec.PR))
+	if err != nil {
+		return GateResult{}, fmt.Errorf("auto-post gate: temp diff: %w", err)
+	}
+	diffPath := diffFile.Name()
+	diffFile.Close()
+	defer os.Remove(diffPath)
+
+	if err := fetchDiffFunc(ctx, parts[0], parts[1], rec.PR, diffPath); err != nil {
+		return GateResult{}, fmt.Errorf("auto-post gate: fetch diff: %w", err)
+	}
+	diffData, err := os.ReadFile(diffPath)
+	if err != nil {
+		return GateResult{}, fmt.Errorf("auto-post gate: read diff: %w", err)
+	}
+
+	return EvaluateAndMaybePost(ctx, updated, body, info.Verdict, headSHA, reviewedSHA, string(diffData), cfg)
 }

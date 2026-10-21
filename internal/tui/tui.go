@@ -356,6 +356,16 @@ func newModel(w *watcher.Watcher, m *agent.Manager, cfg *config.Config, logFile 
 			"(set 'reviewer:' in .howmux/config.yaml or fix 'gh auth'). New-PR reviews still work."
 	}
 	reviewWatcher := review.NewWatcher(reviewStore, reviewPollInterval, 2, reviewer)
+	// Wire the review auto-post gate config from .howmux/config.yaml. The
+	// config package and review package each define their own AutoPostConfig
+	// (config owns YAML decoding; review owns the gate logic and has no
+	// dependency on config), so map across the boundary here. Unset/zero
+	// config leaves the gate in its safe default (dry-run).
+	reviewWatcher.SetAutoPostConfig(review.AutoPostConfig{
+		Mode:          review.AutoPostMode(cfg.Review.AutoPost.Mode),
+		MaxFindings:   cfg.Review.AutoPost.MaxFindings,
+		OwnRepoOwners: cfg.Review.AutoPost.OwnRepoOwners,
+	})
 	footerManager.SetReviewWatcher(reviewWatcher) // NEW — wires footer to the review watcher built above
 
 	initialActivity := make([]string, 0)
