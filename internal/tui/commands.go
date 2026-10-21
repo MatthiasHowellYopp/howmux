@@ -18,6 +18,7 @@ import (
 	"github.com/matthiashowellyopp/howmux/internal/config"
 	"github.com/matthiashowellyopp/howmux/internal/github"
 	"github.com/matthiashowellyopp/howmux/internal/incidents"
+	"github.com/matthiashowellyopp/howmux/internal/logging"
 	"github.com/matthiashowellyopp/howmux/internal/review"
 	"github.com/matthiashowellyopp/howmux/internal/session"
 )
@@ -518,6 +519,16 @@ var getPRFunc = func(repo string, pr int) (github.PR, error) {
 // runReviewFunc wraps review.RunReview for testability
 var runReviewFunc = func(ctx context.Context, rec review.Record, headSHA string, storeImpl review.StoreInterface, tabWriter io.Writer) error {
 	return review.RunReview(ctx, rec, headSHA, storeImpl, tabWriter)
+}
+
+// autoPostGateFunc wraps the review auto-post gate for the manual
+// `howmux review <URL>` path, so it behaves the same as the watcher's
+// automatic path (the watcher has its own seam in review.watcher). It is a
+// tui-level var so command tests can substitute a fake. The gate gathers its
+// own inputs (spool body, verdict, reviewed_sha, diff) from the updated record,
+// so this wrapper only needs the completed record, head SHA, store, and config.
+var autoPostGateFunc = func(ctx context.Context, rec review.Record, headSHA string, storeImpl review.StoreInterface, cfg review.AutoPostConfig) (review.GateResult, error) {
+	return review.RunAutoPostGate(ctx, rec, headSHA, storeImpl, cfg)
 }
 
 // userHomeDirFunc wraps os.UserHomeDir for testability
@@ -1089,6 +1100,21 @@ func (m model) handleReview(args []string) (model, tea.Cmd) {
 	// Immediate feedback before async dispatch
 	m = m.appendActivity(m.styles.Activity.Render(fmt.Sprintf("Starting review of PR #%d...", prNum)))
 
+	// Capture the auto-post gate config before the async closure. Mapped from
+	// the loaded config; the zero value (no config) leaves the gate in its
+	// safe default (dry-run). This mirrors the watcher's automatic path so a
+	// manually-triggered review is gated identically. m.config may be nil in
+	// some construction paths (e.g. tests), in which case the zero
+	// AutoPostConfig (dry-run) applies.
+	var autoPostCfg review.AutoPostConfig
+	if m.config != nil {
+		autoPostCfg = review.AutoPostConfig{
+			Mode:          review.AutoPostMode(m.config.Review.AutoPost.Mode),
+			MaxFindings:   m.config.Review.AutoPost.MaxFindings,
+			OwnRepoOwners: m.config.Review.AutoPost.OwnRepoOwners,
+		}
+	}
+
 	// Fix #1: Run the slow operations (checkout, GetPR, RunReview) asynchronously
 	// Return a tea.Cmd that runs the review work in a goroutine
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1119,6 +1145,15 @@ func (m model) handleReview(args []string) (model, tea.Cmd) {
 		// Future enhancement: capture output to agent tab
 		if err := runReviewFunc(ctx, rec, headSHA, store, io.Discard); err != nil {
 			return reviewCompleteMsg{repo: fullRepo, pr: prNum, err: fmt.Errorf("review failed: %w", err), cancel: cancel}
+		}
+
+		// Run the auto-post gate on the completed review, same as the watcher's
+		// automatic path. Best-effort: a gate error never fails the review that
+		// already succeeded — the review stays in pending/ for a human. Default
+		// config is dry-run, so nothing is auto-posted unless the operator
+		// opted in via .howmux/config.yaml.
+		if _, gateErr := autoPostGateFunc(ctx, rec, headSHA, store, autoPostCfg); gateErr != nil {
+			logging.Warn("auto-post gate failed for manual review", "repo", fullRepo, "pr", prNum, "error", gateErr)
 		}
 
 		// Get updated record to access SpoolPath

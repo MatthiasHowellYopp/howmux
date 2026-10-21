@@ -439,6 +439,67 @@ func TestHandleReview_AsyncReturnsCmd(t *testing.T) {
 	}
 }
 
+// TestHandleReview_ManualPathRunsAutoPostGate verifies that a manual
+// `howmux review <URL>` runs the auto-post gate seam after a successful review,
+// mirroring the watcher's automatic path. It fakes every slow seam (PR fetch,
+// checkout, review, gate) and executes the returned tea.Cmd.
+func TestHandleReview_ManualPathRunsAutoPostGate(t *testing.T) {
+	if err := review.CheckReviewAssets(filepath.Join(os.Getenv("HOME"), ".kiro")); err != nil {
+		t.Skipf("Skipping test - review assets not available: %v", err)
+	}
+
+	oldGetPR := getPRFunc
+	oldEnsureCheckout := ensureCheckoutFunc
+	oldRunReview := runReviewFunc
+	oldGate := autoPostGateFunc
+	defer func() {
+		getPRFunc = oldGetPR
+		ensureCheckoutFunc = oldEnsureCheckout
+		runReviewFunc = oldRunReview
+		autoPostGateFunc = oldGate
+	}()
+
+	getPRFunc = func(repo string, pr int) (github.PR, error) {
+		return github.PR{HeadRefOid: "abc123"}, nil
+	}
+	ensureCheckoutFunc = func(owner, repo, repoURL string, pr int, reviewDir string) error { return nil }
+	runReviewFunc = func(ctx context.Context, rec review.Record, headSHA string, storeImpl review.StoreInterface, tabWriter io.Writer) error {
+		return nil
+	}
+
+	gateCalled := 0
+	autoPostGateFunc = func(ctx context.Context, rec review.Record, headSHA string, storeImpl review.StoreInterface, cfg review.AutoPostConfig) (review.GateResult, error) {
+		gateCalled++
+		return review.GateResult{}, nil
+	}
+
+	m := newTestModel()
+	defer m.reviewWatcher.Stop()
+
+	_, cmd := m.handleReview([]string{"https://github.com/owner/repo/pull/123"})
+	if cmd == nil {
+		t.Fatal("expected a non-nil review command")
+	}
+	// handleReview returns tea.Batch(startMsgCmd, reviewCmd). Executing the
+	// batch yields a tea.BatchMsg ([]tea.Cmd); run each child to drive the
+	// review goroutine (and thus the gate seam) to completion.
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, child := range batch {
+			if child != nil {
+				_ = child()
+			}
+		}
+	}
+
+	if gateCalled != 1 {
+		t.Errorf("auto-post gate seam called %d times, want 1", gateCalled)
+	}
+
+	// Clean up the record this test enrolled in the real default store.
+	_ = review.NewDefaultStore().Remove("owner/repo", 123)
+}
+
 func TestReviewCompleteMsg_HandlerSuccess(t *testing.T) {
 	// Test that reviewCompleteMsg handler appends success activity line
 	m := newTestModel()

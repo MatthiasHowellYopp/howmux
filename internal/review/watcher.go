@@ -23,6 +23,11 @@ var (
 	dispatchReviewFunc = func(ctx context.Context, rec Record, headSHA string, store StoreInterface, tabWriter io.Writer) error {
 		return RunReview(ctx, rec, headSHA, store, tabWriter)
 	}
+	// runAutoPostGateFunc runs the review auto-post gate after a successful
+	// review. It is a package-level seam so tests can substitute a fake. The
+	// default implementation (RunAutoPostGate) reads the freshly-updated
+	// record + spool body, fetches the diff, and calls EvaluateAndMaybePost.
+	runAutoPostGateFunc = RunAutoPostGate
 )
 
 // Watcher polls enrolled PRs and dispatches reviews based on GitHub state
@@ -31,6 +36,8 @@ type Watcher struct {
 	pollInterval  time.Duration
 	maxConcurrent int
 	reviewer      string // GitHub username or team for IsReviewRequestedFor
+
+	autoPost AutoPostConfig // review auto-post gate config; zero value = dry-run (safe)
 
 	stop     chan struct{}
 	stopOnce sync.Once
@@ -56,6 +63,16 @@ func NewWatcher(store StoreInterface, pollInterval time.Duration, maxConcurrent 
 		cancel:        cancel,
 		activeReviews: make(map[string]bool),
 	}
+}
+
+// SetAutoPostConfig sets the review auto-post gate configuration. The zero
+// value (never set) leaves the gate in its safe default (dry-run), so this is
+// opt-in: production wires the config from .howmux/config.yaml, tests that
+// don't care leave it unset. Must be called before Start.
+func (w *Watcher) SetAutoPostConfig(cfg AutoPostConfig) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.autoPost = cfg
 }
 
 // Start spawns the poll loop goroutine
@@ -249,8 +266,21 @@ func (w *Watcher) dispatch(rec Record, headSHA string) {
 		// TODO: wire actual review tab writer when tab management is integrated
 		if err := dispatchReviewFunc(w.ctx, r, sha, w.store, io.Discard); err != nil {
 			logging.Error("review dispatch failed", "repo", r.Repo, "pr", r.PR, "error", err)
+			return
+		}
+		logging.Info("review dispatch succeeded", "repo", r.Repo, "pr", r.PR)
+
+		// Run the auto-post gate on the completed review. Read the config
+		// under the lock (SetAutoPostConfig may run concurrently). The gate
+		// is best-effort: a gate error never fails the review that already
+		// succeeded — it logs and leaves the review in pending/ for a human.
+		w.mu.RLock()
+		cfg := w.autoPost
+		w.mu.RUnlock()
+		if res, err := runAutoPostGateFunc(w.ctx, r, sha, w.store, cfg); err != nil {
+			logging.Error("auto-post gate failed", "repo", r.Repo, "pr", r.PR, "error", err)
 		} else {
-			logging.Info("review dispatch succeeded", "repo", r.Repo, "pr", r.PR)
+			logging.Info("auto-post gate complete", "repo", r.Repo, "pr", r.PR, "outcome", string(res.Outcome), "would", string(res.WouldHaveDone))
 		}
 	}(rec, headSHA, prKey)
 }

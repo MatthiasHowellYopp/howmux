@@ -30,6 +30,20 @@ type LoggingConfig struct {
 	LogDir         string `yaml:"log_dir"`
 }
 
+// AutoPostConfig controls the review auto-post gate's trust scope. See
+// docs/design/review-auto-post-gate.md. The safe default is dry-run (the gate
+// records its would-be decision but always punches to a human).
+type AutoPostConfig struct {
+	Mode          string   `yaml:"mode"`            // dry-run | own-repos | all
+	MaxFindings   int      `yaml:"max_findings"`    // guardrail finding-count cap (<=0 disables)
+	OwnRepoOwners []string `yaml:"own_repo_owners"` // owners allowed to auto-post in own-repos mode
+}
+
+// ReviewConfig groups review-workflow configuration.
+type ReviewConfig struct {
+	AutoPost AutoPostConfig `yaml:"auto_post"`
+}
+
 type Config struct {
 	Repo                string        `yaml:"repo"`
 	Label               string        `yaml:"label"`
@@ -45,6 +59,7 @@ type Config struct {
 	Session             SessionConfig `yaml:"session"`
 	Sandbox             SandboxConfig `yaml:"sandbox"`
 	Logging             LoggingConfig `yaml:"logging"`
+	Review              ReviewConfig  `yaml:"review"`
 	LoadedTheme         *Theme        `yaml:"-"`
 }
 
@@ -79,6 +94,13 @@ func Load() (*Config, error) {
 			MaxBufferLines: 10000,
 			MaxFileSizeMB:  100,
 			LogDir:         ".howmux/logs",
+		},
+		Review: ReviewConfig{
+			AutoPost: AutoPostConfig{
+				Mode:          "dry-run", // safe default: never auto-posts
+				MaxFindings:   25,
+				OwnRepoOwners: nil,
+			},
 		},
 	}
 
@@ -142,6 +164,21 @@ func Load() (*Config, error) {
 	}
 	if cfg.Logging.LogDir == "" {
 		return nil, fmt.Errorf("logging.log_dir cannot be empty")
+	}
+
+	// Validate review auto-post config. An empty mode is treated as the safe
+	// default (dry-run) rather than rejected, so existing config files without
+	// a review: block keep working.
+	switch cfg.Review.AutoPost.Mode {
+	case "", "dry-run":
+		cfg.Review.AutoPost.Mode = "dry-run"
+	case "own-repos", "all":
+		// valid
+	default:
+		return nil, fmt.Errorf("review.auto_post.mode must be one of: dry-run, own-repos, all (got %q)", cfg.Review.AutoPost.Mode)
+	}
+	if cfg.Review.AutoPost.MaxFindings < 0 {
+		return nil, fmt.Errorf("review.auto_post.max_findings must be >= 0 (0 disables the cap)")
 	}
 
 	// Load the specified theme
