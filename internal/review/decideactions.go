@@ -232,12 +232,102 @@ var lookPathForDecideActionsFunc = exec.LookPath
 
 // --- pure helpers (Task 3) --------------------------------------------------
 
-// findingLineRe matches a single review finding line of the form
-// "file:line - severity - issue -> fix" (both hyphen and em-dash
+// findingLineRe matches a single review finding line, whose canonical form
+// is "file:line - severity - issue -> fix" (both hyphen and em-dash
 // separators are accepted, per review-poster.md's documented format and
-// pr_review_finalize.py's own comment). Capture groups: file, line,
-// severity, issue, fix.
-var findingLineRe = regexp.MustCompile(`(?m)^\s*(\S+):(\d+)\s*[-—]\s*(\w+)\s*[-—]\s*(.+?)\s*(?:->|→)\s*(.+?)\s*$`)
+// pr_review_finalize.py's own comment).
+//
+// The consolidator (ai-resources' review-consolidator) is an LLM, so the
+// lines it emits vary in surface form around that core shape. This regex is
+// deliberately tolerant of the decorations the consolidator actually
+// produces in the wild, so real findings parse into inline comments instead
+// of silently falling through to the review body (the block-comment-only
+// regression seen across Bit-Quill/flowdra#78/#81/#84/#85/#86/#88). The
+// shapes observed in real reviews, all of which must anchor:
+//
+//   - a leading markdown list marker ("- ", "* ", "+ ", "1. ", "1) ") — stripped;
+//   - the file:line wrapped in backticks or bold stars (`path:line`, **path:line**),
+//     including a stray unclosed backtick ("`path:line - …" from #84);
+//   - a line RANGE after the colon ("path:621-622") — we anchor to the FIRST
+//     line of the range (#86), which is always on the diff if the range is;
+//   - a bolded and/or compound severity ("**Medium**", "low/medium") with an
+//     optional parenthetical qualifier ("low (non-blocking)", #86/#88);
+//   - NO "severity -" middle at all, and/or NO "-> fix" arrow — the whole tail
+//     becomes the issue text (#78).
+//
+// Capture groups:
+//
+//	1 file      2 line (first number of any range)
+//	3 severity token (optional — may be bolded/compound/qualified; "" if absent)
+//	4 the remaining text (issue, optionally "… -> fix")
+//
+// The severity "- … -" middle is optional AND constrained to recognized
+// severity keywords (critical/high/medium/low/warning/nit/info/minor/major),
+// so a hyphenated ordinary word in the issue text ("single-digit idiom", #78)
+// is not mis-parsed as a severity. parseFindingLine (below) normalizes group
+// 3 to a bare keyword and splits group 4 on the arrow; buildReviewPayload and
+// countFindings both go through it rather than indexing the groups directly.
+var findingLineRe = regexp.MustCompile(
+	`(?mi)^\s*(?:[-*+]\s+|\d+[.)]\s+)?` + // optional list marker
+		"[`*]*" + `(\S+?):(\d+)(?:-\d+)?` + "[`*]*" + // file:line[-range], opt ` or * wrappers
+		`\s*[-—]\s*` + // first separator
+		// optional "severity -" middle, severity constrained to real keywords
+		`(?:(\**(?:critical|high|medium|low|warning|warn|nit|info|minor|major)` +
+		`(?:/(?:critical|high|medium|low|warning|warn|nit|info|minor|major))*\**` +
+		`(?:\s*\([^)]*\))?)\s*[-—]\s*)?` +
+		`(.+?)\s*$`) // rest (issue, optionally "… -> fix")
+
+// finding is one parsed review finding line: the anchor (file + first line),
+// a normalized bare severity keyword (lowercased, compound/bold/qualifier
+// stripped; "" when the line carried no recognized severity), and the human
+// text split into issue and suggested fix on the "->"/"→" arrow (fix is ""
+// when the line had no arrow). It is the single shape both buildReviewPayload
+// (what posts) and countFindings (the confirm-prompt tally) consume, so the
+// two can never drift in how they interpret findingLineRe's groups.
+type finding struct {
+	file     string
+	line     int
+	severity string
+	issue    string
+	fix      string
+}
+
+// parseFindingLine applies findingLineRe to one line and normalizes its
+// capture groups into a finding. ok is false when the line is not a finding
+// (no file:line anchor) or the line number does not parse — callers skip
+// those. The whole line's text (minus the anchor and an optional severity
+// middle) is preserved: when there is a "-> fix" arrow the text splits into
+// issue/fix, otherwise the entire remainder is the issue and fix is "".
+func parseFindingLine(line string) (finding, bool) {
+	m := findingLineRe.FindStringSubmatch(line)
+	if m == nil {
+		return finding{}, false
+	}
+	n, err := strconv.Atoi(m[2])
+	if err != nil {
+		return finding{}, false
+	}
+
+	// Normalize severity: strip bold stars and any parenthetical/compound
+	// qualifier down to the leading keyword, lowercased. Empty when the line
+	// carried no recognized severity middle.
+	sev := strings.ToLower(strings.Trim(strings.TrimSpace(m[3]), "*"))
+	if i := strings.IndexAny(sev, "/ ("); i >= 0 {
+		sev = sev[:i]
+	}
+
+	// Split the remaining text on the first "->" or "→". No arrow → the whole
+	// remainder is the issue and there is no explicit suggested fix.
+	rest := strings.TrimSpace(m[4])
+	issue, fix := rest, ""
+	if idx := strings.Index(rest, "->"); idx >= 0 {
+		issue, fix = strings.TrimSpace(rest[:idx]), strings.TrimSpace(rest[idx+2:])
+	} else if idx := strings.Index(rest, "→"); idx >= 0 {
+		issue, fix = strings.TrimSpace(rest[:idx]), strings.TrimSpace(rest[idx+len("→"):])
+	}
+
+	return finding{file: m[1], line: n, severity: sev, issue: issue, fix: fix}, true
+}
 
 // countFindings counts finding lines in a review body — lines matching
 // findingLineRe — and composes a short severity breakdown like "2
@@ -253,19 +343,20 @@ var findingLineRe = regexp.MustCompile(`(?m)^\s*(\S+):(\d+)\s*[-—]\s*(\w+)\s*[
 // breakdown is "" so the caller can fall back to a prompt with no
 // parenthetical rather than a misleading "0 warnings, 0 nits".
 func countFindings(body string) (total int, breakdown string) {
-	matches := findingLineRe.FindAllStringSubmatch(body, -1)
-	total = len(matches)
-
 	counts := map[string]int{}
 	order := []string{}
-	for _, m := range matches {
-		sev := strings.ToLower(strings.TrimSpace(m[3]))
-		switch sev {
+	for _, line := range strings.Split(body, "\n") {
+		f, ok := parseFindingLine(line)
+		if !ok {
+			continue
+		}
+		total++
+		switch f.severity {
 		case "critical", "warning", "nit":
-			if _, seen := counts[sev]; !seen {
-				order = append(order, sev)
+			if _, seen := counts[f.severity]; !seen {
+				order = append(order, f.severity)
 			}
-			counts[sev]++
+			counts[f.severity]++
 		}
 	}
 
@@ -496,34 +587,46 @@ func parseDiffCommentableLines(diff string) map[string]map[int]bool {
 func buildReviewPayload(repo string, pr int, verdict string, body string, commentable map[string]map[int]bool) (payloadJSON []byte, event string, commentCount int, err error) {
 	event = verdictEvent(verdict)
 
-	matches := findingLineRe.FindAllStringSubmatch(body, -1)
-	comments := make([]reviewComment, 0, len(matches))
+	lines := strings.Split(body, "\n")
+	comments := make([]reviewComment, 0, len(lines))
 	var unanchored []string
-	for _, m := range matches {
-		file := m[1]
-		line, convErr := strconv.Atoi(m[2])
-		if convErr != nil {
+	for _, line := range lines {
+		f, ok := parseFindingLine(line)
+		if !ok {
 			continue
 		}
-		severity := strings.ToLower(strings.TrimSpace(m[3]))
-		issue := strings.TrimSpace(m[4])
-		fix := strings.TrimSpace(m[5])
-		commentBody := fmt.Sprintf("%s: %s → %s", severity, issue, fix)
+
+		// Compose the comment body from the parsed finding. A missing
+		// severity (the line carried no recognized keyword, e.g. #78) drops
+		// the "severity:" prefix; a missing fix (no "->" arrow) drops the
+		// "→ fix" suffix — so a terse "file:line — issue" finding still posts
+		// its text inline rather than rendering an empty "→ ".
+		var commentBody string
+		switch {
+		case f.severity != "" && f.fix != "":
+			commentBody = fmt.Sprintf("%s: %s → %s", f.severity, f.issue, f.fix)
+		case f.severity != "":
+			commentBody = fmt.Sprintf("%s: %s", f.severity, f.issue)
+		case f.fix != "":
+			commentBody = fmt.Sprintf("%s → %s", f.issue, f.fix)
+		default:
+			commentBody = f.issue
+		}
 
 		if commentable != nil {
-			lines, fileInDiff := commentable[file]
-			if !fileInDiff || !lines[line] {
+			diffLines, fileInDiff := commentable[f.file]
+			if !fileInDiff || !diffLines[f.line] {
 				// Can't anchor to the diff — GitHub would 422 the whole
 				// review. Fold it into the body instead of dropping it.
 				unanchored = append(unanchored,
-					fmt.Sprintf("- `%s:%d` — %s", file, line, commentBody))
+					fmt.Sprintf("- `%s:%d` — %s", f.file, f.line, commentBody))
 				continue
 			}
 		}
 
 		comments = append(comments, reviewComment{
-			Path: file,
-			Line: line,
+			Path: f.file,
+			Line: f.line,
 			Body: commentBody,
 		})
 	}

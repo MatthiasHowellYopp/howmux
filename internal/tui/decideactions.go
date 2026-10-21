@@ -321,20 +321,43 @@ var rereviewReviewFunc = review.RereviewReview
 var discardReviewFunc = review.DiscardReview
 
 // findingLinePromptRe mirrors internal/review's private findingLineRe
-// exactly (same "file:line - severity - issue -> fix" shape, hyphen or
-// em-dash separators) — duplicated here only because that regex is
-// unexported in internal/review and this is a display-only heuristic for
-// the confirm prompt's finding count/breakdown text, never load-bearing
-// for what PostReview actually posts.
-var findingLinePromptRe = regexp.MustCompile(`(?m)^\s*(\S+):(\d+)\s*[-—]\s*(\w+)\s*[-—]\s*(.+?)\s*(?:->|→)\s*(.+?)\s*$`)
+// exactly (same tolerant shape: optional list marker; backtick/bold-wrapped
+// file:line with an optional line range; an OPTIONAL "- severity -" middle
+// constrained to recognized severity keywords; an optional "-> fix" arrow,
+// hyphen or em-dash separators) — duplicated here only because that regex is
+// unexported in internal/review and this is a display-only heuristic for the
+// confirm prompt's finding count/breakdown text, never load-bearing for what
+// PostReview actually posts. Keep this in lockstep with
+// internal/review/decideactions.go's findingLineRe + parseFindingLine.
+var findingLinePromptRe = regexp.MustCompile(
+	`(?mi)^\s*(?:[-*+]\s+|\d+[.)]\s+)?` +
+		"[`*]*" + `(\S+?):(\d+)(?:-\d+)?` + "[`*]*" +
+		`\s*[-—]\s*` +
+		`(?:(\**(?:critical|high|medium|low|warning|warn|nit|info|minor|major)` +
+		`(?:/(?:critical|high|medium|low|warning|warn|nit|info|minor|major))*\**` +
+		`(?:\s*\([^)]*\))?)\s*[-—]\s*)?` +
+		`(.+?)\s*$`)
+
+// promptSeverityWord normalizes findingLinePromptRe's severity capture
+// (group 3) to a bare lowercase keyword — stripping bold stars and reducing
+// any compound/qualified form ("**Medium**", "low/medium (non-blocking)") to
+// its leading keyword — mirroring parseFindingLine's severity handling in
+// internal/review. Returns "" when the line carried no severity middle.
+func promptSeverityWord(raw string) string {
+	sev := strings.ToLower(strings.Trim(strings.TrimSpace(raw), "*"))
+	if i := strings.IndexAny(sev, "/ ("); i >= 0 {
+		sev = sev[:i]
+	}
+	return sev
+}
 
 // countFindingsForPrompt is the default implementation behind
 // countFindingsFunc: a local, display-only port of internal/review's
-// private countFindings heuristic (same line shape: "file:line - severity -
-// issue -> fix", hyphen or em-dash separators), used only to size the
-// confirm prompt's "Post N findings (...)" text. Never used to decide what
-// PostReview actually posts — PostReview posts (and internally re-parses)
-// the whole body itself, independent of this function's result.
+// private countFindings heuristic (same tolerant line shape as
+// findingLinePromptRe), used only to size the confirm prompt's
+// "Post N findings (...)" text. Never used to decide what PostReview
+// actually posts — PostReview posts (and internally re-parses) the whole
+// body itself, independent of this function's result.
 func countFindingsForPrompt(body string) (total int, breakdown string) {
 	matches := findingLinePromptRe.FindAllStringSubmatch(body, -1)
 	total = len(matches)
@@ -342,7 +365,7 @@ func countFindingsForPrompt(body string) (total int, breakdown string) {
 	counts := map[string]int{}
 	order := []string{}
 	for _, match := range matches {
-		sev := strings.ToLower(strings.TrimSpace(match[3]))
+		sev := promptSeverityWord(match[3])
 		switch sev {
 		case "critical", "warning", "nit":
 			if _, seen := counts[sev]; !seen {
