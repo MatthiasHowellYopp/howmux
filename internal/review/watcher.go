@@ -25,9 +25,9 @@ var (
 	}
 	// runAutoPostGateFunc runs the review auto-post gate after a successful
 	// review. It is a package-level seam so tests can substitute a fake. The
-	// default implementation (runAutoPostGate) reads the freshly-updated
+	// default implementation (RunAutoPostGate) reads the freshly-updated
 	// record + spool body, fetches the diff, and calls EvaluateAndMaybePost.
-	runAutoPostGateFunc = runAutoPostGate
+	runAutoPostGateFunc = RunAutoPostGate
 )
 
 // Watcher polls enrolled PRs and dispatches reviews based on GitHub state

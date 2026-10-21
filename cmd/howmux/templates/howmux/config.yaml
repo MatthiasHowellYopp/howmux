@@ -10,3 +10,14 @@ enable_copilot_review: true  # Enable AI-powered code review feedback
 # Theme selection (optional, defaults to 'default')
 # Available themes: default, high-contrast, light
 # theme: default
+
+# PR review auto-post gate (optional). After a review completes, a deterministic
+# guardrail + an adversarial auditor decide whether it is safe to post without a
+# human. Default is dry-run: the gate records what it would do but always leaves
+# the review for a human. See the PR Review Workflow section of the README.
+# review:
+#   auto_post:
+#     mode: dry-run            # dry-run | own-repos | all
+#     max_findings: 25         # guardrail cap; 0 disables the count check
+#     own_repo_owners:         # owners auto-posted in own-repos mode
+#       - matthiashowellyopp

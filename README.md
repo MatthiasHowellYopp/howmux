@@ -155,6 +155,37 @@ Setting a decision on a review with `decide` (`post`, `revise`, `rereview`, or `
 
 For the manual/headless flow, editing the single-line `decision_notes:` field in the spool front-matter directly still works: when the composer is left empty (or when a review is driven outside howmux), `revise`/`rereview` fall back to the persisted `decision_notes` value.
 
+### Automated posting (auto-post gate)
+
+By default every review waits for a human to set its decision. The auto-post gate can remove that step for reviews that clearly pass, so only doubtful ones reach you. After a review completes — on both the automatic watcher loop and a manual `howmux review <URL>` — the gate runs two layers in order:
+
+1. **Deterministic guardrail** (pure, no model): the verdict parses, every finding anchors to the PR diff, the reviewed SHA matches the current head, the event is a plain comment, no machine paths or key-shaped tokens appear in the body, and the finding count is under the cap. A failure here never auto-posts — it leaves the review in `pending/` for you.
+2. **Adversarial auditor** (the `review-auditor` agent): runs only if the guardrail passes, and challenges the review against the diff. It returns `POST_OK` (auto-post), `NEEDS_HUMAN` (leave in `pending/`), or `DISCARD` (archive without posting).
+
+The gate is **fail-closed**: anything it cannot be sure about — a failed check, a `NEEDS_HUMAN` verdict, or the auditor agent not being installed — leaves the review for a human. It can only reduce your review load, never post something you never saw.
+
+Every gate run is recorded to `~/PR-Review/audit/` as a per-run `.jsonl` trace (which checks ran, the auditor verdict, the step's model and wall-clock duration, and the outcome). Note that `kiro-cli` does not report token counts or cost, so those fields are recorded as null rather than estimated.
+
+Configure it under `review.auto_post` in `.howmux/config.yaml`:
+
+```yaml
+review:
+  auto_post:
+    mode: dry-run                 # dry-run | own-repos | all
+    max_findings: 25              # guardrail cap; 0 disables the count check
+    own_repo_owners:              # owners auto-posted in own-repos mode
+      - matthiashowellyopp
+      - Bit-Quill
+```
+
+| Mode | Behavior |
+|------|----------|
+| `dry-run` (default) | Runs the gate and records what it *would* do, but always leaves the review for a human. Safe way to measure how often the gate would agree with you before trusting it. |
+| `own-repos` | Auto-posts/discards only for PRs whose owner is in `own_repo_owners`; every other repo is left for a human. |
+| `all` | Auto-posts/discards for every repo the gate clears. |
+
+An `own_repo_owners` entry is the owner part of `owner/repo` (e.g. `Bit-Quill` for `github.com/Bit-Quill/flowdra`) and covers every repo under that owner.
+
 ## CLI Usage
 
 ```bash

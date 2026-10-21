@@ -201,17 +201,19 @@ func ownerAllowed(repo string, owners []string) bool {
 	return false
 }
 
-// runAutoPostGate is the default runAutoPostGateFunc seam implementation the
+// RunAutoPostGate is the default runAutoPostGateFunc seam implementation the
 // watcher calls after a successful review. It gathers the inputs
 // EvaluateAndMaybePost needs — the freshly-updated record (for SpoolPath and
 // LastReviewedSHA), the spool body + verdict, the spool's reviewed_sha, and the
-// PR diff — then runs the gate.
+// PR diff — then runs the gate. It is exported so the manual
+// `howmux review <URL>` path (internal/tui) can run the same gate as the
+// watcher's automatic path.
 //
 // It is intentionally tolerant: a review already succeeded and landed in the
 // spool, so a problem gathering gate inputs (record vanished, spool unreadable,
 // diff fetch failed) must NOT undo that — it returns an error the caller logs,
 // and the review simply stays in pending/ for a human (the safe default).
-func runAutoPostGate(ctx context.Context, rec Record, headSHA string, store StoreInterface, cfg AutoPostConfig) (GateResult, error) {
+func RunAutoPostGate(ctx context.Context, rec Record, headSHA string, store StoreInterface, cfg AutoPostConfig) (GateResult, error) {
 	// Re-load the record RunReview just updated, so SpoolPath / LastReviewedSHA
 	// reflect the completed review.
 	updated, found, err := store.Get(rec.Repo, rec.PR)
