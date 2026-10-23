@@ -7,8 +7,8 @@
   ],
   "tools": [
     "read",
-    "write",
-    "shell"
+    "shell",
+    "write"
   ],
   "allowedTools": [
     "read",
@@ -16,5 +16,30 @@
     "shell"
   ],
   "model": "claude-sonnet-5",
-  "welcomeMessage": "Builder ready. What task should I execute?"
+  "welcomeMessage": "Builder ready. What task should I execute?",
+  "permissions": {
+    "rules": [
+      {
+        "capability": "fs_read",
+        "effect": "allow"
+      },
+      {
+        "capability": "fs_write",
+        "effect": "allow"
+      },
+      {
+        "capability": "shell",
+        "effect": "allow"
+      },
+      {
+        "capability": "skill",
+        "effect": "allow"
+      }
+    ]
+  },
+  "kiroUpgrade": {
+    "revision": 2,
+    "fingerprint": "sha256:429f279d4097812467560701e37514e5678512388fbfa79ce9727afa64f04098",
+    "source": "sha256:e7862d1fa989988837b71f13c03c40d7c84398745aa1000846a688fbcf3b8bb8"
+  }
 }

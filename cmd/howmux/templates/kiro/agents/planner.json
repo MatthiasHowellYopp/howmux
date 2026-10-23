@@ -7,10 +7,11 @@
   ],
   "tools": [
     "read",
-    "write",
     "shell",
+    "web",
+    "web_fetch",
     "web_search",
-    "web_fetch"
+    "write"
   ],
   "allowedTools": [
     "read",
@@ -26,5 +27,49 @@
       ]
     }
   },
-  "model": "claude-sonnet-5"
+  "model": "claude-sonnet-5",
+  "permissions": {
+    "rules": [
+      {
+        "capability": "fs_write",
+        "match": [
+          ".worktrees/planning-*"
+        ],
+        "effect": "allow"
+      },
+      {
+        "capability": "fs_write",
+        "effect": "deny",
+        "exclude": [
+          ".worktrees/planning-*",
+          ".worktrees/planning-*/**"
+        ]
+      },
+      {
+        "capability": "fs_read",
+        "effect": "allow"
+      },
+      {
+        "capability": "shell",
+        "effect": "allow"
+      },
+      {
+        "capability": "web_fetch",
+        "effect": "allow"
+      },
+      {
+        "capability": "web_search",
+        "effect": "allow"
+      },
+      {
+        "capability": "skill",
+        "effect": "allow"
+      }
+    ]
+  },
+  "kiroUpgrade": {
+    "revision": 2,
+    "fingerprint": "sha256:a992f50ba7077ace28008aa31a763708444702e0c0ff7ff9b07714628bd274df",
+    "source": "sha256:614fdb8fc02bc0255d2352137ff9bd1633bbf81892b13a824c354e0daa6d3624"
+  }
 }

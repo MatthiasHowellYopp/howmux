@@ -145,3 +145,80 @@ func TestStripLocalOnlyPreservesOtherMCPServers(t *testing.T) {
 		t.Error("some-shared-server must be preserved so real drift is still caught")
 	}
 }
+
+// TestStripLocalOnlyUniversalFormat covers the universal-format fields that
+// `kiro-cli agent upgrade` writes: the kiroUpgrade metadata block is dropped,
+// and the generated "mcp" rule for a local-only server is dropped, while real
+// permission rules (including mcp rules for shared servers) are kept.
+func TestStripLocalOnlyUniversalFormat(t *testing.T) {
+	raw := `{
+  "permissions": { "rules": [
+    { "capability": "fs_write", "effect": "deny", "exclude": [".worktrees/planning-*"] },
+    { "capability": "mcp", "match": ["creds-agent/*"], "effect": "allow" },
+    { "capability": "mcp", "match": ["creds-agent/*", "shared/*"], "effect": "allow" },
+    { "capability": "mcp", "effect": "allow" }
+  ] },
+  "kiroUpgrade": { "revision": 2, "fingerprint": "sha256:a", "source": "sha256:b" }
+}`
+	var v interface{}
+	if err := json.Unmarshal([]byte(raw), &v); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	stripLocalOnly(v)
+	obj := v.(map[string]interface{})
+
+	if _, ok := obj["kiroUpgrade"]; ok {
+		t.Error("kiroUpgrade should be stripped")
+	}
+	rules := obj["permissions"].(map[string]interface{})["rules"].([]interface{})
+	if len(rules) != 3 {
+		t.Fatalf("rules = %v, want 3 (only the creds-agent-only mcp rule removed)", rules)
+	}
+	for _, r := range rules {
+		m := r.(map[string]interface{})
+		if match, ok := m["match"].([]interface{}); ok && len(match) == 1 && match[0] == "creds-agent/*" {
+			t.Errorf("creds-agent-only mcp rule should have been stripped: %v", m)
+		}
+	}
+}
+
+// TestCompareJSONFilesUniversalFormat: a live upgraded agent that differs from
+// the template only by local-only creds-agent entries and kiroUpgrade hashes
+// is not drift; a changed permission rule is.
+func TestCompareJSONFilesUniversalFormat(t *testing.T) {
+	const tmpl = `{
+  "name": "planner",
+  "tools": ["read", "write"],
+  "permissions": { "rules": [
+    { "capability": "fs_write", "effect": "deny", "exclude": [".worktrees/planning-*"] },
+    { "capability": "fs_read", "effect": "allow" }
+  ] },
+  "kiroUpgrade": { "revision": 2, "fingerprint": "sha256:t", "source": "sha256:t" }
+}`
+	const liveLocal = `{
+  "name": "planner",
+  "tools": ["@creds-agent", "read", "write"],
+  "permissions": { "rules": [
+    { "capability": "fs_write", "effect": "deny", "exclude": [".worktrees/planning-*"] },
+    { "capability": "fs_read", "effect": "allow" },
+    { "capability": "mcp", "match": ["creds-agent/*"], "effect": "allow" }
+  ] },
+  "mcpServers": { "creds-agent": { "command": "aim" } },
+  "kiroUpgrade": { "revision": 2, "fingerprint": "sha256:l", "source": "sha256:l" }
+}`
+	const liveWidened = `{
+  "name": "planner",
+  "tools": ["read", "write"],
+  "permissions": { "rules": [
+    { "capability": "fs_write", "effect": "allow" },
+    { "capability": "fs_read", "effect": "allow" }
+  ] }
+}`
+	tp := writeTemp(t, "template.json", tmpl)
+	if differ, reason := compareJSONFiles(tp, writeTemp(t, "live.json", liveLocal)); differ {
+		t.Errorf("local-only entries + kiroUpgrade hashes should not be drift: %s", reason)
+	}
+	if differ, _ := compareJSONFiles(tp, writeTemp(t, "live.json", liveWidened)); !differ {
+		t.Error("a changed permission rule must be drift")
+	}
+}

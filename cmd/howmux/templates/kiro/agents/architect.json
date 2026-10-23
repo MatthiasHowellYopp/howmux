@@ -7,13 +7,38 @@
   ],
   "tools": [
     "read",
-    "write",
-    "shell"
+    "shell",
+    "write"
   ],
   "allowedTools": [
     "read",
     "write",
     "shell"
   ],
-  "model": "claude-sonnet-5"
+  "model": "claude-sonnet-5",
+  "permissions": {
+    "rules": [
+      {
+        "capability": "fs_read",
+        "effect": "allow"
+      },
+      {
+        "capability": "fs_write",
+        "effect": "allow"
+      },
+      {
+        "capability": "shell",
+        "effect": "allow"
+      },
+      {
+        "capability": "skill",
+        "effect": "allow"
+      }
+    ]
+  },
+  "kiroUpgrade": {
+    "revision": 2,
+    "fingerprint": "sha256:429f279d4097812467560701e37514e5678512388fbfa79ce9727afa64f04098",
+    "source": "sha256:b22e6ee96f551a5a635d1516d321d503ec827bfc816ccde4ee7b7ee191d4c606"
+  }
 }

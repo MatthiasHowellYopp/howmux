@@ -14,5 +14,26 @@
     "write"
   ],
   "model": "claude-sonnet-5",
-  "welcomeMessage": "Documenter ready. What should I document?"
+  "welcomeMessage": "Documenter ready. What should I document?",
+  "permissions": {
+    "rules": [
+      {
+        "capability": "fs_read",
+        "effect": "allow"
+      },
+      {
+        "capability": "fs_write",
+        "effect": "allow"
+      },
+      {
+        "capability": "skill",
+        "effect": "allow"
+      }
+    ]
+  },
+  "kiroUpgrade": {
+    "revision": 2,
+    "fingerprint": "sha256:3aef002b14121be7681b338095259080175b2aba168abdd629f5c8232ed2838a",
+    "source": "sha256:1eb026f468848f782eff641fa0a8cae3a1ebfa7d16e49b7bf52a1427876a9e71"
+  }
 }

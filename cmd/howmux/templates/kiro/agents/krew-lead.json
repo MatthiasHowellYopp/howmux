@@ -26,5 +26,40 @@
       ]
     }
   },
-  "model": "claude-sonnet-5"
+  "model": "claude-sonnet-5",
+  "permissions": {
+    "rules": [
+      {
+        "capability": "subagent",
+        "match": [
+          "architect",
+          "builder",
+          "documenter",
+          "validator"
+        ],
+        "effect": "allow"
+      },
+      {
+        "capability": "fs_read",
+        "effect": "allow"
+      },
+      {
+        "capability": "shell",
+        "effect": "allow"
+      },
+      {
+        "capability": "subagent",
+        "effect": "allow"
+      },
+      {
+        "capability": "skill",
+        "effect": "allow"
+      }
+    ]
+  },
+  "kiroUpgrade": {
+    "revision": 2,
+    "fingerprint": "sha256:327151d586f999175e4c2ca77e9edccf82b95da2a2789dfa398b8f636f19003c",
+    "source": "sha256:1bfc79cebc63a93de9c0f6a7ce7b8e6b6459edd4b3fad6807e051acde472ec29"
+  }
 }
