@@ -122,8 +122,8 @@ Howmux can review pull requests and provide feedback via the PR-review workflow.
 ### Prerequisites
 
 Before using the review workflow, ensure required kiro assets are symlinked:
-- Review agents in `~/.kiro/agents/`
-- Review skills in `~/.kiro/skills/`
+- Review agents in `~/.kiro/agents/`, including `review-auditor` (auto-post gate) and `humanizer`, which howmux calls directly
+- Review skills in `~/.kiro/skills/`, including `humanizer`
 - `pr_review.py` orchestrator on PATH
 
 See the [ai-resources repository](https://github.com/yourorg/ai-resources) for asset setup.
