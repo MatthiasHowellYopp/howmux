@@ -64,7 +64,9 @@ func TestAuditLog_WritesSchema(t *testing.T) {
 		t.Fatalf("record guardrail: %v", err)
 	}
 	// agent step: with meta supplying model + duration
-	meta := &OneshotResult{Model: "claude-sonnet", DurationMs: 1234, Status: "pass"}
+	turn, ctxPct := 987.0, 4.25
+	meta := &OneshotResult{Model: "claude-sonnet", DurationMs: 1234, Status: "pass",
+		TurnDurationMs: &turn, ContextUsagePct: &ctxPct, Engine: "v3", StopReason: "end_turn"}
 	if err := a.record(auditStep{step: "auditor", status: "pass", agent: "review-auditor", detail: "POST_OK", meta: meta}); err != nil {
 		t.Fatalf("record auditor: %v", err)
 	}
@@ -90,7 +92,7 @@ func TestAuditLog_WritesSchema(t *testing.T) {
 		t.Errorf("guardrail model = %v, want null", g["model"])
 	}
 	// tokens/cost ALWAYS null; must be present as keys
-	for _, k := range []string{"tokens", "cost", "turn_duration_ms", "context_usage_pct", "iteration"} {
+	for _, k := range []string{"tokens", "cost", "turn_duration_ms", "context_usage_pct", "engine", "iteration"} {
 		v, present := g[k]
 		if !present {
 			t.Errorf("guardrail missing key %q", k)
@@ -109,6 +111,11 @@ func TestAuditLog_WritesSchema(t *testing.T) {
 	}
 	if au["duration_ms"].(float64) != 1234 {
 		t.Errorf("auditor duration_ms = %v, want 1234", au["duration_ms"])
+	}
+	// stream-json metadata flows through (schema shared with audit_log.py)
+	if au["turn_duration_ms"] != 987.0 || au["context_usage_pct"] != 4.25 || au["engine"] != "v3" {
+		t.Errorf("auditor stream-json metadata = turn %v, ctx %v, engine %v; want 987, 4.25, v3",
+			au["turn_duration_ms"], au["context_usage_pct"], au["engine"])
 	}
 	// tokens/cost still null even on the agent step
 	if au["tokens"] != nil || au["cost"] != nil {

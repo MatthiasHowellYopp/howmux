@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/matthiashowellyopp/howmux/internal/kirocli"
 )
 
 func TestKiroOneshotMeta_Pass(t *testing.T) {
@@ -43,5 +45,26 @@ func TestKiroOneshotMeta_Error(t *testing.T) {
 	}
 	if got.Model != "m" {
 		t.Errorf("Model = %q, want m (recorded even on error)", got.Model)
+	}
+}
+
+// TestKiroOneshotMeta_CarriesStreamMetadata: the engine, kiro turn duration,
+// context usage and stop reason from the one-shot result reach
+// OneshotResult (and from there the audit trail).
+func TestKiroOneshotMeta_CarriesStreamMetadata(t *testing.T) {
+	orig := kiroOneshotFunc
+	t.Cleanup(func() { kiroOneshotFunc = orig })
+	turn, pct := 1497.0, 2.37
+	kiroOneshotFunc = func(context.Context, string, string) (kirocli.Result, error) {
+		return kirocli.Result{Text: "VERDICT: POST_OK", Meta: kirocli.Meta{
+			TurnDurationMs: &turn, ContextUsagePct: &pct, Engine: "v3", StopReason: "end_turn"}}, nil
+	}
+	got, err := kiroOneshotMeta(context.Background(), "review-auditor", "", "prompt")
+	if err != nil {
+		t.Fatalf("kiroOneshotMeta: %v", err)
+	}
+	if got.Answer != "VERDICT: POST_OK" || got.Engine != "v3" || got.StopReason != "end_turn" ||
+		got.TurnDurationMs == nil || *got.TurnDurationMs != turn || got.ContextUsagePct == nil || *got.ContextUsagePct != pct {
+		t.Errorf("OneshotResult = %+v", got)
 	}
 }

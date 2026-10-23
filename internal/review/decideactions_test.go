@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/matthiashowellyopp/howmux/internal/kirocli"
 )
 
 // --- Task 8: hermetic test harness -----------------------------------------
@@ -38,22 +40,22 @@ func withFakeKiroOneshot(t *testing.T, responses map[string]string, errors map[s
 	var mu sync.Mutex
 	calls := []fakeKiroCall{}
 
-	kiroOneshotFunc = func(ctx context.Context, agentName string, prompt string) (string, error) {
+	kiroOneshotFunc = func(ctx context.Context, agentName string, prompt string) (kirocli.Result, error) {
 		mu.Lock()
 		calls = append(calls, fakeKiroCall{agentName: agentName, prompt: prompt})
 		mu.Unlock()
 
 		if errors != nil {
 			if err, ok := errors[agentName]; ok {
-				return "", err
+				return kirocli.Result{}, err
 			}
 		}
 		if responses != nil {
 			if resp, ok := responses[agentName]; ok {
-				return resp, nil
+				return kirocli.Result{Text: resp}, nil
 			}
 		}
-		return fmt.Sprintf("default response for %s", agentName), nil
+		return kirocli.Result{Text: fmt.Sprintf("default response for %s", agentName)}, nil
 	}
 
 	t.Cleanup(func() {
@@ -312,10 +314,21 @@ func TestDefaultKiroOneshot_NonZeroExit_ReturnsError(t *testing.T) {
 	}
 }
 
-func TestDefaultKiroOneshot_Success_ReturnsCleanedAnswer(t *testing.T) {
+// TestDefaultKiroOneshot_Success_ParsesStreamJSON pins the argv contract
+// shared with ai-resources' kiro_oneshot.py (stream-json transport,
+// --trust-all-tools, --agent) and that the answer and per-turn metadata come
+// from the stream-json events.
+func TestDefaultKiroOneshot_Success_ParsesStreamJSON(t *testing.T) {
 	dir := t.TempDir()
 	fakeBin := filepath.Join(dir, "kiro-cli")
-	script := "#!/bin/sh\nprintf '> hello there\\n'\nexit 0\n"
+	script := `#!/bin/sh
+printf '%s\n' "$*" > "$(dirname "$0")/argv.txt"
+cat <<'JSONL'
+{"type":"runStarted","data":{"engine":"v2"}}
+{"type":"metadata","data":{"sessionId":"s","contextUsagePercentage":4.5,"turnDurationMs":1200}}
+{"type":"runFinished","data":{"sessionId":"s","status":"success","stopReason":"end_turn","finalText":"hello there"}}
+JSONL
+`
 	if err := os.WriteFile(fakeBin, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake kiro-cli: %v", err)
 	}
@@ -326,8 +339,15 @@ func TestDefaultKiroOneshot_Success_ReturnsCleanedAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("defaultKiroOneshot() unexpected error: %v", err)
 	}
-	if got != "hello there" {
-		t.Errorf("defaultKiroOneshot() = %q, want %q", got, "hello there")
+	if got.Text != "hello there" {
+		t.Errorf("Text = %q, want %q", got.Text, "hello there")
+	}
+	if got.Engine != "v2" || got.StopReason != "end_turn" || got.TurnDurationMs == nil || *got.TurnDurationMs != 1200 || got.ContextUsagePct == nil || *got.ContextUsagePct != 4.5 {
+		t.Errorf("metadata not parsed: %+v", got.Meta)
+	}
+	argv, _ := os.ReadFile(filepath.Join(dir, "argv.txt"))
+	if want := "chat --no-interactive --trust-all-tools --agent review-consolidator --output-format stream-json prompt\n"; string(argv) != want {
+		t.Errorf("argv = %q, want %q", argv, want)
 	}
 }
 
@@ -1663,10 +1683,10 @@ func TestRereviewReview_LensCallFails_CancelsSiblings(t *testing.T) {
 	var mu sync.Mutex
 	siblingObservedCancel := false
 
-	kiroOneshotFunc = func(ctx context.Context, agentName string, prompt string) (string, error) {
+	kiroOneshotFunc = func(ctx context.Context, agentName string, prompt string) (kirocli.Result, error) {
 		// One lens fails immediately, triggering the shared cancel().
 		if agentName == "review-security-agent" {
-			return "", fmt.Errorf("kiro-cli exited 1 for security lens")
+			return kirocli.Result{}, fmt.Errorf("kiro-cli exited 1 for security lens")
 		}
 		// Siblings block until either the context is cancelled (expected)
 		// or a generous safety timeout elapses (would indicate the cancel
@@ -1677,9 +1697,9 @@ func TestRereviewReview_LensCallFails_CancelsSiblings(t *testing.T) {
 			mu.Lock()
 			siblingObservedCancel = true
 			mu.Unlock()
-			return "", ctx.Err()
+			return kirocli.Result{}, ctx.Err()
 		case <-time.After(5 * time.Second):
-			return "sibling ran to completion without cancellation", nil
+			return kirocli.Result{Text: "sibling ran to completion without cancellation"}, nil
 		}
 	}
 
@@ -1719,7 +1739,7 @@ func TestRereviewReview_LensFanOut_NoRaceCondition(t *testing.T) {
 
 	var counter int64
 	var mu sync.Mutex
-	kiroOneshotFunc = func(ctx context.Context, agentName string, prompt string) (string, error) {
+	kiroOneshotFunc = func(ctx context.Context, agentName string, prompt string) (kirocli.Result, error) {
 		// Small jittered sleep to widen the window in which a shared-state
 		// race (if present) would manifest.
 		sleepFor := time.Duration(1+(len(agentName)%3)) * time.Millisecond
@@ -1730,9 +1750,9 @@ func TestRereviewReview_LensFanOut_NoRaceCondition(t *testing.T) {
 		mu.Unlock()
 
 		if agentName == "review-consolidator" {
-			return "# Consolidated\nVERDICT: APPROVE", nil
+			return kirocli.Result{Text: "# Consolidated\nVERDICT: APPROVE"}, nil
 		}
-		return fmt.Sprintf("output from %s", agentName), nil
+		return kirocli.Result{Text: fmt.Sprintf("output from %s", agentName)}, nil
 	}
 
 	verdict, degraded, err := RereviewReview(context.Background(), rec, "")

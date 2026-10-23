@@ -17,18 +17,19 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/matthiashowellyopp/howmux/internal/kirocli"
 	"github.com/matthiashowellyopp/howmux/internal/logging"
 )
 
 // --- subprocess seams (Task 2) ---------------------------------------------
 
 // kiroOneshotFunc is the subprocess-execution seam every agentic step in
-// this file (humanize, revise, rereview's lens fan-out + consolidation)
-// calls through. It is package-level so tests can substitute a fake and
-// assert on (agentName, prompt) without ever shelling out to a real
-// kiro-cli. Mirrors ai-resources/workflows/kiro_oneshot.py's kiro_oneshot()
-// contract exactly: same argv shape, same ANSI+leading-"> "-stripping, same
-// two error conditions (non-zero exit, empty cleaned output).
+// this package (humanize, revise, rereview's lens fan-out + consolidation,
+// the auto-post auditor) calls through. It is package-level so tests can
+// substitute a fake and assert on (agentName, prompt) without ever shelling
+// out to a real kiro-cli. Mirrors ai-resources/workflows/kiro_oneshot.py's
+// kiro_oneshot_meta() contract: same argv shape (stream-json transport),
+// same two error conditions (non-zero exit, empty answer).
 var kiroOneshotFunc = defaultKiroOneshot
 
 // ansiRe matches CSI and OSC escape sequences, mirroring
@@ -56,43 +57,15 @@ func cleanKiroStdout(raw string) string {
 	return strings.TrimSpace(text)
 }
 
-// defaultKiroOneshot is the real kiroOneshotFunc implementation: it shells
-// to `kiro-cli chat --no-interactive --trust-all-tools --agent <agentName>
-// "<prompt>"`, captures stdout, and returns the cleaned answer. Returns an
-// error if kiro-cli exits non-zero or the cleaned output is empty —
-// mirroring KiroOneshotError's two trigger conditions in the Python
-// reference.
-func defaultKiroOneshot(ctx context.Context, agentName string, prompt string) (string, error) {
-	cmd := exec.CommandContext(ctx, "kiro-cli", "chat",
-		"--no-interactive",
-		"--trust-all-tools",
-		"--agent", agentName,
-		prompt,
-	)
-	// Detach stdin from the controlling tty, mirroring kiro_oneshot.py's
-	// stdin=subprocess.DEVNULL: in --no-interactive mode kiro-cli still
-	// emits terminal-control queries; without a tty on stdin to answer
-	// them, no stray escape-sequence replies bleed back.
-	cmd.Stdin = nil
-
-	var stdout, stderr strings.Builder
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return "", fmt.Errorf("kiro-cli exited %d for agent %q: %s: %w",
-				exitErr.ExitCode(), agentName, strings.TrimSpace(stripAnsi(stderr.String())), err)
-		}
-		return "", fmt.Errorf("kiro-cli failed for agent %q: %w", agentName, err)
-	}
-
-	answer := cleanKiroStdout(stdout.String())
-	if answer == "" {
-		return "", fmt.Errorf("kiro-cli produced no answer for agent %q", agentName)
-	}
-	return answer, nil
+// defaultKiroOneshot is the real kiroOneshotFunc implementation: one
+// `kiro-cli chat --no-interactive --trust-all-tools --agent <agentName>
+// --output-format stream-json "<prompt>"` turn via internal/kirocli, the Go
+// port of kiro_oneshot.py's kiro_oneshot_meta. It errors on a non-zero exit
+// or an empty answer (KiroOneshotError's two conditions), and returns the
+// per-turn metadata (engine, turn duration, context usage, stop reason) for
+// the audit trail.
+func defaultKiroOneshot(ctx context.Context, agentName string, prompt string) (kirocli.Result, error) {
+	return kirocli.Run(ctx, kirocli.Request{Agent: agentName, Prompt: prompt, TrustAllTools: true})
 }
 
 // postReviewCommandFunc is the subprocess-execution seam PostReview invokes
@@ -411,11 +384,12 @@ byte-for-byte.
 %s
 --- END TEXT ---`, body)
 
-	out, err := kiroOneshotFunc(ctx, "humanizer", prompt)
+	res, err := kiroOneshotFunc(ctx, "humanizer", prompt)
 	if err != nil {
 		logging.Debug("humanizeReviewBody: degraded to original body", "error", err)
 		return body
 	}
+	out := res.Text
 	if strings.TrimSpace(out) == "" {
 		logging.Debug("humanizeReviewBody: empty result, degraded to original body")
 		return body
@@ -912,12 +886,12 @@ func ReviseReview(ctx context.Context, rec Record, inlineNotes string) (newVerdi
 	}
 
 	prompt := buildRevisePrompt(body, notes)
-	raw, err := kiroOneshotFunc(ctx, "review-consolidator", prompt)
+	res, err := kiroOneshotFunc(ctx, "review-consolidator", prompt)
 	if err != nil {
 		return "", fmt.Errorf("revise failed for %s#%d: %w", rec.Repo, rec.PR, err)
 	}
 
-	newBody := extractReviewBody(raw)
+	newBody := extractReviewBody(res.Text)
 	newVerdict = parseVerdict(newBody)
 
 	if err := RewriteSpoolEntry(resolved, newBody, newVerdict, true); err != nil {
@@ -1040,8 +1014,8 @@ func RereviewReview(ctx context.Context, rec Record, inlineNotes string) (newVer
 		go func() {
 			defer wg.Done()
 			prompt := buildLensPrompt(lensName, diffFile, context_)
-			out, callErr := kiroOneshotFunc(fanCtx, profile, prompt)
-			results[i] = lensResult{lensName: lensName, profile: profile, output: out, err: callErr}
+			res, callErr := kiroOneshotFunc(fanCtx, profile, prompt)
+			results[i] = lensResult{lensName: lensName, profile: profile, output: res.Text, err: callErr}
 			if callErr != nil {
 				// Signal siblings to stop; the aggregate check below still
 				// reports the first error in lens order.
@@ -1058,12 +1032,12 @@ func RereviewReview(ctx context.Context, rec Record, inlineNotes string) (newVer
 	}
 
 	consolidatePrompt := buildConsolidatePrompt(diffFile, results)
-	raw, err := kiroOneshotFunc(ctx, "review-consolidator", consolidatePrompt)
+	res, err := kiroOneshotFunc(ctx, "review-consolidator", consolidatePrompt)
 	if err != nil {
 		return "", false, fmt.Errorf("rereview consolidation failed for %s#%d: %w", rec.Repo, rec.PR, err)
 	}
 
-	newBody := extractReviewBody(raw)
+	newBody := extractReviewBody(res.Text)
 	newVerdict = parseVerdict(newBody)
 
 	if err := RewriteSpoolEntry(resolved, newBody, newVerdict, true); err != nil {

@@ -9,14 +9,13 @@
 // (confirmed by ai-resources' workflows/audit_log.py, which checked --help,
 // --help-all, and a live stream-json run). So OneshotResult deliberately does
 // NOT carry tokens or cost — the audit log records those as explicit null.
-// What we CAN capture per call, all real and transport-independent:
+// What we CAN capture per call:
 //   - model:      the --model value we pass (empty when we pass none)
-//   - durationMs: wall-clock around the subprocess
+//   - durationMs: wall-clock around the subprocess (always available)
 //   - status:     "pass" on success, "error" on failure
-//
-// turn_duration_ms / context_usage_pct (from kiro-cli stream-json) are a
-// possible future enrichment and are intentionally not captured here yet;
-// wall-clock durationMs is the reliable baseline.
+//   - from kiro-cli stream-json, on both agent engines (see internal/kirocli):
+//     the engine that ran the turn, kiro's own turn duration, context-window
+//     usage, and the stop reason. Each is nil/"" if the stream lacked it.
 package review
 
 import (
@@ -31,6 +30,12 @@ type OneshotResult struct {
 	Model      string // the --model value passed, if any ("" when none)
 	DurationMs int64  // wall-clock milliseconds for the subprocess call
 	Status     string // "pass" | "error"
+
+	// Stream-json metadata (nil / "" when not reported).
+	TurnDurationMs  *float64
+	ContextUsagePct *float64
+	Engine          string // "v2" | "v3"
+	StopReason      string
 }
 
 // kiroOneshotMeta calls the existing kiroOneshotFunc seam and wraps it with
@@ -48,11 +53,22 @@ type OneshotResult struct {
 // the measured DurationMs; the error is returned too so callers can act on it.
 func kiroOneshotMeta(ctx context.Context, agentName, model, prompt string) (OneshotResult, error) {
 	start := time.Now()
-	answer, err := kiroOneshotFunc(ctx, agentName, prompt)
+	res, err := kiroOneshotFunc(ctx, agentName, prompt)
 	dur := time.Since(start).Milliseconds()
 
-	if err != nil {
-		return OneshotResult{Model: model, DurationMs: dur, Status: "error"}, err
+	out := OneshotResult{
+		Model:           model,
+		DurationMs:      dur,
+		TurnDurationMs:  res.TurnDurationMs,
+		ContextUsagePct: res.ContextUsagePct,
+		Engine:          res.Engine,
+		StopReason:      res.StopReason,
 	}
-	return OneshotResult{Answer: answer, Model: model, DurationMs: dur, Status: "pass"}, nil
+	if err != nil {
+		out.Status = "error"
+		return out, err
+	}
+	out.Answer = res.Text
+	out.Status = "pass"
+	return out, nil
 }
