@@ -122,8 +122,8 @@ Howmux can review pull requests and provide feedback via the PR-review workflow.
 ### Prerequisites
 
 Before using the review workflow, ensure required kiro assets are symlinked:
-- Review agents in `~/.kiro/agents/`
-- Review skills in `~/.kiro/skills/`
+- Review agents in `~/.kiro/agents/`, including `review-auditor` (auto-post gate) and `humanizer`, which howmux calls directly
+- Review skills in `~/.kiro/skills/`, including `humanizer`
 - `pr_review.py` orchestrator on PATH
 
 See the [ai-resources repository](https://github.com/yourorg/ai-resources) for asset setup.
@@ -362,12 +362,12 @@ The krew-lead pipeline, the planning tab, and evals talk to `kiro-cli` over ACP.
 
 | Variable | Values | Default |
 |----------|--------|---------|
-| `HOWMUX_KIRO_AGENT_ENGINE` | `v2`, `v3` | `v2` |
+| `HOWMUX_KIRO_AGENT_ENGINE` | `v3`, `v2` | `v3` |
 
-- `v2` starts `kiro-cli acp --agent-engine v2 --agent <name>`.
 - `v3` starts `kiro-cli acp --agent-engine v3` and picks the agent for each session through the session's `mode` option, because the v3 engine rejects `--agent`. If the agent isn't in the session's mode list, howmux fails with an error. It does not fall back to the default agent.
+- `v2` starts `kiro-cli acp --agent-engine v2 --agent <name>`. It's kept as an opt-out until kiro-cli removes the v2 engine.
 
-The v3 engine only lists agents written in the universal config format. Before you switch to `v3`, convert the configs with `kiro-cli agent upgrade .kiro/agents`, then check the `permissions` it generates. Any other value for the variable is rejected.
+The v3 engine only lists agents written in the universal config format (or the v3-only format). The agents and templates howmux ships are already in the universal format. If you add or edit an agent, run `kiro-cli agent upgrade .kiro/agents` and check the `permissions` it generates. Any other value for the variable is rejected.
 
 ## GitHub Integration
 

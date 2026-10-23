@@ -57,6 +57,9 @@ func TestRequiredReviewAssets(t *testing.T) {
 
 	// Verify expected critical assets are present
 	criticalAssets := []string{
+		"agent:review-auditor",
+		"agent:humanizer",
+		"skill:humanizer",
 		"agent:python-reviewer",
 		"agent:go-reviewer",
 		"agent:review-consolidator",

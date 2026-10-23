@@ -121,3 +121,29 @@ func selectOffers(opt *acp.SessionConfigOptionSelect, value string) bool {
 	}
 	return false
 }
+
+// ErrAbnormalStop is returned (wrapped) when an ACP turn ends with a stop
+// reason other than end_turn.
+var ErrAbnormalStop = errors.New("agent turn did not complete normally")
+
+// stopReasonError maps an ACP stop reason to an error. end_turn is success.
+// An empty reason is also treated as success: the field is required by the
+// protocol, so an empty value means an agent that doesn't set it rather than
+// a failed turn. Every other reason means the turn did not finish its work
+// and must not be reported as success.
+func stopReasonError(reason acp.StopReason) error {
+	switch reason {
+	case acp.StopReasonEndTurn, "":
+		return nil
+	case acp.StopReasonMaxTokens:
+		return fmt.Errorf("%w: hit the model's max token limit (output is truncated)", ErrAbnormalStop)
+	case acp.StopReasonMaxTurnRequests:
+		return fmt.Errorf("%w: hit the max turn request limit", ErrAbnormalStop)
+	case acp.StopReasonRefusal:
+		return fmt.Errorf("%w: the agent refused the request", ErrAbnormalStop)
+	case acp.StopReasonCancelled:
+		return fmt.Errorf("%w: the turn was cancelled", ErrAbnormalStop)
+	default:
+		return fmt.Errorf("%w: stop reason %q", ErrAbnormalStop, reason)
+	}
+}

@@ -414,13 +414,16 @@ func (c *KiroACPClient) SendMessage(ctx context.Context, req *MessageRequest) (*
 	logging.Debug("sending prompt to ACP", "session_id", sessionID)
 
 	// Send the prompt - responses will come via SessionUpdate
-	_, err := conn.Prompt(ctx, acp.PromptRequest{
+	promptResp, err := conn.Prompt(ctx, acp.PromptRequest{
 		SessionId: acp.SessionId(sessionID),
 		Prompt:    []acp.ContentBlock{acp.TextBlock(req.Message)},
 	})
 	if err != nil {
 		logging.Error("failed to send prompt", "session_id", sessionID, "error", err)
 		return nil, fmt.Errorf("failed to send prompt: %w", err)
+	}
+	if err := stopReasonError(promptResp.StopReason); err != nil {
+		return nil, err
 	}
 
 	logging.Info("ACP message sent successfully", "session_id", sessionID)
@@ -432,8 +435,9 @@ func (c *KiroACPClient) SendMessage(ctx context.Context, req *MessageRequest) (*
 		Message:   "Message sent successfully. Response will be received via session updates.",
 		Timestamp: time.Now(),
 		Metadata: map[string]interface{}{
-			"session_id": sessionID,
-			"agent":      req.Agent,
+			"session_id":  sessionID,
+			"agent":       req.Agent,
+			"stop_reason": string(promptResp.StopReason),
 		},
 	}
 
@@ -524,7 +528,7 @@ func (c *KiroACPClient) StreamMessage(ctx context.Context, req *MessageRequest) 
 		logging.Debug("sending prompt for streaming", "session_id", sessionID)
 
 		// Send the prompt - real responses will come via SessionUpdate
-		_, promptErr := conn.Prompt(streamCtx, acp.PromptRequest{
+		promptResp, promptErr := conn.Prompt(streamCtx, acp.PromptRequest{
 			SessionId: acp.SessionId(sessionID),
 			Prompt:    []acp.ContentBlock{acp.TextBlock(req.Message)},
 		})
@@ -540,12 +544,26 @@ func (c *KiroACPClient) StreamMessage(ctx context.Context, req *MessageRequest) 
 
 		// The ACP SDK's notification barrier guarantees all SessionUpdate
 		// callbacks (which forward text chunks to respChan) have completed
-		// by the time Prompt() returns. Send the completion signal.
-		logging.Info("streaming completed", "session_id", sessionID)
+		// by the time Prompt() returns. Exactly one terminal event follows:
+		// "done" for a normal end of turn, "error" otherwise, so a refusal or
+		// truncated turn is never reported as success.
+		stopReason := string(promptResp.StopReason)
+		if err := stopReasonError(promptResp.StopReason); err != nil {
+			logging.Warn("streaming turn ended abnormally", "session_id", sessionID, "stop_reason", stopReason)
+			respChan <- &StreamingResponse{
+				Type:       "error",
+				Error:      err.Error(),
+				StopReason: stopReason,
+				Timestamp:  time.Now(),
+			}
+			return
+		}
+		logging.Info("streaming completed", "session_id", sessionID, "stop_reason", stopReason)
 		respChan <- &StreamingResponse{
-			Type:      "done",
-			Content:   "",
-			Timestamp: time.Now(),
+			Type:       "done",
+			Content:    "",
+			StopReason: stopReason,
+			Timestamp:  time.Now(),
 		}
 	}()
 

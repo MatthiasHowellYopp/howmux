@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/matthiashowellyopp/howmux/internal/acp"
+	"github.com/matthiashowellyopp/howmux/internal/kirocli"
 	"gopkg.in/yaml.v3"
 )
 
@@ -848,13 +849,20 @@ func scoreDeterministic(criterion Criterion, tc TestCase, actualOutput string) (
 	}
 }
 
+// runKiroCLI runs the LLM judge: one turn on kiro-cli's default agent with the
+// prompt on stdin, via the shared stream-json one-shot runner. Tools are not
+// trusted (the judge never needs them). Returns the answer text, so the
+// caller's delimiter search sees only the model's reply, never terminal
+// chrome or v3 engine logging.
 func runKiroCLI(prompt string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "kiro-cli", "chat", "--no-interactive")
-	cmd.Stdin = strings.NewReader(prompt)
-	return cmd.Output()
+	res, err := kirocli.Run(ctx, kirocli.Request{Prompt: prompt, PromptOnStdin: true})
+	if err != nil {
+		return nil, err
+	}
+	return []byte(res.Text), nil
 }
 
 func scoreLLMJudge(criterion Criterion, tc TestCase, actualOutput string) (CostInfo, int, string, bool) {

@@ -40,6 +40,15 @@ func RequiredReviewAssets() []string {
 		"agent:review-consolidator",
 		"agent:review-poster",
 
+		// Agents howmux itself invokes via kiro-cli one-shot (not through
+		// pr_review.py): the auto-post gate's adversarial auditor, which runs
+		// on every completed review, and the humanizer pass on review bodies.
+		// Both degrade safely when missing (auditor fails closed to
+		// NEEDS_HUMAN, humanizer returns the original body), so this check is
+		// about surfacing the setup gap up front, not about safety.
+		"agent:review-auditor",
+		"agent:humanizer",
+
 		// Review skills
 		"skill:review-protocol",
 		"skill:review-security",
@@ -54,6 +63,7 @@ func RequiredReviewAssets() []string {
 		"skill:valkey-python-reviewer",
 		"skill:valkey-go-reviewer",
 		"skill:infra-reviewer",
+		"skill:humanizer",
 
 		// The review orchestrator tool itself (must be resolvable on PATH).
 		// Per #73 howmux runs reviews by invoking pr_review.py; if it isn't on

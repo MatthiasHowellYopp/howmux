@@ -207,8 +207,9 @@ step              str      — "guardrail" | "auditor"  (plus the review steps i
 agent             str|null — "review-auditor" for the adversarial step; null for the deterministic guardrail
 model             str|null — the --model value we pass (null if we pass none)
 status            str      — "pass" | "fail" | "error"
-turn_duration_ms  num|null — from kiro-cli stream-json metadata, if we parse it
-context_usage_pct num|null — from kiro-cli stream-json metadata, if we parse it
+turn_duration_ms  num|null — kiro-cli's turn duration from stream-json (V2 `metadata.turnDurationMs`, V3 `turn_completion.elapsedTime`)
+context_usage_pct num|null — context-window usage from stream-json (V2 `metadata.contextUsagePercentage`, V3 `context_usage.usagePercentage`)
+engine            str|null — agent engine that ran the step ("v2" | "v3", from `runStarted`); null for the guardrail
 duration_ms       num      — wall-clock around the subprocess (always available, transport-independent)
 tokens            null     — ALWAYS null (see limitation below)
 cost              null     — ALWAYS null (see limitation below)
@@ -232,11 +233,10 @@ figures in any output mode.** ai-resources confirmed this directly (checked
   "nothing is estimated" discipline and give a false Stage 4 Audit Trail signal.
   Explicit `null` means "not collected," distinct from a real zero.
 - What we **can** capture per step, all real: `model` (the value we pass),
-  `duration_ms` (wall-clock, free, transport-independent), `status`, and — if we
-  switch the adversarial call to `--output-format stream-json` and parse it —
-  `turn_duration_ms` and `context_usage_pct`. Wall-clock `duration_ms` is the
-  reliable baseline; stream-json parsing is an optional follow-up, not a
-  blocker.
+  `duration_ms` (wall-clock, free, transport-independent), `status`, and, from
+  the `--output-format stream-json` transport every one-shot call uses
+  (`internal/kirocli`), `engine`, `turn_duration_ms` and `context_usage_pct`.
+  Those three are null when kiro-cli doesn't report them.
 - If a future kiro-cli (or a different transport) exposes real per-call usage,
   wire it into `tokens`/`cost` then — do not backfill historical records with a
   guess.
