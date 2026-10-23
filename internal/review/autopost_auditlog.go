@@ -53,25 +53,27 @@ func auditDir() (string, error) {
 
 // auditRecord is one line of the audit trail, serialized to JSON. Field names
 // and null-ness match audit_log.py's schema exactly. Pointer/`any` fields that
-// are nil marshal to JSON null, which is the intended "not collected" signal
-// for turn_duration_ms / context_usage_pct / tokens / cost.
+// are nil marshal to JSON null, which is the intended "not collected" signal:
+// turn_duration_ms / context_usage_pct / engine are null for deterministic
+// steps (or when kiro-cli didn't report them); tokens / cost are always null.
 type auditRecord struct {
-	RunID           string  `json:"run_id"`
-	Pipeline        string  `json:"pipeline"`
-	Repo            string  `json:"repo"`
-	PR              string  `json:"pr"`
-	Step            string  `json:"step"`
-	Iteration       *int    `json:"iteration"`         // always null for this gate (no loop)
-	Agent           *string `json:"agent"`             // null for deterministic steps
-	Model           *string `json:"model"`             // null when no --model passed
-	Status          string  `json:"status"`            // "pass" | "fail" | "error"
-	TurnDurationMs  *int64  `json:"turn_duration_ms"`  // null — not parsed from stream-json yet
-	ContextUsagePct *int64  `json:"context_usage_pct"` // null — not parsed from stream-json yet
-	DurationMs      int64   `json:"duration_ms"`       // wall-clock, always captured
-	Tokens          *int64  `json:"tokens"`            // ALWAYS null — kiro-cli reports none
-	Cost            *int64  `json:"cost"`              // ALWAYS null — kiro-cli reports none
-	Detail          string  `json:"detail"`
-	Timestamp       string  `json:"timestamp"` // ISO-8601 UTC
+	RunID           string   `json:"run_id"`
+	Pipeline        string   `json:"pipeline"`
+	Repo            string   `json:"repo"`
+	PR              string   `json:"pr"`
+	Step            string   `json:"step"`
+	Iteration       *int     `json:"iteration"`         // always null for this gate (no loop)
+	Agent           *string  `json:"agent"`             // null for deterministic steps
+	Model           *string  `json:"model"`             // null when no --model passed
+	Status          string   `json:"status"`            // "pass" | "fail" | "error"
+	TurnDurationMs  *float64 `json:"turn_duration_ms"`  // kiro-cli stream-json; null if not reported
+	ContextUsagePct *float64 `json:"context_usage_pct"` // kiro-cli stream-json; null if not reported
+	Engine          *string  `json:"engine"`            // "v2" | "v3"; null for deterministic steps
+	DurationMs      int64    `json:"duration_ms"`       // wall-clock, always captured
+	Tokens          *int64   `json:"tokens"`            // ALWAYS null — kiro-cli reports none
+	Cost            *int64   `json:"cost"`              // ALWAYS null — kiro-cli reports none
+	Detail          string   `json:"detail"`
+	Timestamp       string   `json:"timestamp"` // ISO-8601 UTC
 }
 
 // AuditLog is one gate invocation's audit trail. All steps of one run share a
@@ -130,13 +132,20 @@ func (a *AuditLog) record(s auditStep) error {
 	if s.agent != "" {
 		agentPtr = &s.agent
 	}
-	var modelPtr *string
+	var modelPtr, enginePtr *string
+	var turnDurationMs, contextUsagePct *float64
 	var durationMs int64
 	if s.meta != nil {
 		durationMs = s.meta.DurationMs
+		turnDurationMs = s.meta.TurnDurationMs
+		contextUsagePct = s.meta.ContextUsagePct
 		if s.meta.Model != "" {
 			m := s.meta.Model
 			modelPtr = &m
+		}
+		if s.meta.Engine != "" {
+			e := s.meta.Engine
+			enginePtr = &e
 		}
 	}
 
@@ -150,8 +159,9 @@ func (a *AuditLog) record(s auditStep) error {
 		Agent:           agentPtr,
 		Model:           modelPtr,
 		Status:          status,
-		TurnDurationMs:  nil,
-		ContextUsagePct: nil,
+		TurnDurationMs:  turnDurationMs,
+		ContextUsagePct: contextUsagePct,
+		Engine:          enginePtr,
 		DurationMs:      durationMs,
 		Tokens:          nil,
 		Cost:            nil,
