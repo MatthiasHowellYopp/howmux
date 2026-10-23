@@ -9,15 +9,68 @@ import (
 	"time"
 )
 
-// TestACPClientLiveTurn performs a live integration test with kiro-cli ACP
+// liveTestAgentJSON is a minimal workspace agent written into the live test's
+// temp dir so the agent genuinely resolves on both engines. Without it, v2
+// silently falls back to the default agent and v3 refuses the session
+// (ErrAgentNotOffered).
+//
+// It is in the universal format produced by `kiro-cli agent upgrade`
+// (kiro-cli 2.33.1): the v3 engine does not offer a plain v2-format workspace
+// agent as a selectable mode, while the universal format loads in both
+// engines. Regenerate with `kiro-cli agent upgrade` if the fixture changes.
+const liveTestAgentJSON = `{
+  "name": "architect",
+  "description": "howmux live ACP test agent",
+  "prompt": "You are a terse test agent. Answer briefly.",
+  "tools": [
+    "read"
+  ],
+  "allowedTools": [
+    "fs_read"
+  ],
+  "permissions": {
+    "rules": [
+      {
+        "capability": "fs_read",
+        "effect": "allow"
+      },
+      {
+        "capability": "skill",
+        "effect": "allow"
+      }
+    ]
+  },
+  "kiroUpgrade": {
+    "revision": 2,
+    "fingerprint": "sha256:0186b6d0f7f486b601311914f5896743c78c598ef20fcec970a06469126ae343",
+    "source": "sha256:a2884342f541b85e74c80df80cf6393646fdcaeb3be200098eff6b26c9d4d87d"
+  }
+}
+`
+
+// TestACPClientLiveTurn performs a live integration test with kiro-cli ACP,
+// once per supported agent engine.
 // Skipped by default — set HOWMUX_ACP_INTEGRATION_TEST=1 to run
 func TestACPClientLiveTurn(t *testing.T) {
 	if os.Getenv("HOWMUX_ACP_INTEGRATION_TEST") == "" {
 		t.Skip("Set HOWMUX_ACP_INTEGRATION_TEST=1 to run live ACP test")
 	}
+	for _, engine := range []string{AgentEngineV2, AgentEngineV3} {
+		t.Run(engine, func(t *testing.T) { runLiveTurn(t, engine) })
+	}
+}
 
+func runLiveTurn(t *testing.T, engine string) {
 	// Create temporary directory for test workspace
 	tmpDir := t.TempDir()
+
+	agentsDir := filepath.Join(tmpDir, ".kiro", "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatalf("Failed to create agents dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentsDir, "architect.json"), []byte(liveTestAgentJSON), 0o644); err != nil {
+		t.Fatalf("Failed to write test agent: %v", err)
+	}
 
 	// Create a simple test file
 	testFile := filepath.Join(tmpDir, "test.txt")
@@ -29,6 +82,7 @@ func TestACPClientLiveTurn(t *testing.T) {
 	config := &ConnectionConfig{
 		KiroCLIPath:       "kiro-cli",
 		Agent:             "architect",
+		AgentEngine:       engine,
 		Cwd:               tmpDir,
 		MaxRetries:        3,
 		RetryDelay:        1 * time.Second,

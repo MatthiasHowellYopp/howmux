@@ -356,6 +356,19 @@ Agent configs live in `.kiro/agents/`. Each agent has a JSON config and a prompt
 }
 ```
 
+### kiro-cli agent engine (ACP)
+
+The krew-lead pipeline, the planning tab, and evals talk to `kiro-cli` over ACP. Howmux always passes the engine explicitly, so the default changing in kiro-cli 3.0 won't change what howmux runs. The `chat.agentEngine` setting in `~/.kiro/settings/cli.json` isn't used for these connections.
+
+| Variable | Values | Default |
+|----------|--------|---------|
+| `HOWMUX_KIRO_AGENT_ENGINE` | `v2`, `v3` | `v2` |
+
+- `v2` starts `kiro-cli acp --agent-engine v2 --agent <name>`.
+- `v3` starts `kiro-cli acp --agent-engine v3` and picks the agent for each session through the session's `mode` option, because the v3 engine rejects `--agent`. If the agent isn't in the session's mode list, howmux fails with an error. It does not fall back to the default agent.
+
+The v3 engine only lists agents written in the universal config format. Before you switch to `v3`, convert the configs with `kiro-cli agent upgrade .kiro/agents`, then check the `permissions` it generates. Any other value for the variable is rejected.
+
 ## GitHub Integration
 
 Howmux uses the `gh` CLI for all GitHub operations — no API tokens to configure. Ensure you're authenticated:

@@ -23,6 +23,7 @@ type KiroACPClient struct {
 	mu        sync.RWMutex
 	client    acp.Client
 	sessionID string
+	engine    string      // resolved agent engine ("v2"/"v3"), set by Connect
 	stderrBuf *syncBuffer // captures kiro-cli's stderr (fallback/error signals)
 }
 
@@ -67,31 +68,42 @@ func (k *KiroClient) RequestPermission(ctx context.Context, params acp.RequestPe
 		return acp.RequestPermissionResponse{}, fmt.Errorf("no permission options available")
 	}
 
-	// Auto-approve: prefer "allow" option, fall back to first available
-	for _, opt := range params.Options {
-		if opt.Kind == "allow" {
-			logging.Info("auto-approving permission", "option_id", opt.OptionId, "kind", opt.Kind)
-			return acp.RequestPermissionResponse{
-				Outcome: acp.RequestPermissionOutcome{
-					Selected: &acp.RequestPermissionOutcomeSelected{
-						OptionId: opt.OptionId,
-						Outcome:  "selected",
-					},
-				},
-			}, nil
-		}
+	opt, isAllow := selectPermissionOption(params.Options)
+	if isAllow {
+		logging.Info("auto-approving permission", "option_id", opt.OptionId, "kind", opt.Kind)
+	} else {
+		logging.Warn("no allow option offered, using first available", "option_id", opt.OptionId, "kind", opt.Kind)
 	}
-
-	// No "allow" option found, use first available
-	logging.Warn("no 'allow' option found, using first available", "option_id", params.Options[0].OptionId)
 	return acp.RequestPermissionResponse{
 		Outcome: acp.RequestPermissionOutcome{
 			Selected: &acp.RequestPermissionOutcomeSelected{
-				OptionId: params.Options[0].OptionId,
+				OptionId: opt.OptionId,
 				Outcome:  "selected",
 			},
 		},
 	}, nil
+}
+
+// selectPermissionOption picks the option to auto-approve a tool call with.
+// The ACP spec defines four kinds — allow_once, allow_always, reject_once,
+// reject_always — and kiro-cli's v3 engine sends all four (observed order on
+// 2.33.1: allow_once, allow_always, reject_once, reject_always). allow_once is
+// preferred: it approves this call without persisting a rule into the user's
+// kiro permissions the way allow_always can. Matching on the kind (not the
+// position) means a reordered option list can never turn auto-approve into a
+// silent reject.
+//
+// When no allow kind is present, the first option is returned with
+// isAllow=false — the prior fallback — so the caller can log it.
+func selectPermissionOption(options []acp.PermissionOption) (opt acp.PermissionOption, isAllow bool) {
+	for _, want := range []acp.PermissionOptionKind{acp.PermissionOptionKindAllowOnce, acp.PermissionOptionKindAllowAlways} {
+		for _, o := range options {
+			if o.Kind == want {
+				return o, true
+			}
+		}
+	}
+	return options[0], false
 }
 
 // ReadTextFile handles file read requests
@@ -199,8 +211,16 @@ func (c *KiroACPClient) Connect(ctx context.Context) error {
 		return ErrAlreadyConnected
 	}
 
-	// Start kiro-cli in ACP mode with agent flag
-	args := []string{"acp", "--agent", c.config.Agent}
+	engine, err := ResolveAgentEngine(c.config.AgentEngine)
+	if err != nil {
+		logging.Error("invalid agent engine", "error", err)
+		return err
+	}
+
+	// Start kiro-cli in ACP mode. The engine is always passed explicitly; see
+	// acpLaunchArgs for why the agent flag differs between engines.
+	args := acpLaunchArgs(engine, c.config.Agent)
+	logging.Info("launching kiro-cli acp", "engine", engine, "args", args)
 	cmd := exec.CommandContext(ctx, c.config.KiroCLIPath, args...)
 
 	// Get pipes for stdin/stdout communication
@@ -270,9 +290,10 @@ func (c *KiroACPClient) Connect(ctx context.Context) error {
 
 	c.conn = conn
 	c.cmd = cmd
+	c.engine = engine
 	c.connected = true
 
-	logging.Info("ACP connection established successfully", "agent", c.config.Agent)
+	logging.Info("ACP connection established successfully", "agent", c.config.Agent, "engine", engine)
 	return nil
 }
 
@@ -375,16 +396,13 @@ func (c *KiroACPClient) SendMessage(ctx context.Context, req *MessageRequest) (*
 		c.mu.Lock()
 		if c.sessionID == "" {
 			logging.Debug("creating ACP session", "cwd", c.config.Cwd)
-			sessionResp, err := conn.NewSession(ctx, acp.NewSessionRequest{
-				Cwd:        c.config.Cwd,
-				McpServers: []acp.McpServer{},
-			})
+			newID, err := c.createSession(ctx, conn)
 			if err != nil {
 				c.mu.Unlock()
 				logging.Error("failed to create ACP session", "error", err)
 				return nil, fmt.Errorf("failed to create session: %w", err)
 			}
-			c.sessionID = string(sessionResp.SessionId)
+			c.sessionID = newID
 			logging.Info("ACP session created", "session_id", c.sessionID)
 		}
 		sessionID = c.sessionID
@@ -463,10 +481,7 @@ func (c *KiroACPClient) StreamMessage(ctx context.Context, req *MessageRequest) 
 			c.mu.Lock()
 			if c.sessionID == "" {
 				logging.Debug("creating streaming ACP session", "cwd", c.config.Cwd)
-				sessionResp, err := conn.NewSession(streamCtx, acp.NewSessionRequest{
-					Cwd:        c.config.Cwd,
-					McpServers: []acp.McpServer{},
-				})
+				newID, err := c.createSession(streamCtx, conn)
 				if err != nil {
 					c.mu.Unlock()
 					logging.Error("failed to create streaming session", "error", err)
@@ -477,7 +492,7 @@ func (c *KiroACPClient) StreamMessage(ctx context.Context, req *MessageRequest) 
 					}
 					return
 				}
-				c.sessionID = string(sessionResp.SessionId)
+				c.sessionID = newID
 				logging.Info("streaming ACP session created", "session_id", c.sessionID)
 			}
 			sessionID = c.sessionID
