@@ -23,7 +23,7 @@ func TestResolveAgentEngine(t *testing.T) {
 		want       string
 		wantErr    bool
 	}{
-		{name: "default when unset", want: AgentEngineV2},
+		{name: "default when unset", want: AgentEngineV3},
 		{name: "env selects v3", env: "v3", want: AgentEngineV3},
 		{name: "env is case/space tolerant", env: "  V3 ", want: AgentEngineV3},
 		{name: "config wins over env", configured: "v2", env: "v3", want: AgentEngineV2},
@@ -74,7 +74,7 @@ func TestDescribeLaunch(t *testing.T) {
 	tests := []struct {
 		name, path, engine, want string
 	}{
-		{"v2 default", "", "", "kiro-cli acp --agent-engine v2 --agent architect"},
+		{"v3 default", "", "", "kiro-cli acp --agent-engine v3 (session mode: architect)"},
 		{"v2 custom path", "/opt/kiro-cli", "v2", "/opt/kiro-cli acp --agent-engine v2 --agent architect"},
 		{"v3 notes session mode", "kiro-cli", "v3", "kiro-cli acp --agent-engine v3 (session mode: architect)"},
 	}

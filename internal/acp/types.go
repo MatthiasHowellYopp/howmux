@@ -131,10 +131,11 @@ const (
 	AgentEngineV3 = "v3"
 
 	// DefaultAgentEngine is the engine used when neither ConnectionConfig nor
-	// the environment selects one. It stays on v2 (the behavior howmux was
-	// built and verified against) until the v3 path has been exercised on real
-	// workloads; opt in with HOWMUX_KIRO_AGENT_ENGINE=v3.
-	DefaultAgentEngine = AgentEngineV2
+	// the environment selects one. v3 is the engine kiro-cli 3.0 makes its
+	// default, and howmux's agent configs are in the universal format it
+	// loads. v2 remains available as an opt-out
+	// (HOWMUX_KIRO_AGENT_ENGINE=v2) until kiro-cli drops it.
+	DefaultAgentEngine = AgentEngineV3
 
 	// AgentEngineEnvVar overrides the engine for every ACP connection that does
 	// not set ConnectionConfig.AgentEngine explicitly.
