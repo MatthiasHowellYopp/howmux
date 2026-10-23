@@ -16,13 +16,6 @@ type SessionConfig struct {
 	SessionsDir        string        `yaml:"sessions_dir"`
 }
 
-type SandboxConfig struct {
-	WorkspaceDir string        `yaml:"workspace_dir"`
-	CPUCores     float64       `yaml:"cpu_cores"`
-	MemoryMB     int           `yaml:"memory_mb"`
-	Timeout      time.Duration `yaml:"timeout"`
-}
-
 type LoggingConfig struct {
 	DefaultLevel   string `yaml:"default_level"`
 	MaxBufferLines int    `yaml:"max_buffer_lines"`
@@ -57,7 +50,6 @@ type Config struct {
 	EnableCopilotReview bool          `yaml:"enable_copilot_review"`
 	Reviewer            string        `yaml:"reviewer"` // Optional: overrides the resolved gh login used for IsReviewRequestedFor matching
 	Session             SessionConfig `yaml:"session"`
-	Sandbox             SandboxConfig `yaml:"sandbox"`
 	Logging             LoggingConfig `yaml:"logging"`
 	Review              ReviewConfig  `yaml:"review"`
 	LoadedTheme         *Theme        `yaml:"-"`
@@ -83,12 +75,6 @@ func Load() (*Config, error) {
 			MaxAge:             24 * time.Hour,
 			SessionsDir:        ".howmux/sessions",
 		},
-		Sandbox: SandboxConfig{
-			WorkspaceDir: "/workspace",
-			CPUCores:     1.0,
-			MemoryMB:     1024,
-			Timeout:      5 * time.Minute,
-		},
 		Logging: LoggingConfig{
 			DefaultLevel:   "info",
 			MaxBufferLines: 10000,
@@ -109,6 +95,9 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
+	// Non-strict decode on purpose: unknown keys are ignored, so config files
+	// that still carry blocks for removed features (e.g. the old eval
+	// "sandbox:" block) keep loading.
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
@@ -126,23 +115,6 @@ func Load() (*Config, error) {
 	}
 	if cfg.Session.SessionsDir == "" {
 		return nil, fmt.Errorf("session.sessions_dir cannot be empty")
-	}
-
-	// Validate sandbox config
-	if cfg.Sandbox.CPUCores <= 0 {
-		return nil, fmt.Errorf("sandbox.cpu_cores must be greater than 0")
-	}
-	if cfg.Sandbox.MemoryMB <= 0 {
-		return nil, fmt.Errorf("sandbox.memory_mb must be greater than 0")
-	}
-	if cfg.Sandbox.MemoryMB < 256 {
-		return nil, fmt.Errorf("sandbox.memory_mb must be at least 256")
-	}
-	if cfg.Sandbox.Timeout <= 0 {
-		return nil, fmt.Errorf("sandbox.timeout must be greater than 0")
-	}
-	if cfg.Sandbox.WorkspaceDir == "" {
-		return nil, fmt.Errorf("sandbox.workspace_dir cannot be empty")
 	}
 
 	// Validate logging config

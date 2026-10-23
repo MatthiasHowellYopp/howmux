@@ -375,7 +375,7 @@ func TestACPWorkspaceDirHandling(t *testing.T) {
 
 	// Verify directory exists and is writable
 	testFile := workspaceDir + "/test.txt"
-	err := writeFile(testFile, "test content")
+	err := os.WriteFile(testFile, []byte("test content"), 0644)
 	if err != nil {
 		t.Fatalf("Workspace is not writable: %v", err)
 	}

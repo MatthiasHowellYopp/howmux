@@ -153,12 +153,12 @@ console_logging: true`,
 			description: "Full config without base_branch should work",
 		},
 		{
-			name: "config with sandbox but no base_branch",
+			name: "config with legacy sandbox block but no base_branch",
 			configContent: `repo: test/repo
 sandbox:
   cpu_cores: 2.0
   memory_mb: 2048`,
-			description: "Config with sandbox section but no base_branch should work",
+			description: "Config with a leftover (ignored) sandbox section but no base_branch should work",
 		},
 	}
 
