@@ -39,13 +39,16 @@ type tickMsg struct{}
 
 type planningHotkeyMsg struct{}
 
+// planClassicRemovedMsg is shown for the removed "plan classic" command.
+const planClassicRemovedMsg = "'plan classic' has been removed (kiro-cli 3.0 retires the classic chat harness). Use 'plan [desc]' instead."
+
 // openReviewContentMsg is emitted by ReviewsTab.Update's "enter" case (via a
 // tea.Cmd) to ask the top-level model to open a read-only review content
 // window for the given PR. ReviewsTab has no reference to TabManager (by
 // design, matching every other tab), so it cannot add a tab itself — this
 // message/case pair is the mechanism, matching the existing pattern used
 // for other cross-tab, asynchronous-shaped concerns (reviewStartMsg,
-// reviewCompleteMsg, execDoneMsg). See the "case openReviewContentMsg:" arm
+// reviewCompleteMsg, editorDoneMsg). See the "case openReviewContentMsg:" arm
 // in model.Update for the handler.
 type openReviewContentMsg struct {
 	repo      string
@@ -93,16 +96,9 @@ type startBodyEditMsg struct {
 
 // editorDoneMsg is emitted by the tea.ExecProcess callback started in
 // handleBodyEditLaunch (commands.go) once the user's $EDITOR process exits.
-// It is intentionally a *distinct* message from the pre-existing
-// execDoneMsg (used by handlePlanSubprocess for the planning-mode kiro-cli
-// subprocess): execDoneMsg's resume handling always calls
-// restoreConsoleState() and reports planning-session-specific activity
-// lines, which would be wrong here — body editing has nothing to do with
-// console/planning state, only with a single review's spool file. Reusing
-// execDoneMsg for both would either corrupt planning-mode's resume
-// behavior or require conditionals inside that case arm; a new message
-// keeps the two suspend/resume flows fully independent despite sharing the
-// same tea.ExecProcess/SuspendOutputCapture/ResumeOutputCapture mechanics.
+// Its handler deliberately never calls restoreConsoleState() or touches
+// m.currentMode: body editing has nothing to do with console/planning state,
+// only with a single review's spool file.
 //
 // tempPath is the temp file the editor was pointed at (removed
 // unconditionally by the handler, in every branch). rec identifies which
@@ -564,28 +560,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case execDoneMsg:
-		// Resume agent output capture when planning mode exits
-		m.manager.ResumeOutputCapture()
-
-		if msg.err != nil {
-			m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("Planning session exited with error: %v", msg.err)))
-
-			// Log the error for debugging
-			log.Printf("Planning session error: %v", msg.err)
-		} else {
-			m = m.appendActivity(m.styles.Success.Render("Planning session completed successfully."))
-		}
-
-		// Stop context tracking when exiting planning mode
-		if m.footerManager != nil && m.footerManager.GetContextTracker() != nil {
-			m.footerManager.GetContextTracker().StopPlanningSession()
-		}
-
-		m = m.restoreConsoleState()
-		m.input.Focus()
-		return m, tea.Batch(m.input.Focus(), tea.ClearScreen)
-
 	case reviewStartMsg:
 		// Store cancel function for cleanup on exit (Fix #2)
 		m.reviewCancel = msg.cancel
@@ -757,18 +731,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Emitted by ReviewsTab.Update's "e" key handler (via
 		// startBodyEditCmd) — launches $EDITOR on the selected review's
 		// full markdown body. Delegates to handleBodyEditLaunch
-		// (commands.go), which mirrors handlePlanSubprocess's
-		// suspend/write-temp-file/tea.ExecProcess sequence.
+		// (commands.go), which runs the suspend/write-temp-file/
+		// tea.ExecProcess sequence.
 		rec := review.Record{Repo: msg.repo, PR: msg.pr, SpoolPath: msg.spoolPath}
 		return m.handleBodyEditLaunch(rec)
 
 	case editorDoneMsg:
 		// Resume half of the startBodyEditMsg round trip, once $EDITOR
-		// exits. Mirrors handlePlanSubprocess/execDoneMsg's
-		// suspend/resume pairing, but with its own, deliberately
-		// distinct contract (see editorDoneMsg's doc comment): no
-		// restoreConsoleState() call, since body editing never touched
-		// console/planning state.
+		// exits. No restoreConsoleState() call (see editorDoneMsg's doc
+		// comment), since body editing never touched console/planning
+		// state.
 		//
 		// The temp file is removed unconditionally on every branch below
 		// (editor error, empty-file validation failure, or after a
@@ -2261,14 +2233,12 @@ func (m model) executeCommand(input string) (model, tea.Cmd) {
 		}
 		return m.handleStop(parts[1])
 	case "plan":
-		// Check if this is "plan classic" command
+		// "plan classic" ran `kiro-cli chat --classic`, which kiro-cli 3.0
+		// retires. Say so rather than silently opening an ACP tab titled
+		// "classic ...".
 		if len(parts) >= 2 && strings.ToLower(parts[1]) == "classic" {
-			// Extract description after "classic"
-			description := ""
-			if len(parts) > 2 {
-				description = strings.Join(parts[2:], " ")
-			}
-			return m.handlePlanClassic(description)
+			m = m.appendActivity(m.styles.Error.Render(planClassicRemovedMsg))
+			return m, nil
 		}
 
 		// Regular plan command - uses ACP-based planning tabs

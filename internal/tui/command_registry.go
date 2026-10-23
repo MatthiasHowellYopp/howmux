@@ -54,7 +54,6 @@ func NewCommandRegistry(agentManager *agent.Manager) *CommandRegistry {
 	registry.register(&Command{
 		Name:        "plan",
 		Description: "Start interactive planning session",
-		Subcommands: []string{"classic"},
 		HasArgs:     true,
 		ArgPattern:  "[desc]",
 	})

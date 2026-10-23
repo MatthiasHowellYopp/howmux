@@ -462,7 +462,7 @@ func TestTask8Integration(t *testing.T) {
 	})
 
 	t.Run("BackwardCompatibility", func(t *testing.T) {
-		// Test that classic planning functionality still works
+		// Test that session handling still works for existing session types
 		sessionManager := createTestSessionManager()
 
 		// This should not break existing session types

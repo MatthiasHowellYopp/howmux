@@ -40,77 +40,48 @@ func TestCommandRegistry(t *testing.T) {
 	}
 }
 
-func TestPlanClassicAutocomplete(t *testing.T) {
+// TestPlanHasNoClassicSubcommand verifies "plan classic" is no longer
+// offered by autocomplete (it relied on `kiro-cli chat --classic`, retired in
+// kiro-cli 3.0) while "plan [desc]" keeps working.
+func TestPlanHasNoClassicSubcommand(t *testing.T) {
 	cfg := &config.Config{}
 	manager := agent.NewManager(cfg)
 	registry := NewCommandRegistry(manager)
 
-	// Test plan classic subcommand exists
-	subcommands := registry.GetSubcommands("plan")
-	if len(subcommands) != 1 || subcommands[0] != "classic" {
-		t.Errorf("Expected plan to have 'classic' subcommand, got %v", subcommands)
+	if subcommands := registry.GetSubcommands("plan"); len(subcommands) != 0 {
+		t.Errorf("Expected plan to have no subcommands, got %v", subcommands)
 	}
 
-	// Test plan classic in flattened matches
-	matches := registry.GetFlattenedMatches("plan")
-	foundPlan := false
-	foundPlanClassic := false
-	for _, match := range matches {
-		if match == "plan" {
-			foundPlan = true
-		}
+	for _, match := range registry.GetFlattenedMatches("plan") {
 		if match == "plan classic" {
-			foundPlanClassic = true
+			t.Error("'plan classic' should not be offered by autocomplete")
 		}
 	}
-	if !foundPlan {
-		t.Error("Expected 'plan' in flattened matches")
-	}
-	if !foundPlanClassic {
-		t.Error("Expected 'plan classic' in flattened matches")
-	}
 
-	// Test plan classic validation
-	if !registry.IsValidCommand("plan classic") {
-		t.Error("Expected 'plan classic' to be valid")
+	if !registry.IsValidCommand("plan") {
+		t.Error("Expected 'plan' to be valid")
 	}
-
-	if !registry.IsValidCommand("plan classic some description") {
-		t.Error("Expected 'plan classic some description' to be valid")
-	}
-
-	// Test backward compatibility for base plan command with description
-	if !registry.IsValidCommand("plan some description") {
-		t.Error("Expected 'plan some description' to be valid")
-	}
-
 	if !registry.IsValidCommand("plan implement feature X") {
 		t.Error("Expected 'plan implement feature X' to be valid")
 	}
+}
 
-	// Test prefix filtering for plan classic
-	matches = registry.GetFlattenedMatches("plan c")
-	foundPlanClassic = false
-	for _, match := range matches {
-		if match == "plan classic" {
-			foundPlanClassic = true
-			break
-		}
-	}
-	if !foundPlanClassic {
-		t.Error("Expected 'plan classic' in matches for 'plan c'")
-	}
+// TestPlanClassicReportsRemoval verifies the removed "plan classic" command
+// fails loud with a pointer to "plan" instead of launching anything or
+// quietly opening a planning tab titled "classic ...".
+func TestPlanClassicReportsRemoval(t *testing.T) {
+	m := setupTestModel(t)
+	tabsBefore := len(m.tabManager.GetTabs())
 
-	// Test partial subcommand filtering
-	subcommands = registry.GetSubcommands("plan c")
-	if len(subcommands) != 1 || subcommands[0] != "classic" {
-		t.Errorf("Expected 'plan c' to filter to 'classic' subcommand, got %v", subcommands)
+	result, cmd := m.executeCommand("plan classic some idea")
+	if cmd != nil {
+		t.Errorf("expected nil cmd (nothing launched), got %v", cmd)
 	}
-
-	// Test best match for plan classic
-	match := registry.GetBestMatch("plan cl")
-	if match != "plan classic" {
-		t.Errorf("Expected 'plan classic' for 'plan cl', got '%s'", match)
+	if !anyLineContains(result.activityLines, planClassicRemovedMsg) {
+		t.Errorf("expected removal message, got: %v", result.activityLines)
+	}
+	if got := len(result.tabManager.GetTabs()); got != tabsBefore {
+		t.Errorf("expected no new tab, tabs went from %d to %d", tabsBefore, got)
 	}
 }
 

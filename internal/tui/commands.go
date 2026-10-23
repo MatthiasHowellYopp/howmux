@@ -196,7 +196,6 @@ func (m model) handleHelp() (model, tea.Cmd) {
 		"  status         - List all agents with details",
 		"  stop <issue>   - Stop agent for specific issue number",
 		"  plan [desc]    - Create new ACP-based Planning tab",
-		"  plan classic [desc] - Start legacy subprocess planning session",
 		"  log [level] [size] - Open log viewer (level: debug/info/warn/error, size: buffer lines)",
 		"  logs           - View incident logs",
 		"  decide <value>  - Launch action on selected review (post confirms inline, others run immediately)",
@@ -265,11 +264,6 @@ func (m model) handlePlan(description string) (model, tea.Cmd) {
 		}
 
 		m = m.appendActivity(m.styles.Error.Render(errorMsg))
-
-		// Offer fallback to classic planning if ACP is unavailable
-		if strings.Contains(err.Error(), "ACP") || strings.Contains(err.Error(), "kiro-cli") {
-			m = m.appendActivity(m.styles.Warning.Render("Consider using 'plan classic [description]' for subprocess-based planning"))
-		}
 		return m, nil
 	}
 
@@ -310,94 +304,6 @@ func (m model) handlePlan(description string) (model, tea.Cmd) {
 	return m, tea.Batch(focusCmd, messageFocusCmd)
 }
 
-func (m model) handlePlanClassic(description string) (model, tea.Cmd) {
-	// Use the legacy subprocess-based planning functionality
-	return m.handlePlanSubprocess(description)
-}
-
-func (m model) handlePlanSubprocess(description string) (model, tea.Cmd) {
-	// Suspend agent output capture before entering planning mode
-	m.manager.SuspendOutputCapture()
-
-	// Preserve current console state
-	m.consoleState.inputValue = m.input.Value()
-	m.consoleState.activityLines = make([]string, len(m.activityLines))
-	copy(m.consoleState.activityLines, m.activityLines)
-	if activeTab := m.tabManager.GetActiveTab(); activeTab != nil {
-		m.consoleState.activeTabID = activeTab.ID()
-	}
-
-	// Check for existing planning sessions with error recovery
-	sessions, err := m.sessionManager.List()
-	if err != nil {
-		m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf("Failed to check sessions: %v", err)))
-		return m, nil
-	}
-
-	// Look for existing planning session with corruption handling
-	var planningSessionID string
-	for _, sessionID := range sessions {
-		state, err := m.sessionManager.Load(sessionID)
-		if err != nil {
-			if strings.Contains(err.Error(), "corruption") {
-				m = m.appendActivity(m.styles.Warning.Render(fmt.Sprintf("Removing corrupted session %s", sessionID[:8])))
-				_ = m.sessionManager.Delete(sessionID)
-			}
-			continue
-		}
-		if state.Type == session.Planning {
-			planningSessionID = sessionID
-			break
-		}
-	}
-
-	var sessionMsg string
-	if planningSessionID == "" {
-		sessionMsg = "Starting new classic planning session"
-	} else {
-		sessionMsg = fmt.Sprintf("Resuming planning session %s...", planningSessionID[:8])
-	}
-
-	// Start context tracking for planning mode with default model
-	m.footerManager.GetContextTracker().StartPlanningSession("claude-sonnet-4")
-
-	m = m.appendActivity(m.styles.Success.Render(sessionMsg))
-	m.currentMode = session.Planning
-	m.input.Blur()
-
-	// Execute the kiro-cli subprocess for classic planning with shell wrapper
-	args := []string{"chat", "--classic", "--agent", "planner"}
-	if description != "" {
-		args = append(args, description)
-	}
-
-	// Wrap in shell with clear and centered ASCII art banner
-	banner := `cols=$(tput cols 2>/dev/null || echo 80)
-art1="  _  ___              _  __                   "
-art2=" | |/ (_)_ __ ___    | |/ /_ __ _____      __"
-art3=" | ' /| | '__/ _ \   | ' /| '__/ _ \ \ /\ / /"
-art4=" | . \| | | | (_) |  | . \| | |  __/\ V  V / "
-art5=" |_|\_\_|_|  \___/   |_|\_\_|  \___| \_/\_/  "
-pad() { w=${#1}; p=$(( (cols - w) / 2 )); [ "$p" -lt 0 ] && p=0; printf "%*s%s\n" "$p" "" "$1"; }
-echo ""
-pad "$art1"
-pad "$art2"
-pad "$art3"
-pad "$art4"
-pad "$art5"
-echo ""`
-	script := "clear && " + banner + " && exec kiro-cli \"$@\""
-	cmd := exec.Command("sh", append([]string{"-c", script, "sh"}, args...)...)
-
-	return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
-		return execDoneMsg{err: err}
-	})
-}
-
-type execDoneMsg struct {
-	err error
-}
-
 // bodyEditCommandFunc is the subprocess-execution seam handleBodyEditLaunch
 // invokes through to build the $EDITOR exec.Cmd, mirroring
 // execCommandFunc's role in internal/review/decisionwriter.go. It is
@@ -407,12 +313,11 @@ type execDoneMsg struct {
 var bodyEditCommandFunc = exec.Command
 
 // handleBodyEditLaunch implements the "e" key's $EDITOR-launch flow for a
-// selected review's full body, structurally mirroring handlePlanSubprocess:
-// suspend output capture, write state that must survive the subprocess
-// (here: the body, into a temp file — there is no console-chrome state to
-// snapshot for body editing), build the exec.Cmd, and return a
-// tea.ExecProcess whose callback reports back via editorDoneMsg (a distinct
-// message from execDoneMsg — see editorDoneMsg's doc comment in tui.go).
+// selected review's full body: suspend output capture, write state that must
+// survive the subprocess (here: the body, into a temp file — there is no
+// console-chrome state to snapshot for body editing), build the exec.Cmd, and
+// return a tea.ExecProcess whose callback reports back via editorDoneMsg (see
+// editorDoneMsg's doc comment in tui.go).
 //
 // $EDITOR is read fresh from the environment on every invocation (not
 // cached), matching how other CLI tools resolve it. If $EDITOR is unset, an

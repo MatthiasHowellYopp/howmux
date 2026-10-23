@@ -365,42 +365,5 @@ func TestEditorDoneMsgNonZeroExit(t *testing.T) {
 	}
 }
 
-// TestExecDoneMsgPlanningModeUnaffected is a regression test confirming
-// Task 4's changes did not alter execDoneMsg's existing planning-mode
-// resume behavior: ResumeOutputCapture is called, restoreConsoleState()
-// restores the pre-planning console state (input value AND activity
-// lines — restoreConsoleState() intentionally replaces activityLines with
-// the pre-planning snapshot, discarding whatever was appended during
-// planning, including the "Planning session completed successfully."
-// line appended earlier in the same case arm; this is execDoneMsg's
-// existing, pre-Task-4 behavior, not something this task changed), and a
-// non-nil tea.Cmd is returned. This guards against editorDoneMsg's
-// introduction accidentally sharing state or code paths with execDoneMsg.
-func TestExecDoneMsgPlanningModeUnaffected(t *testing.T) {
-	m := newBodyEditTestModel(t)
-	m.manager.SuspendOutputCapture()
-
-	// Seed console state the way handlePlanSubprocess does, so
-	// restoreConsoleState() has something concrete to restore.
-	m.consoleState.inputValue = "pre-planning input"
-	m.consoleState.activityLines = []string{"pre-planning activity line"}
-	m.activityLines = []string{"activity line added during planning"}
-
-	newM, cmd := m.Update(execDoneMsg{err: nil})
-	resultModel := newM.(model)
-
-	if resultModel.input.Value() != "pre-planning input" {
-		t.Errorf("expected restoreConsoleState() to restore input value, got %q", resultModel.input.Value())
-	}
-
-	if len(resultModel.activityLines) != 1 || resultModel.activityLines[0] != "pre-planning activity line" {
-		t.Errorf("expected restoreConsoleState() to restore the pre-planning activity lines exactly, got %v", resultModel.activityLines)
-	}
-
-	if cmd == nil {
-		t.Errorf("expected a non-nil tea.Cmd (input focus + ClearScreen) from execDoneMsg handling")
-	}
-}
-
 var _ tea.Msg = editorDoneMsg{}
 var _ tea.Msg = startBodyEditMsg{}
