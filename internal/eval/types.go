@@ -1,9 +1,5 @@
 package eval
 
-import (
-	"github.com/matthiashowellyopp/howmux/internal/eval/sandbox"
-)
-
 // Rubric defines scoring criteria for an agent.
 type Rubric struct {
 	Agent    string      `yaml:"agent" json:"agent"`
@@ -85,15 +81,11 @@ type CaseResult struct {
 
 // ErrorContext captures execution details for debugging failed tests.
 type ErrorContext struct {
-	Command        string            `json:"command"`
-	WorkingDir     string            `json:"working_dir"`
-	Environment    map[string]string `json:"environment,omitempty"`
-	Stderr         string            `json:"stderr,omitempty"`
-	ExitCode       int               `json:"exit_code,omitempty"`
-	ContainerID    string            `json:"container_id,omitempty"`    // Container short ID for sandbox mode
-	ContainerImage string            `json:"container_image,omitempty"` // Container image name
-	Platform       string            `json:"platform,omitempty"`        // Container platform
-	DockerError    string            `json:"docker_error,omitempty"`    // Docker-specific error details
+	Command     string            `json:"command"`
+	WorkingDir  string            `json:"working_dir"`
+	Environment map[string]string `json:"environment,omitempty"`
+	Stderr      string            `json:"stderr,omitempty"`
+	ExitCode    int               `json:"exit_code,omitempty"`
 }
 
 // AgentResult holds all case results for one agent.
@@ -105,13 +97,8 @@ type AgentResult struct {
 
 // RunOptions configures evaluation execution.
 type RunOptions struct {
-	List          bool              // List available test cases
-	Resume        bool              // Resume from interrupted evaluation
-	Sandbox       bool              // Enable container sandboxing
-	NoSandbox     bool              // Explicitly disable sandboxing
-	ResourceLimit map[string]string // Resource limit overrides (cpu, memory, timeout)
-	Debug         bool              // Enable debug mode with verbose logging
-	Cleanup       bool              // Stop and remove tracked containers
+	List   bool // List available test cases
+	Resume bool // Resume from interrupted evaluation
 }
 
 // Summary holds aggregate results for an eval run.
@@ -119,23 +106,4 @@ type Summary struct {
 	GitHash     string             `json:"git_hash"`
 	TotalCost   CostInfo           `json:"total_cost"`
 	AgentScores map[string]float64 `json:"agent_scores"` // agent -> average score
-}
-
-// ContainerConfig configures containerized execution
-type ContainerConfig struct {
-	Platform        string                 `json:"platform"`
-	ResourceLimits  sandbox.ResourceLimits `json:"resource_limits"`
-	Environment     map[string]string      `json:"environment"`
-	WorkspaceDir    string                 `json:"workspace_dir"`
-	MockGitHub      bool                   `json:"mock_github"`
-	Debug           bool                   `json:"debug"`
-	ImageManager    *sandbox.ImageManager  `json:"-"`
-	CachedImageName string                 `json:"-"`
-}
-
-// ProjectDetection holds results from project type detection
-type ProjectDetection struct {
-	ProjectType  string            `json:"project_type"`
-	ConfigFiles  []string          `json:"config_files"`
-	Dependencies map[string]string `json:"dependencies"`
 }

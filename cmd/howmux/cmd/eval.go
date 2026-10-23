@@ -1,28 +1,47 @@
 package cmd
 
 import (
-	"strings"
+	"errors"
 
 	"github.com/matthiashowellyopp/howmux/internal/eval"
 	"github.com/spf13/cobra"
 )
 
 var (
-	evalList          bool
-	evalResume        bool
-	evalCase          string
-	evalPerf          bool
-	evalSandbox       bool
+	evalList   bool
+	evalResume bool
+	evalCase   string
+	evalPerf   bool
+
+	// evalSandbox backs the hidden --sandbox flag. The sandbox mode was
+	// removed; the flag is kept only so old invocations fail with a clear
+	// error instead of "unknown flag".
+	evalSandbox bool
+
+	// Deprecated no-op flags that only affected the removed sandbox mode.
+	// They are still parsed so existing scripts don't break, but their
+	// values are never read.
 	evalNoSandbox     bool
 	evalResourceLimit []string
 	evalDebug         bool
 	evalCleanup       bool
 )
 
+// errSandboxRemoved is returned when --sandbox is passed to eval.
+var errSandboxRemoved = errors.New("the eval sandbox mode has been removed (the container could not authenticate kiro-cli); run evals without --sandbox")
+
+// deprecatedSandboxFlagMsg is the deprecation notice for flags that only had
+// effect in the removed sandbox mode.
+const deprecatedSandboxFlagMsg = "it only had effect in the removed eval sandbox mode and is now ignored"
+
 var evalCmd = &cobra.Command{
 	Use:   "eval [agent] [testcase]",
 	Short: "Run evaluations or show diff between runs",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if evalSandbox {
+			return errSandboxRemoved
+		}
+
 		var agent, testcase string
 		if len(args) > 0 {
 			agent = args[0]
@@ -36,33 +55,14 @@ var evalCmd = &cobra.Command{
 			testcase = evalCase
 		}
 
-		// Handle cleanup operation
-		if evalCleanup {
-			return eval.RunCleanup()
-		}
-
 		// Handle performance investigation
 		if evalPerf {
 			return eval.RunPerformanceInvestigation(agent)
 		}
 
-		// Parse resource limits
-		resourceLimits := make(map[string]string)
-		for _, limit := range evalResourceLimit {
-			parts := strings.SplitN(limit, "=", 2)
-			if len(parts) == 2 {
-				resourceLimits[parts[0]] = parts[1]
-			}
-		}
-
 		return eval.RunWithOptions(agent, testcase, eval.RunOptions{
-			List:          evalList,
-			Resume:        evalResume,
-			Sandbox:       evalSandbox,
-			NoSandbox:     evalNoSandbox,
-			ResourceLimit: resourceLimits,
-			Debug:         evalDebug,
-			Cleanup:       evalCleanup,
+			List:   evalList,
+			Resume: evalResume,
 		})
 	},
 }
@@ -93,7 +93,7 @@ With --compare-only, skips running and compares the latest existing run instead.
 			agent = args[0]
 		}
 		if !baselineCompareOnly {
-			if err := eval.RunWithOptions(agent, "", eval.RunOptions{NoSandbox: true}); err != nil {
+			if err := eval.RunWithOptions(agent, "", eval.RunOptions{}); err != nil {
 				return err
 			}
 		}
@@ -110,11 +110,20 @@ func init() {
 	evalCmd.Flags().BoolVar(&evalResume, "resume", false, "Resume interrupted evaluation from last completed test")
 	evalCmd.Flags().StringVar(&evalCase, "case", "", "Run specific test case")
 	evalCmd.Flags().BoolVar(&evalPerf, "perf", false, "Run performance investigation and profiling")
-	evalCmd.Flags().BoolVar(&evalSandbox, "sandbox", false, "Enable container sandboxing for agent execution")
-	evalCmd.Flags().BoolVar(&evalNoSandbox, "no-sandbox", false, "Explicitly disable container sandboxing")
-	evalCmd.Flags().StringSliceVar(&evalResourceLimit, "resource-limit", nil, "Override resource limits (cpu=1.0, memory=1073741824, timeout=5m)")
-	evalCmd.Flags().BoolVarP(&evalDebug, "debug", "d", false, "Enable debug mode with verbose logging and container persistence")
-	evalCmd.Flags().BoolVar(&evalCleanup, "cleanup", false, "Stop and remove all tracked debug containers and clean artifacts")
+
+	// Removed sandbox mode: hidden, errors if used.
+	evalCmd.Flags().BoolVar(&evalSandbox, "sandbox", false, "Removed; returns an error if set")
+	_ = evalCmd.Flags().MarkHidden("sandbox")
+
+	// Sandbox-only flags: hidden, deprecated, ignored.
+	evalCmd.Flags().BoolVar(&evalNoSandbox, "no-sandbox", false, "Deprecated; ignored")
+	evalCmd.Flags().StringSliceVar(&evalResourceLimit, "resource-limit", nil, "Deprecated; ignored")
+	evalCmd.Flags().BoolVarP(&evalDebug, "debug", "d", false, "Deprecated; ignored")
+	evalCmd.Flags().BoolVar(&evalCleanup, "cleanup", false, "Deprecated; ignored")
+	for _, name := range []string{"no-sandbox", "resource-limit", "debug", "cleanup"} {
+		_ = evalCmd.Flags().MarkDeprecated(name, deprecatedSandboxFlagMsg)
+		_ = evalCmd.Flags().MarkHidden(name)
+	}
 
 	evalCmd.AddCommand(diffCmd)
 	evalCmd.AddCommand(baselineCmd)

@@ -13,56 +13,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/client"
 	"github.com/matthiashowellyopp/howmux/internal/acp"
-	"github.com/matthiashowellyopp/howmux/internal/config"
-	"github.com/matthiashowellyopp/howmux/internal/eval/sandbox"
 	"gopkg.in/yaml.v3"
 )
 
 // ansiRegex matches all CSI (Control Sequence Introducer) escape sequences.
 var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 
-// checkDockerAvailability verifies Docker daemon is running and accessible
-func checkDockerAvailability() error {
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
-	if err != nil {
-		return err
-	}
-	defer cli.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if _, err := cli.Ping(ctx); err != nil {
-		return fmt.Errorf("Docker is not running. Start Docker and try again: %w", err)
-	}
-
-	return nil
-}
-
 // RunWithOptions executes evaluation with extended CLI options.
 func RunWithOptions(agent string, testcase string, options RunOptions) error {
-	// Handle cleanup operation early
-	if options.Cleanup {
-		return RunCleanup()
-	}
-
-	// Configure container sandboxing
-	var cConfig *ContainerConfig
-	if options.Sandbox && !options.NoSandbox {
-		// Early Docker availability check before any configuration work
-		if err := checkDockerAvailability(); err != nil {
-			return err
-		}
-		var sandboxCfg *config.SandboxConfig
-		if cfg, err := config.Load(); err == nil {
-			sandboxCfg = &cfg.Sandbox
-		}
-		cConfig = createContainerConfig(sandboxCfg, options.ResourceLimit, options.Debug)
-	}
-
 	// Start performance profiling
 	StartProfiling()
 	defer func() {
@@ -87,81 +46,7 @@ func RunWithOptions(agent string, testcase string, options RunOptions) error {
 	}
 
 	// Default to original behavior for backward compatibility
-	return Run(agent, cConfig)
-}
-
-// RunCleanup stops and removes all tracked debug containers and cleans artifacts
-func RunCleanup() error {
-	fmt.Println("🧹 Starting cleanup of debug containers and artifacts...")
-
-	// Initialize registry to get tracked containers
-	registry, err := sandbox.NewRegistry()
-	if err != nil {
-		return fmt.Errorf("failed to access container registry: %w", err)
-	}
-
-	containers := registry.List()
-	if len(containers) == 0 {
-		fmt.Println("✅ No debug containers found to cleanup")
-		return nil
-	}
-
-	fmt.Printf("📋 Found %d tracked containers to cleanup\n", len(containers))
-
-	// Connect to Docker
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
-	if err != nil {
-		return fmt.Errorf("failed to connect to Docker: %w", err)
-	}
-	defer cli.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	// Cleanup containers
-	cleaned := 0
-	for _, entry := range containers {
-		shortID := entry.ContainerID
-		if len(shortID) > 7 {
-			shortID = shortID[:7]
-		}
-
-		fmt.Printf("🐳 Stopping container %s (%s)... ", shortID, entry.Name)
-
-		// Stop container
-		timeout := 10 * time.Second
-		timeoutSec := int(timeout.Seconds())
-		if err := cli.ContainerStop(ctx, entry.ContainerID, container.StopOptions{Timeout: &timeoutSec}); err != nil {
-			fmt.Printf("⚠️ Stop failed: %v\n", err)
-		}
-
-		// Remove container
-		if err := cli.ContainerRemove(ctx, entry.ContainerID, container.RemoveOptions{Force: true}); err != nil {
-			fmt.Printf("⚠️ Remove failed: %v\n", err)
-		} else {
-			fmt.Println("✅ Removed")
-			cleaned++
-		}
-
-		// Remove from registry
-		registry.Remove(entry.ContainerID)
-	}
-
-	// Clear the registry
-	if err := registry.Clear(); err != nil {
-		fmt.Printf("⚠️ Warning: Failed to clear registry: %v\n", err)
-	}
-
-	fmt.Printf("✅ Cleanup complete: %d/%d containers removed\n", cleaned, len(containers))
-
-	// Prompt about Dockerfile preservation
-	dockerfileDir := filepath.Join(".howmux", "evals", "tmp", "dockerfiles")
-	if entries, err := os.ReadDir(dockerfileDir); err == nil && len(entries) > 0 {
-		fmt.Printf("📁 Found %d preserved Dockerfiles in %s\n", len(entries), dockerfileDir)
-		fmt.Println("💡 These are preserved for debugging. Remove manually if no longer needed.")
-	}
-
-	return nil
+	return Run(agent)
 }
 
 // listTestCases displays available test cases for an agent.
@@ -227,8 +112,8 @@ func runSingleTestCase(agent string, testcase string) error {
 		return fmt.Errorf("failed to create results directory: %w", err)
 	}
 
-	// Run evaluation on single test case (without container config for now)
-	result := evaluate(*rubric, []TestCase{*targetCase}, gitHash, os.Stdout, nil)
+	// Run evaluation on single test case
+	result := evaluate(*rubric, []TestCase{*targetCase}, gitHash, os.Stdout)
 
 	// Write result file
 	resultFile := filepath.Join(resultsDir, agent+".json")
@@ -263,57 +148,11 @@ func runSingleTestCase(agent string, testcase string) error {
 }
 
 // Run executes the evaluation for all agents (or a specific agent) and writes results.
-func Run(agent string, cConfig *ContainerConfig) error {
+func Run(agent string) error {
 	// Start performance profiling
 	StartProfiling()
 
 	fmt.Println("🚀 Starting evaluation framework...")
-
-	// Task 4: Build images once at evaluation start if using containers
-	if cConfig != nil {
-		// Generate evaluation ID for image scoping
-		gitHash, err := getGitShortHash()
-		if err != nil {
-			return fmt.Errorf("failed to get git hash: %w", err)
-		}
-		timestamp := generateTimestampPrefix()
-		evaluationID := fmt.Sprintf("%s-%s", timestamp, gitHash)
-
-		fmt.Println("🔨 Building evaluation images...")
-		imageManager, err := sandbox.NewImageManager(evaluationID, cConfig.Debug)
-		if err != nil {
-			return fmt.Errorf("failed to create image manager: %w", err)
-		}
-		defer func() {
-			if err := imageManager.Cleanup(context.Background()); err != nil {
-				fmt.Printf("⚠️ Warning: Failed to cleanup images: %v\n", err)
-			}
-			imageManager.Close()
-		}()
-
-		// Pre-build the image for this platform
-		buildStart := time.Now()
-		c, err := sandbox.NewContainerWithDebug("", cConfig.Debug)
-		if err != nil {
-			return fmt.Errorf("creating container for image build: %w", err)
-		}
-		defer c.Close()
-
-		dockerfile, err := c.GenerateDockerfileWithPlatform(cConfig.WorkspaceDir, cConfig.Platform)
-		if err != nil {
-			return fmt.Errorf("generating dockerfile: %w", err)
-		}
-
-		imageName, err := imageManager.BuildForEvaluation(context.Background(), dockerfile, cConfig.Platform)
-		if err != nil {
-			return fmt.Errorf("building evaluation image: %w", err)
-		}
-		fmt.Printf("✅ Images built: %v\n", time.Since(buildStart))
-
-		// Add image manager and cached image name to config for test cases
-		cConfig.ImageManager = imageManager
-		cConfig.CachedImageName = imageName
-	}
 
 	// Measure startup overhead
 	fmt.Print("📊 Measuring kiro-cli startup overhead...")
@@ -358,7 +197,7 @@ func Run(agent string, cConfig *ContainerConfig) error {
 	}
 
 	// Use progressive evaluation
-	err = runProgressiveEvaluation(agent, resultsDir, false, cConfig)
+	err = runProgressiveEvaluation(agent, resultsDir, false)
 
 	// Generate performance analysis
 	profile := GenerateProfile()
@@ -374,7 +213,7 @@ func Run(agent string, cConfig *ContainerConfig) error {
 	return err
 }
 
-func evaluate(rubric Rubric, cases []TestCase, gitHash string, out io.Writer, cConfig *ContainerConfig) AgentResult {
+func evaluate(rubric Rubric, cases []TestCase, gitHash string, out io.Writer) AgentResult {
 	result := AgentResult{
 		Agent:   rubric.Agent,
 		GitHash: gitHash,
@@ -394,7 +233,7 @@ func evaluate(rubric Rubric, cases []TestCase, gitHash string, out io.Writer, cC
 			cr.ActualOutput = ""
 		} else {
 			fmt.Fprintf(out, " → running agent...")
-			actualOutput, cost, errorContext, externalCalls, err := invokeAgent(rubric.Agent, prompt, cConfig)
+			actualOutput, cost, errorContext, externalCalls, err := invokeAgent(rubric.Agent, prompt)
 			if err != nil {
 				fmt.Fprintf(out, " ❌ (agent failed)\n")
 				fmt.Fprintf(out, "      Error: %v\n", err)
@@ -579,317 +418,8 @@ func assemblePrompt(setup []SetupEntry, input string) (string, error) {
 }
 
 // invokeAgent executes kiro-cli with the given agent and prompt, with timeout support
-func invokeAgent(agent, prompt string, cConfig *ContainerConfig) (string, CostInfo, *ErrorContext, []ExternalCall, error) {
-	// Use container execution if configured
-	if cConfig != nil {
-		output, cost, errCtx, err := invokeAgentInContainer(agent, prompt, cConfig)
-		return output, cost, errCtx, nil, err // Container mode doesn't record external calls yet
-	}
-
+func invokeAgent(agent, prompt string) (string, CostInfo, *ErrorContext, []ExternalCall, error) {
 	return invokeAgentNative(agent, prompt)
-}
-
-// createContainerConfig builds container configuration from CLI options
-func createContainerConfig(sandboxCfg *config.SandboxConfig, resourceLimits map[string]string, debug bool) *ContainerConfig {
-	// Detect host architecture for platform-aware container creation
-	platform, err := sandbox.DetectHostArchitecture()
-	if err != nil {
-		// Fallback to amd64 if detection fails
-		platform = "linux/amd64"
-	}
-
-	// Use config values with fallbacks to defaults
-	workspaceDir := "/workspace"
-	cpuCores := 1.0
-	memoryMB := 1024
-	timeout := 5 * time.Minute
-
-	if sandboxCfg != nil {
-		if sandboxCfg.WorkspaceDir != "" {
-			workspaceDir = sandboxCfg.WorkspaceDir
-		}
-		if sandboxCfg.CPUCores > 0 {
-			cpuCores = sandboxCfg.CPUCores
-		}
-		if sandboxCfg.MemoryMB > 0 {
-			memoryMB = sandboxCfg.MemoryMB
-		}
-		if sandboxCfg.Timeout > 0 {
-			timeout = sandboxCfg.Timeout
-		}
-	}
-
-	config := &ContainerConfig{
-		WorkspaceDir: workspaceDir,
-		MockGitHub:   true,
-		Platform:     platform,
-		Debug:        debug,
-		ImageManager: nil,
-		Environment: map[string]string{
-			"KIRO_CLI_DISABLE_TELEMETRY": "1",
-		},
-		ResourceLimits: sandbox.ResourceLimits{
-			CPUQuota: int64(cpuCores * 1000000),     // Convert cores to microseconds
-			Memory:   int64(memoryMB * 1024 * 1024), // Convert MB to bytes
-			Timeout:  timeout,
-		},
-	}
-
-	// Apply resource limit overrides (only positive values accepted)
-	if resourceLimits != nil {
-		if cpu := resourceLimits["cpu"]; cpu != "" {
-			if cpuFloat, err := strconv.ParseFloat(cpu, 64); err == nil && cpuFloat > 0 {
-				config.ResourceLimits.CPUQuota = int64(cpuFloat * 1000000)
-			}
-		}
-		if memory := resourceLimits["memory"]; memory != "" {
-			if memInt, err := strconv.ParseInt(memory, 10, 64); err == nil && memInt >= 256*1024*1024 {
-				config.ResourceLimits.Memory = memInt
-			}
-		}
-		if timeout := resourceLimits["timeout"]; timeout != "" {
-			if timeoutDur, err := time.ParseDuration(timeout); err == nil && timeoutDur > 0 {
-				config.ResourceLimits.Timeout = timeoutDur
-			}
-		}
-	}
-
-	return config
-}
-
-// invokeAgentInContainer executes kiro-cli in a Docker container with cached images
-func invokeAgentInContainer(agent, prompt string, cConfig *ContainerConfig) (string, CostInfo, *ErrorContext, error) {
-	ctx := context.Background()
-
-	// Host directory that produced artifacts are copied OUT to after the turn.
-	// The container itself writes to its own tmpfs /workspace (owned by the
-	// sandbox user); we stream artifacts out to this host path so the existing
-	// collectArtifacts (which reads a host filesystem) can score the real
-	// deliverable — the sandbox-parity goal of issue #50. A host bind-mount was
-	// rejected: it collides with the tmpfs at /workspace and, being host-owned,
-	// is unwritable by the container's non-root sandbox user.
-	hostArtifactDir, err := os.MkdirTemp("", "howmux-eval-sandbox-*")
-	if err != nil {
-		return "", CostInfo{}, nil, fmt.Errorf("creating host artifact dir: %w", err)
-	}
-	defer os.RemoveAll(hostArtifactDir)
-
-	// Resolve the project's .kiro so it can be provisioned into the container
-	// after start. Without .kiro/agents/ in the container's cwd, kiro-cli
-	// silently falls back to a default client and grades the wrong agent (the
-	// silent-fallback failure eliminated for the native path in #37/#39/#41).
-	srcKiro := ""
-	if repoRoot, wdErr := os.Getwd(); wdErr == nil {
-		candidate := filepath.Join(repoRoot, ".kiro")
-		if _, statErr := os.Stat(candidate); statErr == nil {
-			srcKiro = candidate
-		}
-	}
-
-	// Pre-flight guard, mirroring the native path's ValidateAgentResolvable:
-	// fail loud up front if the agent can't be resolved from the .kiro we're
-	// about to provision, rather than building a container and silently scoring
-	// a fallback client. Validating the source tree here is equivalent to
-	// validating the container's cwd, since that cwd is populated from srcKiro.
-	if srcKiro == "" {
-		errCtx := &ErrorContext{
-			Command:    fmt.Sprintf("kiro-cli chat --agent %s", agent),
-			WorkingDir: cConfig.WorkspaceDir,
-			Stderr:     "no .kiro found in working directory to provision into the sandbox",
-			ExitCode:   1,
-		}
-		return "", CostInfo{}, errCtx, fmt.Errorf("agent resolution failed: no .kiro to provision into sandbox for agent %q", agent)
-	}
-	if err := acp.ValidateAgentResolvable(filepath.Dir(srcKiro), agent); err != nil {
-		errCtx := &ErrorContext{
-			Command:    fmt.Sprintf("kiro-cli chat --agent %s", agent),
-			WorkingDir: cConfig.WorkspaceDir,
-			Stderr:     err.Error(),
-			ExitCode:   1,
-		}
-		return "", CostInfo{}, errCtx, fmt.Errorf("agent resolution failed: %w", err)
-	}
-
-	c, err := sandbox.NewContainerWithDebug("", cConfig.Debug)
-	if err != nil {
-		return "", CostInfo{}, nil, fmt.Errorf("creating container: %w", err)
-	}
-	defer c.Close()
-
-	// Use pre-built image or build one individually
-	var customImageName string
-	if cConfig.CachedImageName != "" {
-		customImageName = cConfig.CachedImageName
-	} else {
-		// Fallback to individual build for compatibility
-		buildCtx, buildCancel := context.WithTimeout(ctx, 5*time.Minute)
-		defer buildCancel()
-
-		buildStart := time.Now()
-		dockerfile, err := c.GenerateDockerfileWithPlatform(cConfig.WorkspaceDir, cConfig.Platform)
-		if err != nil {
-			return "", CostInfo{}, nil, fmt.Errorf("generating dockerfile: %w", err)
-		}
-
-		customImageName = c.GetCustomImageName(cConfig.Platform)
-		if err := c.BuildImageFromDockerfile(buildCtx, dockerfile, customImageName, cConfig.Platform); err != nil {
-			return "", CostInfo{}, nil, fmt.Errorf("building custom image: %w", err)
-		}
-		fmt.Printf("  Image build: %v\n", time.Since(buildStart))
-
-		// Clean up image after use (preserve in debug mode)
-		if !cConfig.Debug {
-			defer func() {
-				if _, err := c.RemoveImage(ctx, customImageName); err != nil {
-					fmt.Printf("⚠️ Warning: Failed to remove custom image %s: %v\n", customImageName, err)
-				}
-			}()
-		}
-	}
-
-	// Container startup (same as before)
-	createStart := time.Now()
-
-	hostConfig := sandbox.NewHostConfigWithLimits(cConfig.ResourceLimits)
-
-	// Configure environment variables from host system and container config
-	envVars := []string{
-		"KIRO_CLI_DISABLE_TELEMETRY=1",
-	}
-	for key, value := range cConfig.Environment {
-		envVars = append(envVars, fmt.Sprintf("%s=%s", key, value))
-	}
-
-	containerCfg := &container.Config{
-		Image:      customImageName,
-		Cmd:        []string{"sleep", "3600"},
-		Env:        envVars,
-		WorkingDir: cConfig.WorkspaceDir,
-	}
-
-	// Use platform-aware container creation
-	if err := c.CreateWithPlatform(ctx, containerCfg, hostConfig, cConfig.Platform); err != nil {
-		return "", CostInfo{}, nil, fmt.Errorf("creating container: %w", err)
-	}
-	containerFailed := false
-	defer func() {
-		c.CleanupWithDebugInfo(ctx, containerFailed)
-	}()
-
-	if err := c.Start(ctx); err != nil {
-		return "", CostInfo{}, nil, fmt.Errorf("starting container: %w", err)
-	}
-
-	c.LogStartup(cConfig.ResourceLimits)
-	fmt.Printf("  Container startup: %v\n", time.Since(createStart))
-
-	// Debug mode: Save container registry information
-	if cConfig.Debug {
-		shortID, imageName := c.GetContainerInfo()
-		if err := saveDebugContainerInfo(shortID, imageName, customImageName, cConfig.Platform, agent); err != nil {
-			fmt.Printf("⚠️ Warning: Failed to save debug container info: %v\n", err)
-		}
-	}
-
-	// Container setup (same as before)
-	setupStart := time.Now()
-
-	// Verify kiro-cli is pre-installed and functional
-	if err := c.ValidateKiroCLI(ctx, cConfig.Platform); err != nil {
-		return "", CostInfo{}, nil, fmt.Errorf("validating kiro-cli: %w", err)
-	}
-
-	// Provision the project's .kiro into the container workspace so
-	// `kiro-cli --agent <name>` resolves the real agent (agents/skills live under
-	// <cwd>/.kiro). We copy AFTER start into the container-owned tmpfs /workspace
-	// (writable by the sandbox user) rather than bind-mounting a host dir, which
-	// would collide with that tmpfs and be unwritable by the non-root user. This
-	// must run before SetupGitHubMocking, which overwrites .kiro/skills/github-cli.
-	if err := c.CopyTreeTo(ctx, srcKiro, cConfig.WorkspaceDir, ".kiro"); err != nil {
-		return "", CostInfo{}, nil, fmt.Errorf("provisioning .kiro into container: %w", err)
-	}
-
-	// Setup GitHub mocking if enabled
-	if cConfig.MockGitHub {
-		if err := c.SetupGitHubMocking(ctx, cConfig.WorkspaceDir); err != nil {
-			return "", CostInfo{}, nil, fmt.Errorf("setting up GitHub mocking: %w", err)
-		}
-
-		if err := c.ConfigureMockGitHubPath(ctx); err != nil {
-			return "", CostInfo{}, nil, fmt.Errorf("configuring mock GitHub PATH: %w", err)
-		}
-	}
-
-	fmt.Printf("  Container setup: %v\n", time.Since(setupStart))
-
-	// Command execution (same as before)
-	timeoutCtx, cancel := context.WithTimeout(ctx, cConfig.ResourceLimits.Timeout)
-	defer cancel()
-
-	cmd := []string{"kiro-cli", "chat", "--agent", agent, "--no-interactive", "--trust-all-tools"}
-
-	executionStart := time.Now()
-	output, err := c.ExecWithOutput(timeoutCtx, cmd)
-	executionDuration := time.Since(executionStart)
-
-	if err != nil {
-		// Enhanced error context with container information
-		shortID, imageName := c.GetContainerInfo()
-
-		errorContext := &ErrorContext{
-			Command:        strings.Join(cmd, " "),
-			WorkingDir:     cConfig.WorkspaceDir,
-			Environment:    cConfig.Environment,
-			Stderr:         err.Error(),
-			ContainerID:    shortID,
-			ContainerImage: imageName,
-			Platform:       cConfig.Platform,
-			DockerError:    err.Error(),
-		}
-
-		// In debug mode, preserve the failed container
-		if cConfig.Debug {
-			containerFailed = true
-		}
-
-		// Provide actionable error messages for common container issues
-		if strings.Contains(err.Error(), "timeout") || timeoutCtx.Err() == context.DeadlineExceeded {
-			return "", CostInfo{}, errorContext, fmt.Errorf("⏱️ Container execution timeout after %v. Consider increasing --resource-limit timeout=", cConfig.ResourceLimits.Timeout)
-		}
-		if strings.Contains(err.Error(), "out of memory") || strings.Contains(err.Error(), "OOMKilled") {
-			memoryMB := cConfig.ResourceLimits.Memory / (1024 * 1024)
-			return "", CostInfo{}, errorContext, fmt.Errorf("💾 Container ran out of memory (%dMB limit). Consider increasing --resource-limit memory=", memoryMB)
-		}
-		if strings.Contains(err.Error(), "no such image") || strings.Contains(err.Error(), "pull access denied") {
-			return "", CostInfo{}, errorContext, fmt.Errorf("❌ Failed to pull image %s: %v. Check internet connection", imageName, err)
-		}
-
-		return "", CostInfo{}, errorContext, fmt.Errorf("container execution failed: %w", err)
-	}
-
-	fmt.Printf("  Execution time: %v\n", executionDuration)
-
-	result := stripANSISequences(output)
-
-	// Copy the produced artifacts OUT of the container onto a host path, then run
-	// collectArtifacts against that host copy — matching what the native path
-	// scores. The agent wrote to the container's /workspace; CopyFromContainer
-	// streams that tree out to hostArtifactDir/<basename>, which we then hand to
-	// the same per-agent collector the native path uses. A missing path is not an
-	// error (the agent may have produced nothing), yielding empty artifact output.
-	if err := c.CopyFromContainer(ctx, cConfig.WorkspaceDir, hostArtifactDir); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  Warning: failed to copy artifacts out of sandbox (artifact will be empty): %v\n", err)
-	} else {
-		collectedRoot := filepath.Join(hostArtifactDir, filepath.Base(cConfig.WorkspaceDir))
-		artifactContent := collectArtifacts(agent, collectedRoot)
-		if artifactContent != "" {
-			result += artifactContent
-		}
-	}
-
-	cost := estimateCost(prompt, result)
-
-	return result, cost, nil, nil
 }
 
 // invokeAgentNative executes kiro-cli via ACP protocol
@@ -1116,11 +646,6 @@ func invokeAgentNative(agent, prompt string) (string, CostInfo, *ErrorContext, [
 	// ACP: actualOutput contains only narration; artifacts arrive as ToolCall events
 	// Solution: Read artifacts from workspace filesystem and append to actualOutput
 	// so rubric grading operates on the real deliverable, not just narration
-	//
-	// KNOWN GAP: this is wired into the native path only. The sandbox path
-	// (invokeAgentInContainer) writes artifacts inside the container, which is
-	// not host-visible, so sandboxed runs still score narration only. Tracked as
-	// a follow-up to issue #42.
 	artifactContent := collectArtifacts(agent, workspaceDir)
 	if artifactContent != "" {
 		result += artifactContent
@@ -1559,15 +1084,15 @@ func runWithResume(agent string) error {
 
 	if latestDir == "" {
 		fmt.Println("📄 No incomplete evaluations found, starting fresh...")
-		return Run(agent, nil)
+		return Run(agent)
 	}
 
 	fmt.Printf("📂 Resuming evaluation from: %s\n", latestDir)
-	return runProgressiveEvaluation(agent, latestDir, true, nil)
+	return runProgressiveEvaluation(agent, latestDir, true)
 }
 
 // runProgressiveEvaluation runs evaluation with progressive result saving.
-func runProgressiveEvaluation(agent, resultsDir string, isResume bool, cConfig *ContainerConfig) error {
+func runProgressiveEvaluation(agent, resultsDir string, isResume bool) error {
 	gitHash, err := getGitShortHash()
 	if err != nil {
 		return fmt.Errorf("failed to get git hash: %w", err)
@@ -1598,7 +1123,7 @@ func runProgressiveEvaluation(agent, resultsDir string, isResume bool, cConfig *
 			continue
 		}
 
-		result := evaluateProgressive(rubric, cases, gitHash, os.Stdout, resultsDir, isResume, cConfig)
+		result := evaluateProgressive(rubric, cases, gitHash, os.Stdout, resultsDir, isResume)
 
 		// Final save
 		if err := saveProgressiveResult(resultsDir, rubric.Agent, result, gitHash); err != nil {
@@ -1618,7 +1143,7 @@ func runProgressiveEvaluation(agent, resultsDir string, isResume bool, cConfig *
 }
 
 // evaluateProgressive runs evaluation with progressive result saving after each test case.
-func evaluateProgressive(rubric Rubric, cases []TestCase, gitHash string, out io.Writer, resultsDir string, isResume bool, cConfig *ContainerConfig) AgentResult {
+func evaluateProgressive(rubric Rubric, cases []TestCase, gitHash string, out io.Writer, resultsDir string, isResume bool) AgentResult {
 	result := AgentResult{
 		Agent:   rubric.Agent,
 		GitHash: gitHash,
@@ -1656,7 +1181,7 @@ func evaluateProgressive(rubric Rubric, cases []TestCase, gitHash string, out io
 			cr.ActualOutput = ""
 		} else {
 			fmt.Fprintf(out, " → running agent...")
-			actualOutput, cost, errorContext, externalCalls, err := invokeAgent(rubric.Agent, prompt, cConfig)
+			actualOutput, cost, errorContext, externalCalls, err := invokeAgent(rubric.Agent, prompt)
 			if err != nil {
 				fmt.Fprintf(out, " ❌ (agent failed)\n")
 				fmt.Fprintf(out, "      Error: %v\n", err)
@@ -2061,46 +1586,5 @@ func RunPerformanceInvestigation(agent string) error {
 
 	fmt.Printf("\n📂 Detailed report saved to: %s/performance.json\n", resultsDir)
 
-	return nil
-}
-
-// saveDebugContainerInfo saves container registry information for debug mode
-func saveDebugContainerInfo(containerID, imageName, customImageName, platform, agent string) error {
-	debugDir := filepath.Join(".howmux", "evals", "tmp", "debug")
-	if err := os.MkdirAll(debugDir, 0755); err != nil {
-		return fmt.Errorf("creating debug directory: %w", err)
-	}
-
-	// Create container info file
-	timestamp := time.Now().Format("20060102-150405")
-
-	infoFile := filepath.Join(debugDir, fmt.Sprintf("container-%s-%s.json", timestamp, containerID))
-
-	info := map[string]interface{}{
-		"container_id": containerID,
-		"short_id":     containerID,
-		"base_image":   imageName,
-		"custom_image": customImageName,
-		"platform":     platform,
-		"agent":        agent,
-		"timestamp":    time.Now().Format(time.RFC3339),
-		"debug_commands": map[string]string{
-			"inspect":    fmt.Sprintf("docker inspect %s", containerID),
-			"logs":       fmt.Sprintf("docker logs %s", containerID),
-			"exec":       fmt.Sprintf("docker exec -it %s /bin/bash", containerID),
-			"image_info": fmt.Sprintf("docker image inspect %s", customImageName),
-		},
-	}
-
-	data, err := json.MarshalIndent(info, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshaling container info: %w", err)
-	}
-
-	if err := os.WriteFile(infoFile, data, 0644); err != nil {
-		return fmt.Errorf("writing container info to %s: %w", infoFile, err)
-	}
-
-	fmt.Printf("🔧 Debug: Container info saved to %s\n", infoFile)
 	return nil
 }
