@@ -185,6 +185,7 @@ type fakeV3Agent struct {
 	newSessionResp acp.NewSessionResponse
 	setResp        acp.SetSessionConfigOptionResponse
 	setErr         error
+	stopReason     acp.StopReason // Prompt's stop reason; empty means end_turn
 
 	mu       sync.Mutex
 	setCalls []acp.SetSessionConfigOptionValueId
@@ -210,6 +211,9 @@ func (f *fakeV3Agent) NewSession(context.Context, acp.NewSessionRequest) (acp.Ne
 	return f.newSessionResp, nil
 }
 func (f *fakeV3Agent) Prompt(context.Context, acp.PromptRequest) (acp.PromptResponse, error) {
+	if f.stopReason != "" {
+		return acp.PromptResponse{StopReason: f.stopReason}, nil
+	}
 	return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, nil
 }
 func (f *fakeV3Agent) ResumeSession(context.Context, acp.ResumeSessionRequest) (acp.ResumeSessionResponse, error) {
@@ -238,10 +242,17 @@ var _ acp.Agent = (*fakeV3Agent)(nil)
 // connectFake wires a real SDK client connection to the fake agent over pipes.
 func connectFake(t *testing.T, agent acp.Agent) *acp.ClientSideConnection {
 	t.Helper()
+	return connectFakeWith(t, agent, &KiroClient{autoApprove: true})
+}
+
+// connectFakeWith is connectFake with a caller-supplied client handler, for
+// tests that need the KiroACPClient and the connection to share it.
+func connectFakeWith(t *testing.T, agent acp.Agent, client *KiroClient) *acp.ClientSideConnection {
+	t.Helper()
 	c2aR, c2aW := io.Pipe() // client -> agent
 	a2cR, a2cW := io.Pipe() // agent -> client
 	_ = acp.NewAgentSideConnection(agent, a2cW, c2aR)
-	conn := acp.NewClientSideConnection(&KiroClient{autoApprove: true}, c2aW, a2cR)
+	conn := acp.NewClientSideConnection(client, c2aW, a2cR)
 	t.Cleanup(func() {
 		c2aW.Close()
 		a2cW.Close()
@@ -422,5 +433,86 @@ func TestSelectOffers_Grouped(t *testing.T) {
 	}
 	if selectOffers(opt, "missing") {
 		t.Error("missing should not be offered")
+	}
+}
+
+// streamWithStopReason runs a full StreamMessage turn against the fake agent
+// returning the given stop reason, and returns every event received.
+func streamWithStopReason(t *testing.T, reason acp.StopReason) []*StreamingResponse {
+	t.Helper()
+	kc := &KiroClient{autoApprove: true}
+	conn := connectFakeWith(t, &fakeV3Agent{stopReason: reason}, kc)
+	c := &KiroACPClient{
+		config:    &ConnectionConfig{Agent: "planner", Cwd: "/tmp"},
+		engine:    AgentEngineV2,
+		client:    kc,
+		conn:      conn,
+		connected: true,
+		sessionID: "sess-1",
+	}
+	ch, err := c.StreamMessage(ctxT(t), &MessageRequest{Message: "hi", Streaming: true})
+	if err != nil {
+		t.Fatalf("StreamMessage: %v", err)
+	}
+	var events []*StreamingResponse
+	for ev := range ch {
+		events = append(events, ev)
+	}
+	return events
+}
+
+func terminalEvents(events []*StreamingResponse) []*StreamingResponse {
+	var out []*StreamingResponse
+	for _, ev := range events {
+		if ev.Type == "done" || ev.Type == "error" {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+func TestStreamMessage_EndTurnIsDone(t *testing.T) {
+	term := terminalEvents(streamWithStopReason(t, acp.StopReasonEndTurn))
+	if len(term) != 1 || term[0].Type != "done" {
+		t.Fatalf("terminal events = %+v, want exactly one done", term)
+	}
+	if term[0].StopReason != "end_turn" {
+		t.Errorf("StopReason = %q, want end_turn", term[0].StopReason)
+	}
+}
+
+// TestStreamMessage_AbnormalStopIsError: refusal, truncation, turn limits and
+// cancellation must end the stream with a single "error" (never "done"), so
+// consumers such as the manager (which sets exit 0 on "done") cannot report
+// an unfinished turn as success.
+func TestStreamMessage_AbnormalStopIsError(t *testing.T) {
+	for _, reason := range []acp.StopReason{
+		acp.StopReasonRefusal, acp.StopReasonMaxTokens, acp.StopReasonMaxTurnRequests, acp.StopReasonCancelled, "something_new",
+	} {
+		t.Run(string(reason), func(t *testing.T) {
+			term := terminalEvents(streamWithStopReason(t, reason))
+			if len(term) != 1 || term[0].Type != "error" {
+				t.Fatalf("terminal events = %+v, want exactly one error", term)
+			}
+			if term[0].StopReason != string(reason) {
+				t.Errorf("StopReason = %q, want %q", term[0].StopReason, reason)
+			}
+			if !strings.Contains(term[0].Error, ErrAbnormalStop.Error()) {
+				t.Errorf("Error = %q, want it to mention %q", term[0].Error, ErrAbnormalStop)
+			}
+		})
+	}
+}
+
+func TestStopReasonError(t *testing.T) {
+	for _, ok := range []acp.StopReason{acp.StopReasonEndTurn, ""} {
+		if err := stopReasonError(ok); err != nil {
+			t.Errorf("stopReasonError(%q) = %v, want nil", ok, err)
+		}
+	}
+	for _, bad := range []acp.StopReason{acp.StopReasonRefusal, acp.StopReasonMaxTokens, acp.StopReasonMaxTurnRequests, acp.StopReasonCancelled, "x"} {
+		if err := stopReasonError(bad); !errors.Is(err, ErrAbnormalStop) {
+			t.Errorf("stopReasonError(%q) = %v, want ErrAbnormalStop", bad, err)
+		}
 	}
 }
