@@ -990,6 +990,9 @@ func invokeAgentNative(agent, prompt string) (string, CostInfo, *ErrorContext, [
 		ConnectionTimeout: 30 * time.Second, // Standard connection timeout
 		KiroCLIPath:       "kiro-cli",
 	}
+	// Human-readable launch command for error reports; matches what Connect
+	// actually runs for the resolved engine.
+	launchCmd := acp.DescribeLaunch(config.KiroCLIPath, config.AgentEngine, agent)
 
 	// Pre-flight: fail loud if the agent can't be resolved. Over ACP, kiro-cli
 	// silently falls back to a default client for an unknown agent with no
@@ -997,7 +1000,7 @@ func invokeAgentNative(agent, prompt string) (string, CostInfo, *ErrorContext, [
 	// result (the trustworthiness bug from #37). Check the config up front.
 	if err := acp.ValidateAgentResolvable(workspaceDir, agent); err != nil {
 		errCtx := &ErrorContext{
-			Command:     fmt.Sprintf("kiro-cli acp --agent %s", agent),
+			Command:     launchCmd,
 			WorkingDir:  workspaceDir,
 			Environment: envVars,
 			Stderr:      err.Error(),
@@ -1021,7 +1024,7 @@ func invokeAgentNative(agent, prompt string) (string, CostInfo, *ErrorContext, [
 		// General connection failure (agent resolvability was already checked
 		// up front via ValidateAgentResolvable).
 		errCtx := &ErrorContext{
-			Command:     fmt.Sprintf("kiro-cli acp --agent %s", agent),
+			Command:     launchCmd,
 			WorkingDir:  workspaceDir,
 			Environment: envVars,
 			Stderr:      err.Error(),
@@ -1047,7 +1050,7 @@ func invokeAgentNative(agent, prompt string) (string, CostInfo, *ErrorContext, [
 		}
 
 		errCtx := &ErrorContext{
-			Command:     fmt.Sprintf("kiro-cli acp --agent %s", agent),
+			Command:     launchCmd,
 			WorkingDir:  workspaceDir,
 			Environment: envVars,
 			Stderr:      err.Error(),
@@ -1081,7 +1084,7 @@ func invokeAgentNative(agent, prompt string) (string, CostInfo, *ErrorContext, [
 	if ctx.Err() == context.DeadlineExceeded {
 		stderrMsg := strings.Join(errorMessages, "\n")
 		errCtx := &ErrorContext{
-			Command:     fmt.Sprintf("kiro-cli acp --agent %s", agent),
+			Command:     launchCmd,
 			WorkingDir:  workspaceDir,
 			Environment: envVars,
 			Stderr:      fmt.Sprintf("timeout after %v\n%s", timeout, stderrMsg),
@@ -1093,7 +1096,7 @@ func invokeAgentNative(agent, prompt string) (string, CostInfo, *ErrorContext, [
 	// Create error context if there were errors
 	if len(errorMessages) > 0 {
 		errorContext = &ErrorContext{
-			Command:     fmt.Sprintf("kiro-cli acp --agent %s", agent),
+			Command:     launchCmd,
 			WorkingDir:  workspaceDir,
 			Environment: envVars,
 			Stderr:      strings.Join(errorMessages, "\n"),

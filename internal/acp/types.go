@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -109,6 +110,89 @@ type ConnectionConfig struct {
 
 	// RequestTimeout is the default timeout for requests
 	RequestTimeout time.Duration `json:"request_timeout,omitempty"`
+
+	// AgentEngine selects the kiro-cli agent engine ("v2" or "v3"). Empty means
+	// "resolve at Connect time" via ResolveAgentEngine: the
+	// HOWMUX_KIRO_AGENT_ENGINE env var, else DefaultAgentEngine. howmux always
+	// passes the resolved engine explicitly to `kiro-cli acp`, so kiro-cli's own
+	// default (which flips from v2 to v3 with CLI 3.0) never changes behavior
+	// underneath us.
+	AgentEngine string `json:"agent_engine,omitempty"`
+}
+
+// Supported kiro-cli agent engines.
+const (
+	AgentEngineV2 = "v2"
+	AgentEngineV3 = "v3"
+
+	// DefaultAgentEngine is the engine used when neither ConnectionConfig nor
+	// the environment selects one. It stays on v2 (the behavior howmux was
+	// built and verified against) until the v3 path has been exercised on real
+	// workloads; opt in with HOWMUX_KIRO_AGENT_ENGINE=v3.
+	DefaultAgentEngine = AgentEngineV2
+
+	// AgentEngineEnvVar overrides the engine for every ACP connection that does
+	// not set ConnectionConfig.AgentEngine explicitly.
+	AgentEngineEnvVar = "HOWMUX_KIRO_AGENT_ENGINE"
+)
+
+// ErrInvalidAgentEngine is returned for an engine value other than v2/v3.
+var ErrInvalidAgentEngine = errors.New(`agent engine must be "v2" or "v3"`)
+
+// ResolveAgentEngine returns the engine to launch: configured (if non-empty),
+// else the HOWMUX_KIRO_AGENT_ENGINE env var (if non-empty), else
+// DefaultAgentEngine. Unknown values are rejected rather than passed through,
+// so a typo fails loud instead of handing kiro-cli an engine it may interpret
+// differently.
+func ResolveAgentEngine(configured string) (string, error) {
+	engine := strings.ToLower(strings.TrimSpace(configured))
+	if engine == "" {
+		engine = strings.ToLower(strings.TrimSpace(os.Getenv(AgentEngineEnvVar)))
+	}
+	if engine == "" {
+		engine = DefaultAgentEngine
+	}
+	switch engine {
+	case AgentEngineV2, AgentEngineV3:
+		return engine, nil
+	default:
+		return "", fmt.Errorf("%w (got %q)", ErrInvalidAgentEngine, engine)
+	}
+}
+
+// acpLaunchArgs returns the `kiro-cli` argv for starting the ACP server.
+//
+//   - v2: `acp --agent-engine v2 --agent <agent>` — the agent is chosen at
+//     launch, as before.
+//   - v3: `acp --agent-engine v3` — the v3 engine rejects --agent ("not
+//     supported with --agent-engine=v3") and exits before initialize, so the
+//     agent is selected per session instead (see selectSessionAgent).
+func acpLaunchArgs(engine, agent string) []string {
+	if engine == AgentEngineV3 {
+		return []string{"acp", "--agent-engine", AgentEngineV3}
+	}
+	return []string{"acp", "--agent-engine", AgentEngineV2, "--agent", agent}
+}
+
+// DescribeLaunch returns a human-readable command line for the ACP server
+// howmux would start for agent, for error reports. It resolves the engine the
+// same way Connect does. On v3, where the agent is selected per session rather
+// than on the command line, the agent is noted after the command. An invalid
+// engine is reported inline rather than as an error, since this is for
+// diagnostics only (Connect rejects it).
+func DescribeLaunch(kiroCLIPath, configuredEngine, agent string) string {
+	if kiroCLIPath == "" {
+		kiroCLIPath = "kiro-cli"
+	}
+	engine, err := ResolveAgentEngine(configuredEngine)
+	if err != nil {
+		return fmt.Sprintf("%s acp --agent %s (%v)", kiroCLIPath, agent, err)
+	}
+	cmd := kiroCLIPath + " " + strings.Join(acpLaunchArgs(engine, agent), " ")
+	if engine == AgentEngineV3 {
+		cmd += fmt.Sprintf(" (session mode: %s)", agent)
+	}
+	return cmd
 }
 
 // Client defines the interface for ACP client operations
@@ -208,6 +292,12 @@ func ValidateConnectionConfig(config *ConnectionConfig) error {
 		return errors.New("timeouts must be positive")
 	}
 
+	if config.AgentEngine != "" {
+		if _, err := ResolveAgentEngine(config.AgentEngine); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -217,11 +307,14 @@ func ValidateConnectionConfig(config *ConnectionConfig) error {
 // ACP, kiro-cli resolves an unknown agent by silently falling back to a default
 // client — Connect and the session both succeed, and no "no agent with name"
 // signal is surfaced over the protocol or on stderr (verified against
-// kiro-cli 2.21.4). So detection after the fact is impossible; we instead fail
-// loud up front by checking the same file kiro-cli resolves the agent from
-// (<cwd>/.kiro/agents/<agent>.json). This restores the trustworthiness
-// guarantee from issue #37 in a way that does not depend on kiro-cli's ACP
-// error reporting.
+// kiro-cli 2.21.4, and again on 2.33.1 for both engines: v2 with an unknown
+// --agent, and v3 accepting session/set_config_option mode=<unknown>). So
+// detection after the fact is impossible; we instead fail loud up front by
+// checking the same file kiro-cli resolves the agent from
+// (<cwd>/.kiro/agents/<agent>.json). On the v3 engine, selectSessionAgent adds
+// a second, protocol-level check against the agents the session offers. This
+// restores the trustworthiness guarantee from issue #37 in a way that does not
+// depend on kiro-cli's ACP error reporting.
 func ValidateAgentResolvable(cwd, agent string) error {
 	if agent == "" {
 		return ErrMissingConfigAgent
