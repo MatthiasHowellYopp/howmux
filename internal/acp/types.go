@@ -84,6 +84,11 @@ type StreamingResponse struct {
 	// Error contains error information for "error" type responses
 	Error string `json:"error,omitempty"`
 
+	// StopReason is the ACP stop reason for the turn ("end_turn",
+	// "max_tokens", "refusal", ...). Set on the terminal event: "done" for
+	// end_turn, "error" for any other reason (see stopReasonError).
+	StopReason string `json:"stop_reason,omitempty"`
+
 	// Timestamp when the streaming data was received
 	Timestamp time.Time `json:"timestamp"`
 }
