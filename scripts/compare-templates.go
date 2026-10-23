@@ -284,6 +284,52 @@ func stripLocalOnly(v interface{}) {
 			obj[key] = filtered
 		}
 	}
+
+	// kiroUpgrade is metadata `kiro-cli agent upgrade` writes into universal-
+	// format configs (revision + hashes of the source and generated state). The
+	// source hash differs whenever the pre-upgrade file did (e.g. local-only
+	// entries, an empty mcpServers map), so it is never meaningful drift.
+	delete(obj, "kiroUpgrade")
+
+	// Remove permission rules the upgrader generates for local-only MCP servers
+	// (capability "mcp" whose every match is "<server>/..." for an allowlisted
+	// server). Rules that also cover a shared server are kept.
+	if perms, ok := obj["permissions"].(map[string]interface{}); ok {
+		if rules, ok := perms["rules"].([]interface{}); ok {
+			filtered := make([]interface{}, 0, len(rules))
+			for _, r := range rules {
+				if isLocalOnlyMCPRule(r) {
+					continue
+				}
+				filtered = append(filtered, r)
+			}
+			perms["rules"] = filtered
+		}
+	}
+}
+
+// isLocalOnlyMCPRule reports whether rule is an "mcp" permission rule that
+// only matches tools of allowlisted local-only MCP servers.
+func isLocalOnlyMCPRule(rule interface{}) bool {
+	r, ok := rule.(map[string]interface{})
+	if !ok || r["capability"] != "mcp" {
+		return false
+	}
+	matches, ok := r["match"].([]interface{})
+	if !ok || len(matches) == 0 {
+		return false
+	}
+	for _, m := range matches {
+		s, ok := m.(string)
+		if !ok {
+			return false
+		}
+		server, _, found := strings.Cut(s, "/")
+		if !found || !localOnlyMCPServers[server] {
+			return false
+		}
+	}
+	return true
 }
 
 func fileHash(path string) (string, error) {

@@ -15,5 +15,26 @@
   ],
   "model": "claude-sonnet-5",
   "welcomeMessage": "Documenter ready. What should I document?",
-  "mcpServers": {}
+  "mcpServers": {},
+  "permissions": {
+    "rules": [
+      {
+        "capability": "fs_read",
+        "effect": "allow"
+      },
+      {
+        "capability": "fs_write",
+        "effect": "allow"
+      },
+      {
+        "capability": "skill",
+        "effect": "allow"
+      }
+    ]
+  },
+  "kiroUpgrade": {
+    "revision": 2,
+    "fingerprint": "sha256:3aef002b14121be7681b338095259080175b2aba168abdd629f5c8232ed2838a",
+    "source": "sha256:bdee3f6b2caab5d8858dc2f3172a71a6077eb8b13134a21bb759c93c343d6d44"
+  }
 }

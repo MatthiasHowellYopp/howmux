@@ -7,8 +7,8 @@
   ],
   "tools": [
     "read",
-    "write",
-    "shell"
+    "shell",
+    "write"
   ],
   "allowedTools": [
     "read",
@@ -22,5 +22,33 @@
   },
   "model": "claude-sonnet-5",
   "welcomeMessage": "Validator ready. What should I verify?",
-  "mcpServers": {}
+  "mcpServers": {},
+  "permissions": {
+    "rules": [
+      {
+        "capability": "fs_read",
+        "effect": "allow"
+      },
+      {
+        "capability": "fs_write",
+        "effect": "allow"
+      },
+      {
+        "capability": "shell",
+        "effect": "allow"
+      },
+      {
+        "capability": "skill",
+        "effect": "allow"
+      }
+    ],
+    "policies": [
+      "read-only-shell"
+    ]
+  },
+  "kiroUpgrade": {
+    "revision": 2,
+    "fingerprint": "sha256:580aec6b856c43dd2ecbcb6f9d68a46911e892f65b89bf1cc1b7b509262b6b81",
+    "source": "sha256:252770b5d5f47492f3e16a77abc4c5b0acbb590e2918cfcc7c479e11582ac20d"
+  }
 }

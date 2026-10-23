@@ -7,8 +7,8 @@
   ],
   "tools": [
     "read",
-    "write",
-    "shell"
+    "shell",
+    "write"
   ],
   "allowedTools": [
     "read",
@@ -21,5 +21,33 @@
     }
   },
   "model": "claude-sonnet-5",
-  "welcomeMessage": "Validator ready. What should I verify?"
+  "welcomeMessage": "Validator ready. What should I verify?",
+  "permissions": {
+    "rules": [
+      {
+        "capability": "fs_read",
+        "effect": "allow"
+      },
+      {
+        "capability": "fs_write",
+        "effect": "allow"
+      },
+      {
+        "capability": "shell",
+        "effect": "allow"
+      },
+      {
+        "capability": "skill",
+        "effect": "allow"
+      }
+    ],
+    "policies": [
+      "read-only-shell"
+    ]
+  },
+  "kiroUpgrade": {
+    "revision": 2,
+    "fingerprint": "sha256:580aec6b856c43dd2ecbcb6f9d68a46911e892f65b89bf1cc1b7b509262b6b81",
+    "source": "sha256:7c5fbb4096ac51d1bab349cf13f9587b5d5b4e126c18790ae07f91998efcea67"
+  }
 }
