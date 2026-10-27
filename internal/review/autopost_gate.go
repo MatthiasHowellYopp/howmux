@@ -98,13 +98,9 @@ func EvaluateAndMaybePost(ctx context.Context, rec Record, body, verdict, headSH
 
 	// Step 0: record the inputs, so the agreement report can tie this run to
 	// the exact review generation (reviewed_sha) a human later decided on.
-	language := strings.TrimSpace(cfg.Language)
-	if language == "" {
-		language = "-"
-	}
 	recordAudit(audit, auditStep{step: "inputs", status: "pass", detail: formatKV(
 		"verdict", strings.ToUpper(strings.TrimSpace(verdict)),
-		"language", language,
+		"language", strings.TrimSpace(cfg.Language), // "" → "-" via formatKV
 		"reviewed_sha", reviewedSHA,
 		"head_sha", headSHA,
 	)})
