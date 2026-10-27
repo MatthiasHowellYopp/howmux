@@ -200,9 +200,19 @@ func TestGate_AuditorModel_UnpinnedIsNull(t *testing.T) {
 		t.Errorf("kiro calls = %+v, want one call with no model", *calls)
 	}
 	files, _ := filepath.Glob(filepath.Join(root, "audit", auditPipeline+"-*.jsonl"))
+	if len(files) != 1 {
+		t.Fatalf("audit files = %v, want 1", files)
+	}
+	var found bool
 	for _, l := range readAuditLines(t, files[0]) {
-		if l["step"] == "auditor" && l["model"] != nil {
-			t.Errorf("auditor record model = %v, want null", l["model"])
+		if l["step"] == "auditor" {
+			found = true
+			if l["model"] != nil {
+				t.Errorf("auditor record model = %v, want null", l["model"])
+			}
 		}
+	}
+	if !found {
+		t.Error("no auditor step recorded")
 	}
 }

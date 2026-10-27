@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -22,6 +23,12 @@ type LoggingConfig struct {
 	MaxFileSizeMB  int    `yaml:"max_file_size_mb"`
 	LogDir         string `yaml:"log_dir"`
 }
+
+// modelIDRe is the shape of a kiro-cli model id (e.g. claude-sonnet-5.5). It
+// rejects any whitespace and a leading "-", so a bad auditor_model fails at
+// load time instead of failing every auditor call at runtime (which would
+// quietly send every review to a human).
+var modelIDRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@-]*$`)
 
 // AutoPostConfig controls the review auto-post gate's trust scope. See
 // docs/design/review-auto-post-gate.md. The safe default is dry-run (the gate
@@ -151,7 +158,7 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("review.auto_post.mode must be one of: dry-run, own-repos, all (got %q)", cfg.Review.AutoPost.Mode)
 	}
 	cfg.Review.AutoPost.AuditorModel = strings.TrimSpace(cfg.Review.AutoPost.AuditorModel)
-	if strings.ContainsAny(cfg.Review.AutoPost.AuditorModel, " \t") {
+	if m := cfg.Review.AutoPost.AuditorModel; m != "" && !modelIDRe.MatchString(m) {
 		return nil, fmt.Errorf("review.auto_post.auditor_model must be a single model id, e.g. claude-sonnet-5.5 (got %q)", cfg.Review.AutoPost.AuditorModel)
 	}
 	if cfg.Review.AutoPost.MaxFindings < 0 {
