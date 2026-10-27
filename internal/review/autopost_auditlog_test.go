@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // readAuditLines reads a .jsonl file into a slice of generic maps so tests can
@@ -171,5 +173,14 @@ func TestAuditDir_HomeFallback(t *testing.T) {
 	want := filepath.Join("/home/tester", "PR-Review", "audit")
 	if dir != want {
 		t.Errorf("auditDir = %q, want %q", dir, want)
+	}
+}
+
+func TestTruncateDetail_RuneSafe(t *testing.T) {
+	s := strings.Repeat("→", 600)
+	got := truncateDetail(s)
+	if !utf8.ValidString(got) || utf8.RuneCountInString(got) != 500 {
+		t.Errorf("truncateDetail: valid=%v runes=%d, want valid and 500",
+			utf8.ValidString(got), utf8.RuneCountInString(got))
 	}
 }

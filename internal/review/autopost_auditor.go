@@ -44,6 +44,33 @@ const reviewAuditorAgent = "review-auditor"
 // verdictLineRe for review verdicts.
 var auditorVerdictLineRe = regexp.MustCompile(`(?im)^\s*VERDICT:\s*(POST_OK|NEEDS_HUMAN|DISCARD)\s*$`)
 
+// auditorNotesLineRe matches the persona's bare "NOTES: ..." line.
+var auditorNotesLineRe = regexp.MustCompile(`(?im)^\s*NOTES:\s*(.*?)\s*$`)
+
+// auditorRationale extracts the auditor's reasoning for the audit trail:
+// the NOTES: text first (it names the specific finding to scrutinize, so it
+// survives the 500-char audit cap), then the free-text rationale with the
+// NOTES:/VERDICT: lines removed and whitespace collapsed. Returns "" if the
+// answer carries neither.
+func auditorRationale(answer string) string {
+	var notes string
+	if m := auditorNotesLineRe.FindAllStringSubmatch(answer, -1); len(m) > 0 {
+		notes = m[len(m)-1][1]
+	}
+	rest := auditorNotesLineRe.ReplaceAllString(answer, "")
+	rest = auditorVerdictLineRe.ReplaceAllString(rest, "")
+	rest = strings.Join(strings.Fields(rest), " ")
+
+	switch {
+	case notes != "" && rest != "":
+		return "NOTES: " + notes + " | " + rest
+	case notes != "":
+		return "NOTES: " + notes
+	default:
+		return rest
+	}
+}
+
 // parseAuditorVerdict returns the value of the LAST matching VERDICT: line in
 // the agent's answer, and ok=false when no well-formed verdict line is present
 // (which the caller treats as fail-closed → NEEDS_HUMAN).
@@ -132,5 +159,9 @@ func callReviewAuditor(ctx context.Context, repo string, pr int, verdict, body, 
 		}
 	}
 
-	return auditorResult{verdict: v, meta: meta, reason: string(v)}
+	reason := auditorRationale(meta.Answer)
+	if reason == "" {
+		reason = "(auditor gave no rationale)"
+	}
+	return auditorResult{verdict: v, meta: meta, reason: reason}
 }

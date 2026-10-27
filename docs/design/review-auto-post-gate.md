@@ -102,7 +102,7 @@ Checks (all deterministic, reusing existing helpers where noted):
 | 1 | Verdict parseable | `parseVerdict(body) != "UNKNOWN"` | punch |
 | 2 | Every finding anchors to the diff | reuse `buildReviewPayload`; if any finding folded into "Additional findings (not on the diff)", fail | punch |
 | 3 | SHA not stale | spool `reviewed_sha` front-matter == current head SHA | punch |
-| 4 | Self-own-PR event legality | if verdict maps to APPROVE/REQUEST_CHANGES and the PR is the poster's own, flag (GitHub rejects it) — reuse the `isOwnPRReviewError`/`downgradeEventToComment` knowledge | punch |
+| 4 | Verdict consistency | record verdict == body VERDICT: line; APPROVE/REQUEST_CHANGES on the poster's own PR are handled by PostReview's 422 → COMMENT downgrade | punch |
 | 5 | No secrets / machine paths in body | scan body for `/Users/<name>/`, key-like tokens, `.env`-ish patterns | punch |
 | 6 | Finding-count sanity | 0 findings + APPROVE is auto-postable; an unbounded finding count (> configurable cap) punches | punch |
 

@@ -81,7 +81,7 @@ var secretPathMarkers = []*regexp.Regexp{
 //  1. verdict_parseable  — parseVerdict(body) != "UNKNOWN"
 //  2. findings_anchor     — every finding's file:line is on the diff's right side
 //  3. sha_fresh           — reviewedSHA == headSHA (review not stale)
-//  4. event_legal          — verdict's event is one we can post unsupervised
+//  4. event_legal          — record verdict agrees with the body's VERDICT: line
 //  5. no_secrets           — body contains no machine paths / key-shaped tokens
 //  6. finding_count         — finding count within [0, maxFindings]
 func evaluateAutoPostGuardrail(verdict, body, headSHA, reviewedSHA string, commentable map[string]map[int]bool, maxFindings int) gateResult {
@@ -135,19 +135,20 @@ func evaluateAutoPostGuardrail(verdict, body, headSHA, reviewedSHA string, comme
 		detail: fmt.Sprintf("reviewed_sha %q vs head %q", reviewedSHA, headSHA),
 	})
 
-	// 4. Event legality. The verdict maps to a GitHub review event via
-	// verdictEvent. COMMENT is always safe to auto-post. APPROVE and
-	// REQUEST_CHANGES are rejected by GitHub on the poster's OWN PR (handled
-	// reactively elsewhere by downgradeEventToComment), and carry more weight;
-	// for an UNSUPERVISED post we require COMMENT so the gate never
-	// auto-approves or auto-requests-changes. A stronger verdict punches to a
-	// human, who can post the APPROVE/REQUEST_CHANGES themselves.
+	// 4. Event legality. The record's verdict must agree with the body's
+	// VERDICT: line (they're posted together, so a mismatch means the spool
+	// was edited inconsistently) and map to a GitHub review event. COMMENT,
+	// APPROVE and REQUEST_CHANGES are all auto-postable; the adversarial
+	// auditor judges whether the verdict is warranted. On the poster's OWN PR,
+	// GitHub rejects APPROVE/REQUEST_CHANGES with a 422, which PostReview
+	// already handles by retrying as COMMENT (isOwnPRReviewError +
+	// downgradeEventToComment), so no own-PR check is needed here.
 	event := verdictEvent(verdict)
-	eventOK := event == "COMMENT"
+	eventOK := strings.EqualFold(strings.TrimSpace(verdict), bodyVerdict)
 	checks = append(checks, gateCheck{
 		name:   "event_legal",
 		passed: eventOK,
-		detail: fmt.Sprintf("verdict %q → event %q (only COMMENT is auto-postable)", verdict, event),
+		detail: fmt.Sprintf("record verdict %q vs body verdict %q → event %q", verdict, bodyVerdict, event),
 	})
 
 	// 5. Secret / machine-path scan over the whole body.
