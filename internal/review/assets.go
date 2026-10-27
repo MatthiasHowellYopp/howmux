@@ -26,6 +26,9 @@ func RequiredReviewAssets() []string {
 		"agent:node-reviewer",
 		"agent:java-reviewer",
 		"agent:astro-reviewer",
+		"agent:infra-reviewer",
+		"agent:docs-reviewer",
+		"agent:generic-reviewer",
 
 		// Valkey-specific reviewer agents
 		"agent:valkey-python-reviewer",
@@ -63,6 +66,8 @@ func RequiredReviewAssets() []string {
 		"skill:valkey-python-reviewer",
 		"skill:valkey-go-reviewer",
 		"skill:infra-reviewer",
+		"skill:docs-reviewer",
+		"skill:generic-reviewer",
 		"skill:humanizer",
 
 		// The review orchestrator tool itself (must be resolvable on PATH).

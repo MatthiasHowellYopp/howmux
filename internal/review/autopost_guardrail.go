@@ -84,8 +84,19 @@ var secretPathMarkers = []*regexp.Regexp{
 //  4. event_legal          — record and body verdicts agree and are a known event
 //  5. no_secrets           — body contains no machine paths / key-shaped tokens
 //  6. finding_count         — finding count within [0, maxFindings]
-func evaluateAutoPostGuardrail(verdict, body, headSHA, reviewedSHA string, commentable map[string]map[int]bool, maxFindings int) gateResult {
+func evaluateAutoPostGuardrail(verdict, body, headSHA, reviewedSHA string, commentable map[string]map[int]bool, maxFindings int, language string) gateResult {
 	var checks []gateCheck
+
+	// 0. A generic (non-specialist) review is never auto-posted. It covers a
+	// language with no dedicated reviewer, so it is lower-confidence by
+	// construction and always goes to a human, regardless of mode. Checked
+	// first so the reason is unambiguous.
+	notGeneric := !strings.EqualFold(strings.TrimSpace(language), "generic")
+	checks = append(checks, gateCheck{
+		name:   "not_generic",
+		passed: notGeneric,
+		detail: fmt.Sprintf("review language %q", language),
+	})
 
 	// 1. Verdict must be parseable. We accept the passed verdict value, but
 	// also confirm the body itself yields a non-UNKNOWN verdict, since the two

@@ -35,9 +35,33 @@ func TestEvaluateAutoPostGuardrail(t *testing.T) {
 		reviewedSHA string
 		commentable map[string]map[int]bool
 		maxFindings int
+		language    string
 		wantClean   bool
 		wantFail    string // substring of firstFailure() when !wantClean
 	}{
+		{
+			name:        "generic review is forced to a human",
+			verdict:     "COMMENT",
+			body:        cleanBody,
+			headSHA:     head,
+			reviewedSHA: head,
+			commentable: commentableFixture(),
+			maxFindings: 25,
+			language:    "generic",
+			wantClean:   false,
+			wantFail:    "not_generic",
+		},
+		{
+			name:        "specialist review passes not_generic",
+			verdict:     "COMMENT",
+			body:        cleanBody,
+			headSHA:     head,
+			reviewedSHA: head,
+			commentable: commentableFixture(),
+			maxFindings: 25,
+			language:    "go",
+			wantClean:   true,
+		},
 		{
 			name:        "clean comment review posts",
 			verdict:     "COMMENT",
@@ -212,7 +236,7 @@ func TestEvaluateAutoPostGuardrail(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := evaluateAutoPostGuardrail(tt.verdict, tt.body, tt.headSHA, tt.reviewedSHA, tt.commentable, tt.maxFindings)
+			got := evaluateAutoPostGuardrail(tt.verdict, tt.body, tt.headSHA, tt.reviewedSHA, tt.commentable, tt.maxFindings, tt.language)
 			if got.clean != tt.wantClean {
 				t.Fatalf("clean = %v, want %v (checks: %+v)", got.clean, tt.wantClean, got.checks)
 			}

@@ -54,6 +54,7 @@ type AgreementRow struct {
 	PR             string    `json:"pr"`
 	Time           time.Time `json:"time"`
 	Verdict        string    `json:"verdict,omitempty"`
+	Language       string    `json:"language,omitempty"`
 	ReviewedSHA    string    `json:"reviewed_sha,omitempty"`
 	GateWould      string    `json:"gate_would,omitempty"` // post | discard | punch
 	GateMode       string    `json:"gate_mode"`            // dry-run | acted | punched | error
@@ -213,6 +214,7 @@ func buildGateRows(lines []auditLine) []AgreementRow {
 			r.hasInputs = true
 			kv := parseKV(l.Detail)
 			r.Verdict = kv["verdict"]
+			r.Language = kv["language"]
 			r.ReviewedSHA = kv["reviewed_sha"]
 		case "guardrail":
 			if l.Status != "pass" {

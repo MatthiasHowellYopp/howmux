@@ -47,6 +47,7 @@ type AutoPostConfig struct {
 	MaxFindings   int          // guardrail finding-count cap (<=0 disables)
 	OwnRepoOwners []string     // owners allowed to auto-post in own-repos mode (owner part of owner/repo)
 	AuditorModel  string       // kiro-cli --model for the review-auditor; "" = kiro-cli's default
+	Language      string       // the review's language lens (spool "language:"); "generic" is forced to a human
 }
 
 // autoPostOutcome is the gate's final decision for one review.
@@ -99,13 +100,14 @@ func EvaluateAndMaybePost(ctx context.Context, rec Record, body, verdict, headSH
 	// the exact review generation (reviewed_sha) a human later decided on.
 	recordAudit(audit, auditStep{step: "inputs", status: "pass", detail: formatKV(
 		"verdict", strings.ToUpper(strings.TrimSpace(verdict)),
+		"language", strings.TrimSpace(cfg.Language), // "" → "-" via formatKV
 		"reviewed_sha", reviewedSHA,
 		"head_sha", headSHA,
 	)})
 
 	// Step 1: deterministic guardrail.
 	commentable := parseDiffCommentableLines(diff)
-	g := evaluateAutoPostGuardrail(verdict, body, headSHA, reviewedSHA, commentable, cfg.MaxFindings)
+	g := evaluateAutoPostGuardrail(verdict, body, headSHA, reviewedSHA, commentable, cfg.MaxFindings, cfg.Language)
 	if !g.clean {
 		reason := "guardrail failed: " + g.firstFailure()
 		recordAudit(audit, auditStep{step: "guardrail", status: "fail", detail: reason})
@@ -245,9 +247,13 @@ func RunAutoPostGate(ctx context.Context, rec Record, headSHA string, store Stor
 	// to the record's LastReviewedSHA if the front-matter lacks it.
 	reviewedSHA := updated.LastReviewedSHA
 	if data, readErr := os.ReadFile(updated.SpoolPath); readErr == nil {
-		if fm := ParseSpoolFrontMatter(data)["reviewed_sha"]; fm != "" {
-			reviewedSHA = fm
+		fm := ParseSpoolFrontMatter(data)
+		if fm["reviewed_sha"] != "" {
+			reviewedSHA = fm["reviewed_sha"]
 		}
+		// The language lens the review used. A "generic" (non-specialist)
+		// review is forced to a human by the guardrail, never auto-posted.
+		cfg.Language = fm["language"]
 	}
 
 	// Fetch the PR diff to a temp file, then read it back. The guardrail's

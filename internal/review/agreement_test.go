@@ -284,6 +284,35 @@ func TestAgreement_EndToEnd(t *testing.T) {
 	}
 }
 
+func TestAgreement_GenericReviewPunchReason(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("PR_REVIEW_DIR", root)
+	withFakeActions(t)
+	withKiroCLIPresent(t)
+	withFakeKiroOneshot(t, map[string]string{reviewAuditorAgent: "VERDICT: POST_OK"}, nil)
+
+	rec, body, verdict, head, reviewed, diff := gateFixture()
+	cfg := AutoPostConfig{Mode: ModeDryRun, MaxFindings: 25, Language: "generic"}
+	if _, err := EvaluateAndMaybePost(context.Background(), rec, body, verdict, head, reviewed, diff, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := BuildAgreementReport(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rep.Rows))
+	}
+	r := rep.Rows[0]
+	if r.Language != "generic" {
+		t.Errorf("Language = %q, want generic", r.Language)
+	}
+	if r.GateWould != gateWouldPunch || !strings.Contains(r.PunchReason, "not_generic") {
+		t.Errorf("row = %+v, want a not_generic punch", r)
+	}
+}
+
 func TestHumanDecision_RecordsSnapshot(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("PR_REVIEW_DIR", root)
