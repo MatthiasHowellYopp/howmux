@@ -8,13 +8,13 @@
 //   - decisions/review_decision-*.jsonl: one file per human decision
 //     (decision_audit.go)
 //   - done/*.md: fallback for gate runs recorded before human decisions were
-//     audited. done/ keeps only the latest decision per PR, so it is used only
-//     for the latest gate run on a PR, and only if that review generation is
-//     the one the gate saw.
+//     audited (runs with no "inputs" step). done/ keeps only the latest
+//     decision per PR, so it is used only for the latest gate run on a PR, and
+//     only if that review generation is the one the gate saw.
 //
-// Matching: a gate run is paired with the first human decision on the same PR
-// at or after the run and before that PR's next gate run. When both sides
-// know the reviewed_sha, they must agree.
+// Matching: a gate run is paired with the first successful human decision on
+// the same PR at or after the run and before that PR's next gate run. When
+// both sides know the reviewed_sha, they must agree.
 package review
 
 import (
@@ -61,6 +61,8 @@ type AgreementRow struct {
 	HumanDecision  string    `json:"human_decision,omitempty"`
 	DecisionSource string    `json:"decision_source,omitempty"` // audit | done
 	Class          string    `json:"class"`
+
+	hasInputs bool // run recorded an "inputs" step (written since decisions are audited)
 }
 
 // AgreementReport is the full report. AgreementRate is agree / (agree +
@@ -132,7 +134,11 @@ func BuildAgreementReport(root string) (AgreementReport, error) {
 			if d, ok := matchDecision(decisions[k], r.Time, next, r.ReviewedSHA); ok {
 				r.HumanDecision = d.decision
 				r.DecisionSource = "audit"
-			} else if n+1 == len(idxs) {
+			} else if n+1 == len(idxs) && !r.hasInputs {
+				// done/ fallback only for runs recorded before human decisions
+				// were audited (no inputs step). A newer run with no audited
+				// decision is simply undecided; a done/ file from an earlier
+				// generation must not be graded against it.
 				var prev time.Time
 				if n > 0 {
 					prev = rows[idxs[n-1]].Time
@@ -204,6 +210,7 @@ func buildGateRows(lines []auditLine) []AgreementRow {
 		}
 		switch l.Step {
 		case "inputs":
+			r.hasInputs = true
 			kv := parseKV(l.Detail)
 			r.Verdict = kv["verdict"]
 			r.ReviewedSHA = kv["reviewed_sha"]
@@ -247,7 +254,10 @@ func buildGateRows(lines []auditLine) []AgreementRow {
 func buildDecisionEvents(lines []auditLine) map[string][]decisionEvent {
 	out := map[string][]decisionEvent{}
 	for _, l := range lines {
-		if l.Step != decisionStep {
+		// Only completed actions count. A failed attempt (status "error") is
+		// usually followed by a retry or a different decision, and that is the
+		// one that reflects what the human did.
+		if l.Step != decisionStep || l.Status != "pass" {
 			continue
 		}
 		t, err := time.Parse(time.RFC3339, l.Timestamp)

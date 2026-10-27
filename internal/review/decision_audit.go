@@ -13,6 +13,7 @@ package review
 import (
 	"os"
 	"strings"
+	"time"
 )
 
 // decisionPipeline is the pipeline name stamped on human-decision records.
@@ -33,14 +34,14 @@ type HumanDecision struct {
 	decision    string
 	verdict     string
 	reviewedSHA string
-	start       int64 // auditTimeNow().UnixMilli() at Begin, for duration_ms
+	start       time.Time // when the human decided; the record is stamped with it
 }
 
 // BeginHumanDecision snapshots the review's verdict and reviewed_sha for a
 // human decision ("post", "revise", "rereview", "discard"). Missing spool data
 // is not an error: the fields are just left blank in the record.
 func BeginHumanDecision(rec Record, decision string) *HumanDecision {
-	hd := &HumanDecision{rec: rec, decision: decision, start: auditTimeNow().UnixMilli()}
+	hd := &HumanDecision{rec: rec, decision: decision, start: auditTimeNow()}
 	path, found, _ := resolveSpoolPath(rec.SpoolPath)
 	if !found {
 		hd.reviewedSHA = rec.LastReviewedSHA
@@ -77,8 +78,11 @@ func (hd *HumanDecision) Finish(actErr error) {
 		status = "error"
 		detail += decisionErrorSep + actErr.Error()
 	}
-	meta := &OneshotResult{DurationMs: auditTimeNow().UnixMilli() - hd.start}
-	recordAudit(audit, auditStep{step: decisionStep, status: status, detail: detail, meta: meta})
+	// Stamp the record with the decision time, not the finish time: revise and
+	// rereview can run for minutes, and a gate run started meanwhile (after a
+	// push) must not capture a decision made on the previous review.
+	meta := &OneshotResult{DurationMs: auditTimeNow().Sub(hd.start).Milliseconds()}
+	recordAudit(audit, auditStep{step: decisionStep, status: status, detail: detail, meta: meta, at: hd.start})
 }
 
 // decisionErrorSep separates the key=value fields from a free-text error.

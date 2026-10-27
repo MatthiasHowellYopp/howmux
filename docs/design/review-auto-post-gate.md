@@ -271,16 +271,21 @@ this number. Two record types feed it, both in `~/PR-Review/audit/`:
   `human_decision`). They sit in a subdirectory because `e2e_report.py` treats
   every top-level `.jsonl` as a pipeline run, and a human decision isn't one. The
   TUI writes one record per post / revise / rereview / discard, with
-  `decision=… verdict=… reviewed_sha=…` captured *before* the action runs. Each
+  `decision=… verdict=… reviewed_sha=…` captured *before* the action runs and
+  `status: error` if the action failed. Each
   decision gets its own file, so re-reviews never overwrite earlier ones (the
   `done/` file does keep only the latest).
 
-A gate run is paired with the first human decision on the same PR at or after
-the run and before that PR's next gate run, skipping decisions whose
-`reviewed_sha` differs when both sides recorded one. Gate runs from before
-decisions were audited fall back to the PR's `done/` file, but only for the
-PR's latest run and only when the file's `generated` time shows it is the
-review generation the gate saw.
+A gate run is paired with the first successful human decision on the same PR
+at or after the run and before that PR's next gate run, skipping decisions
+whose `reviewed_sha` differs when both sides recorded one. Failed attempts
+(status `error`) are ignored, since what the human did next is what counts.
+Decision records are stamped with the time the human decided, not when the
+action finished, so a long revise or rereview can't drift into the next gate
+run's window. Gate runs from before decisions were audited (no `inputs` step)
+fall back to the PR's `done/` file, but only for the PR's latest run and only
+when the file's `generated` time shows it is the review generation the gate
+saw.
 
 | Class | Meaning | Graded |
 |-------|---------|--------|

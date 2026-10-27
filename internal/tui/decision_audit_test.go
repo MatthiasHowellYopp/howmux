@@ -38,20 +38,55 @@ func withRecordedDecisions(t *testing.T) *[]*recordedDecision {
 
 func TestDecideActions_RecordHumanDecision(t *testing.T) {
 	rec := review.Record{Repo: "owner/repo", PR: 7}
-	actErr := errors.New("boom")
+	errs := map[string]error{
+		"post":     errors.New("post failed"),
+		"revise":   errors.New("revise failed"),
+		"rereview": errors.New("rereview failed"),
+		"discard":  errors.New("discard failed"),
+	}
+
+	got := withRecordedDecisions(t)
+
+	// Each fake action checks that its decision was snapshotted BEFORE it ran
+	// (post/discard move the spool; revise/rereview rewrite it) and hasn't
+	// been finished yet, then fails with its own sentinel error.
+	beforeAction := func(decision string) {
+		t.Helper()
+		if len(*got) == 0 {
+			t.Errorf("%s: action ran before the decision was recorded", decision)
+			return
+		}
+		last := (*got)[len(*got)-1]
+		if last.decision != decision {
+			t.Errorf("%s: latest recorded decision is %q", decision, last.decision)
+		}
+		if last.finished {
+			t.Errorf("%s: decision finished before the action ran", decision)
+		}
+	}
 
 	origPost, origRevise, origRereview, origDiscard := postReviewFunc, reviseReviewFunc, rereviewReviewFunc, discardReviewFunc
 	t.Cleanup(func() {
 		postReviewFunc, reviseReviewFunc, rereviewReviewFunc, discardReviewFunc = origPost, origRevise, origRereview, origDiscard
 	})
-	postReviewFunc = func(context.Context, review.Record) (int, error) { return 0, actErr }
-	reviseReviewFunc = func(context.Context, review.Record, string) (string, error) { return "COMMENT", nil }
-	rereviewReviewFunc = func(context.Context, review.Record, string) (string, bool, error) { return "COMMENT", false, nil }
-	discardReviewFunc = func(review.Record) error { return nil }
+	postReviewFunc = func(context.Context, review.Record) (int, error) {
+		beforeAction("post")
+		return 0, errs["post"]
+	}
+	reviseReviewFunc = func(context.Context, review.Record, string) (string, error) {
+		beforeAction("revise")
+		return "", errs["revise"]
+	}
+	rereviewReviewFunc = func(context.Context, review.Record, string) (string, bool, error) {
+		beforeAction("rereview")
+		return "", false, errs["rereview"]
+	}
+	discardReviewFunc = func(review.Record) error {
+		beforeAction("discard")
+		return errs["discard"]
+	}
 
-	got := withRecordedDecisions(t)
 	m := newDecideRoutingTestModel()
-
 	launchDecidePostCmd(rec, "COMMENT")()
 	_, cmd := m.launchDecideRevise(rec, "")
 	cmd()
@@ -71,8 +106,8 @@ func TestDecideActions_RecordHumanDecision(t *testing.T) {
 		if !rd.finished {
 			t.Errorf("decision[%d] %q was never finished", i, rd.decision)
 		}
-	}
-	if (*got)[0].err != actErr {
-		t.Errorf("post decision err = %v, want the action's error passed through", (*got)[0].err)
+		if rd.err != errs[want[i]] {
+			t.Errorf("decision[%d] %q err = %v, want %v", i, rd.decision, rd.err, errs[want[i]])
+		}
 	}
 }

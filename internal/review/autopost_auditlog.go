@@ -110,6 +110,7 @@ type auditStep struct {
 	agent  string // "" → null
 	detail string
 	meta   *OneshotResult // optional; supplies model + duration_ms when present
+	at     time.Time      // optional record time; zero means now
 }
 
 // record appends one step record to this run's .jsonl file and flushes it
@@ -180,7 +181,7 @@ func (a *AuditLog) record(s auditStep) error {
 		Tokens:          nil,
 		Cost:            nil,
 		Detail:          truncateDetail(s.detail),
-		Timestamp:       auditTimeNow().UTC().Format("2006-01-02T15:04:05Z"),
+		Timestamp:       recordTime(s.at).UTC().Format("2006-01-02T15:04:05Z"),
 	}
 
 	line, err := json.Marshal(rec)
@@ -209,6 +210,14 @@ func truncateDetail(s string) string {
 		return s
 	}
 	return string(r[:max])
+}
+
+// recordTime returns at, or the current time when at is zero.
+func recordTime(at time.Time) time.Time {
+	if at.IsZero() {
+		return auditTimeNow()
+	}
+	return at
 }
 
 // newRunID returns a short run identifier (hex, time-seeded) for grouping one

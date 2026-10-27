@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // writeAuditFile writes one .jsonl audit file under root/audit.
@@ -353,5 +354,140 @@ func TestFormatParseKV(t *testing.T) {
 	kv := parseKV(s + decisionErrorSep + "oops c=y")
 	if kv["a"] != "1" || kv["b"] != "" || kv["c"] != "x" {
 		t.Errorf("parseKV = %v", kv)
+	}
+}
+
+func TestBuildAgreementReport_IgnoresFailedDecisions(t *testing.T) {
+	root := t.TempDir()
+	// Gate would post; a rereview attempt fails; the human then posts.
+	gateRun(t, root, "run", "1", "2026-10-01T10:00:00Z", "s", "post", "dry-run")
+	writeAuditFile(t, root, filepath.Join(decisionSubdir, "review_decision-o-r-1-fail.jsonl"), auditLine{
+		RunID: "fail", Pipeline: decisionPipeline, Repo: "o/r", PR: "1", Step: decisionStep, Status: "error",
+		Detail:    formatKV("decision", "rereview", "verdict", "COMMENT", "reviewed_sha", "s") + decisionErrorSep + "kiro timed out",
+		Timestamp: "2026-10-01T10:05:00Z",
+	})
+	humanDecision(t, root, "ok", "1", "2026-10-01T10:10:00Z", "post", "s")
+
+	rep, err := BuildAgreementReport(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := rowByRun(t, rep, "run"); r.HumanDecision != "post" || r.Class != AgreementAgree {
+		t.Errorf("row = %+v, want the successful post (agree), not the failed rereview", r)
+	}
+}
+
+func TestBuildAgreementReport_NoDoneFallbackForNewRuns(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "done"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A done/ file from an earlier generation, with no reviewed_sha.
+	stale := "---\nrepo: o/r\npr: 1\nverdict: COMMENT\ndecision: discard\ngenerated: 2026-09-01T10:00:00Z\nreviewed_sha:\n---\n"
+	if err := os.WriteFile(filepath.Join(root, "done", "pr-review-o-r-1.md"), []byte(stale), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A new-format run (has an inputs step) with no audited decision yet.
+	gateRun(t, root, "new", "1", "2026-10-01T10:00:00Z", "s", "post", "dry-run")
+
+	rep, err := BuildAgreementReport(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := rowByRun(t, rep, "new"); r.Class != AgreementUndecided || r.DecisionSource != "" {
+		t.Errorf("row = %+v, want undecided with no done/ fallback", r)
+	}
+}
+
+func TestBuildAgreementReport_WindowEdges(t *testing.T) {
+	root := t.TempDir()
+	// Decision in the same second as the run belongs to that run.
+	gateRun(t, root, "same", "1", "2026-10-01T10:00:00Z", "a", "post", "dry-run")
+	humanDecision(t, root, "d1", "1", "2026-10-01T10:00:00Z", "post", "")
+
+	// Decision exactly at the next run's start belongs to the next run.
+	gateRun(t, root, "e1", "2", "2026-10-01T10:00:00Z", "", "post", "dry-run")
+	gateRun(t, root, "e2", "2", "2026-10-01T11:00:00Z", "", "discard", "dry-run")
+	humanDecision(t, root, "d2", "2", "2026-10-01T11:00:00Z", "discard", "")
+
+	rep, err := BuildAgreementReport(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rowByRun(t, rep, "same").Class; got != AgreementAgree {
+		t.Errorf("same-second run class = %q, want agree", got)
+	}
+	if got := rowByRun(t, rep, "e1").Class; got != AgreementUndecided {
+		t.Errorf("e1 class = %q, want undecided (decision is at e2's start)", got)
+	}
+	if got := rowByRun(t, rep, "e2").Class; got != AgreementAgree {
+		t.Errorf("e2 class = %q, want agree", got)
+	}
+}
+
+func TestBuildAgreementReport_SamePRNumberDifferentRepos(t *testing.T) {
+	root := t.TempDir()
+	gateRun(t, root, "or", "5", "2026-10-01T10:00:00Z", "", "post", "dry-run")
+	// A decision on x/y#5 must not pair with o/r#5.
+	writeAuditFile(t, root, filepath.Join(decisionSubdir, "review_decision-x-y-5-d.jsonl"), auditLine{
+		RunID: "d", Pipeline: decisionPipeline, Repo: "x/y", PR: "5", Step: decisionStep, Status: "pass",
+		Detail: formatKV("decision", "post"), Timestamp: "2026-10-01T11:00:00Z",
+	})
+
+	rep, err := BuildAgreementReport(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rowByRun(t, rep, "or").Class; got != AgreementUndecided {
+		t.Errorf("o/r#5 class = %q, want undecided", got)
+	}
+}
+
+func TestBuildAgreementReport_MalformedAndIncomplete(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "audit")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	good, _ := json.Marshal(auditLine{RunID: "inc", Pipeline: auditPipeline, Repo: "o/r", PR: "1", Step: "inputs", Status: "pass", Timestamp: "2026-10-01T10:00:00Z"})
+	data := "not json\n{\"run_id\":\n" + string(good) + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "review_auto_post-o-r-1-inc.jsonl"), []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := BuildAgreementReport(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1 (malformed lines skipped)", len(rep.Rows))
+	}
+	if got := rep.Rows[0].Class; got != AgreementIncomplete {
+		t.Errorf("class = %q, want incomplete (no guardrail/auditor result)", got)
+	}
+}
+
+func TestHumanDecision_StampedAtBegin(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("PR_REVIEW_DIR", root)
+	orig := auditTimeNow
+	t.Cleanup(func() { auditTimeNow = orig })
+
+	begin := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	auditTimeNow = func() time.Time { return begin }
+	hd := BeginHumanDecision(Record{Repo: "o/r", PR: 1}, "rereview")
+	auditTimeNow = func() time.Time { return begin.Add(4 * time.Minute) }
+	hd.Finish(nil)
+
+	files, _ := filepath.Glob(filepath.Join(root, "audit", decisionSubdir, "*.jsonl"))
+	if len(files) != 1 {
+		t.Fatalf("files = %v, want 1", files)
+	}
+	l := readAuditLines(t, files[0])[0]
+	if l["timestamp"] != "2026-10-01T10:00:00Z" {
+		t.Errorf("timestamp = %v, want the Begin time", l["timestamp"])
+	}
+	if l["duration_ms"] != float64(240000) {
+		t.Errorf("duration_ms = %v, want 240000", l["duration_ms"])
 	}
 }
