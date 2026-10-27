@@ -186,13 +186,15 @@ func (a *AuditLog) record(s auditStep) error {
 }
 
 // truncateDetail caps the detail field so a runaway agent message can't bloat
-// the audit file, matching audit_log.py's 500-char cap.
+// the audit file, matching audit_log.py's 500-character cap. It counts runes,
+// not bytes, so a multi-byte character (→, —) is never split.
 func truncateDetail(s string) string {
 	const max = 500
-	if len(s) <= max {
+	r := []rune(s)
+	if len(r) <= max {
 		return s
 	}
-	return s[:max]
+	return string(r[:max])
 }
 
 // newRunID returns a short run identifier (hex, time-seeded) for grouping one

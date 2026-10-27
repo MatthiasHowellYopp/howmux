@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"strings"
 	"testing"
 )
 
@@ -79,6 +80,32 @@ func TestCallReviewAuditor_Verdicts(t *testing.T) {
 			}
 			if got.meta.Status != "pass" {
 				t.Errorf("meta.Status = %q, want pass", got.meta.Status)
+			}
+			if !strings.Contains(got.reason, "NOTES:") {
+				t.Errorf("reason = %q, want the auditor's NOTES carried through", got.reason)
+			}
+		})
+	}
+}
+
+func TestAuditorRationale(t *testing.T) {
+	tests := []struct {
+		name, answer, want string
+	}{
+		{"notes and rationale", "Finding 1 is real.\nSeverity fits.\nNOTES: watch finding 2\nVERDICT: POST_OK",
+			"NOTES: watch finding 2 | Finding 1 is real. Severity fits."},
+		{"notes only", "NOTES: all noise\nVERDICT: DISCARD", "NOTES: all noise"},
+		{"rationale only", "Looks sound.\nVERDICT: POST_OK", "Looks sound."},
+		{"verdict only", "VERDICT: POST_OK", ""},
+		{"bare notes does not swallow next line", "NOTES:\nFinding 1 is wrong.\nVERDICT: NEEDS_HUMAN",
+			"Finding 1 is wrong."},
+		{"multiple notes are all kept", "NOTES: first\nmid\nNOTES: second\nVERDICT: POST_OK",
+			"NOTES: first; second | mid"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := auditorRationale(tt.answer); got != tt.want {
+				t.Errorf("auditorRationale() = %q, want %q", got, tt.want)
 			}
 		})
 	}
