@@ -97,6 +97,10 @@ func TestAuditorRationale(t *testing.T) {
 		{"notes only", "NOTES: all noise\nVERDICT: DISCARD", "NOTES: all noise"},
 		{"rationale only", "Looks sound.\nVERDICT: POST_OK", "Looks sound."},
 		{"verdict only", "VERDICT: POST_OK", ""},
+		{"bare notes does not swallow next line", "NOTES:\nFinding 1 is wrong.\nVERDICT: NEEDS_HUMAN",
+			"Finding 1 is wrong."},
+		{"multiple notes are all kept", "NOTES: first\nmid\nNOTES: second\nVERDICT: POST_OK",
+			"NOTES: first; second | mid"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -134,6 +134,17 @@ func TestEvaluateAutoPostGuardrail(t *testing.T) {
 			wantClean:   true,
 		},
 		{
+			name:        "unknown verdict matching body fails",
+			verdict:     "LGTM",
+			body:        strings.Replace(cleanBody, "VERDICT: COMMENT", "VERDICT: LGTM", 1),
+			headSHA:     head,
+			reviewedSHA: head,
+			commentable: commentableFixture(),
+			maxFindings: 25,
+			wantClean:   false,
+			wantFail:    "event_legal",
+		},
+		{
 			name:        "record verdict disagreeing with body fails",
 			verdict:     "APPROVE",
 			body:        cleanBody,

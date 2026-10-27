@@ -2,6 +2,7 @@ package review
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -78,6 +79,35 @@ func TestGate_OwnRepos_PostsWhenAllowed(t *testing.T) {
 	}
 	if *posts != 1 {
 		t.Errorf("want 1 post, got %d", *posts)
+	}
+}
+
+// TestGate_OwnRepos_PostsNonCommentVerdicts checks end to end that a clean
+// APPROVE or REQUEST_CHANGES review clears the guardrail, reaches the auditor,
+// and is posted (it used to be punched by event_legal before the auditor ran).
+func TestGate_OwnRepos_PostsNonCommentVerdicts(t *testing.T) {
+	for _, v := range []string{"APPROVE", "REQUEST_CHANGES"} {
+		t.Run(v, func(t *testing.T) {
+			posts, _ := withFakeActions(t)
+			withKiroCLIPresent(t)
+			withFakeKiroOneshot(t, map[string]string{reviewAuditorAgent: "NOTES: sound\nVERDICT: POST_OK"}, nil)
+			t.Setenv("PR_REVIEW_DIR", t.TempDir())
+
+			rec, body, _, head, reviewed, diff := gateFixture()
+			body = strings.Replace(body, "VERDICT: COMMENT", "VERDICT: "+v, 1)
+			cfg := AutoPostConfig{Mode: ModeOwnRepos, MaxFindings: 25, OwnRepoOwners: []string{"Bit-Quill"}}
+
+			res, err := EvaluateAndMaybePost(context.Background(), rec, body, v, head, reviewed, diff, cfg)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if res.Outcome != outcomePosted {
+				t.Errorf("Outcome = %q, want posted", res.Outcome)
+			}
+			if *posts != 1 {
+				t.Errorf("want 1 post, got %d", *posts)
+			}
+		})
 	}
 }
 

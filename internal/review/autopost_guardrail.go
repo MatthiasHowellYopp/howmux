@@ -81,7 +81,7 @@ var secretPathMarkers = []*regexp.Regexp{
 //  1. verdict_parseable  — parseVerdict(body) != "UNKNOWN"
 //  2. findings_anchor     — every finding's file:line is on the diff's right side
 //  3. sha_fresh           — reviewedSHA == headSHA (review not stale)
-//  4. event_legal          — record verdict agrees with the body's VERDICT: line
+//  4. event_legal          — record and body verdicts agree and are a known event
 //  5. no_secrets           — body contains no machine paths / key-shaped tokens
 //  6. finding_count         — finding count within [0, maxFindings]
 func evaluateAutoPostGuardrail(verdict, body, headSHA, reviewedSHA string, commentable map[string]map[int]bool, maxFindings int) gateResult {
@@ -137,14 +137,17 @@ func evaluateAutoPostGuardrail(verdict, body, headSHA, reviewedSHA string, comme
 
 	// 4. Event legality. The record's verdict must agree with the body's
 	// VERDICT: line (they're posted together, so a mismatch means the spool
-	// was edited inconsistently) and map to a GitHub review event. COMMENT,
+	// was edited inconsistently) and be one of the three GitHub review events;
+	// an unknown verdict would otherwise post as a plain COMMENT via
+	// verdictEvent's fallback and lose its intended weight. COMMENT,
 	// APPROVE and REQUEST_CHANGES are all auto-postable; the adversarial
 	// auditor judges whether the verdict is warranted. On the poster's OWN PR,
 	// GitHub rejects APPROVE/REQUEST_CHANGES with a 422, which PostReview
 	// already handles by retrying as COMMENT (isOwnPRReviewError +
 	// downgradeEventToComment), so no own-PR check is needed here.
 	event := verdictEvent(verdict)
-	eventOK := strings.EqualFold(strings.TrimSpace(verdict), bodyVerdict)
+	eventOK := strings.EqualFold(strings.TrimSpace(verdict), bodyVerdict) &&
+		(bodyVerdict == "COMMENT" || bodyVerdict == "APPROVE" || bodyVerdict == "REQUEST_CHANGES")
 	checks = append(checks, gateCheck{
 		name:   "event_legal",
 		passed: eventOK,
