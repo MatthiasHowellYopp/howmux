@@ -211,3 +211,27 @@ func TestGate_PunchOutBypass(t *testing.T) {
 		t.Errorf("auditor was called %d time(s) despite a guardrail failure; it must short-circuit", len(*calls))
 	}
 }
+
+// TestGate_GenericReview_PunchesEvenInOwnRepos checks that a generic (fallback)
+// review is never auto-posted: the not_generic guardrail punches it to a human
+// regardless of mode.
+func TestGate_GenericReview_PunchesEvenInOwnRepos(t *testing.T) {
+	posts, _ := withFakeActions(t)
+	withKiroCLIPresent(t)
+	withFakeKiroOneshot(t, map[string]string{reviewAuditorAgent: "VERDICT: POST_OK"}, nil)
+	t.Setenv("PR_REVIEW_DIR", t.TempDir())
+
+	rec, body, verdict, head, reviewed, diff := gateFixture()
+	cfg := AutoPostConfig{Mode: ModeOwnRepos, MaxFindings: 25, OwnRepoOwners: []string{"Bit-Quill"}, Language: "generic"}
+
+	res, err := EvaluateAndMaybePost(context.Background(), rec, body, verdict, head, reviewed, diff, cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Outcome != outcomePunted {
+		t.Errorf("Outcome = %q, want punch for a generic review", res.Outcome)
+	}
+	if *posts != 0 {
+		t.Errorf("a generic review must not be posted: posts=%d", *posts)
+	}
+}

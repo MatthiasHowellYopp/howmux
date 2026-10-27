@@ -1642,6 +1642,7 @@ func TestRereviewReview_UsesSpoolLanguageLens(t *testing.T) {
 		{"valkey without variant", "infra", "true", "infra-reviewer"},
 		{"java", "java", "", "java-reviewer"},
 		{"docs", "docs", "", "docs-reviewer"},
+		{"generic", "generic", "", "generic-reviewer"},
 		{"legacy spool", "", "", "python-reviewer"},
 		{"unknown language", "cobol", "", "python-reviewer"},
 	}

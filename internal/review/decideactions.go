@@ -822,6 +822,11 @@ var languageReviewers = map[string]string{
 	"astro":  "astro-reviewer",
 	"infra":  "infra-reviewer",
 	"docs":   "docs-reviewer",
+	// generic is pr_review.py's fallback for a language with no dedicated
+	// reviewer. resolveLanguageReviewer never selects it from an unknown
+	// language (that falls back to python, matching pr_review_finalize.py),
+	// but a spool explicitly recorded as language: generic resolves here.
+	"generic": "generic-reviewer",
 }
 
 // languagesWithoutCrossCutting mirrors pr_review.py's _LANG_CROSS_CUTTING for

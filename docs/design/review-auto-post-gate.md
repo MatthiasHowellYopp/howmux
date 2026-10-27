@@ -99,6 +99,7 @@ Checks (all deterministic, reusing existing helpers where noted):
 
 | # | Check | How | Fail →|
 |---|-------|-----|-------|
+| 0 | Not a generic review | spool `language:` is not `generic`; a fallback review for a language with no dedicated reviewer is lower-confidence and always goes to a human | punch |
 | 1 | Verdict parseable | `parseVerdict(body) != "UNKNOWN"` | punch |
 | 2 | Every finding anchors to the diff | reuse `buildReviewPayload`; if any finding folded into "Additional findings (not on the diff)", fail | punch |
 | 3 | SHA not stale | spool `reviewed_sha` front-matter == current head SHA | punch |
