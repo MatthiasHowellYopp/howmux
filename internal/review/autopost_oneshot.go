@@ -44,16 +44,16 @@ type OneshotResult struct {
 // (humanizeReviewBody, ReviseReview, the rereview lens fan-out) and the test
 // fake that substitutes kiroOneshotFunc keep working unchanged.
 //
-// model is the value the caller intends to pass via --model; today the seam
-// does not forward it to kiro-cli (the default impl passes no --model), so it
-// is recorded for the audit trail but not yet acted on. When the seam learns
-// to forward --model, this is where it threads through.
+// model is passed to kiro-cli as --model (through kiroOneshotFunc) and
+// recorded in the audit trail. kiro-cli's stream-json output does not report
+// which model actually ran, so an empty model (kiro-cli's default, usually
+// "auto") is recorded as null: the audit can only name a model we pinned.
 //
 // On error the returned OneshotResult has Status "error", an empty Answer, and
 // the measured DurationMs; the error is returned too so callers can act on it.
 func kiroOneshotMeta(ctx context.Context, agentName, model, prompt string) (OneshotResult, error) {
 	start := time.Now()
-	res, err := kiroOneshotFunc(ctx, agentName, prompt)
+	res, err := kiroOneshotFunc(ctx, agentName, model, prompt)
 	dur := time.Since(start).Milliseconds()
 
 	out := OneshotResult{

@@ -172,9 +172,11 @@ human). Introduce it behind guards, most-conservative first:
    agrees with the human, with zero risk. This also produces the
    **end-to-end success-rate** data Stage 4 wants.
 2. **Phase 1 — auto-post on own repos only.** Enable real auto-post gated to
-   repos the user owns (e.g. `matthiashowellyopp/*`), where a bad post is
-   low-stakes and easily corrected. External repos (Bit-Quill, valkey-io) still
-   punch to human.
+   the owners in `own_repo_owners`: repos the user owns (e.g.
+   `matthiashowellyopp/*`) plus `Bit-Quill/*`. The user doesn't own Bit-Quill
+   but reviews there regularly, so it counts as internal: the user knows the
+   maintainers, and a bad post is low-stakes and easily corrected. Truly
+   external repos (e.g. valkey-io) still punch to human.
 3. **Phase 2 — widen** to external repos once the Phase 0/1 success rate clears
    a bar we set from the measured data.
 
@@ -185,8 +187,15 @@ review:
   auto_post:
     mode: dry-run        # dry-run | own-repos | all  (default: dry-run)
     max_findings: 25     # check #6 cap
-    own_repo_owners: ["matthiashowellyopp"]
+    own_repo_owners: ["matthiashowellyopp", "Bit-Quill"]
+    auditor_model: claude-sonnet-5.5   # pin the review-auditor's model (default: kiro-cli's)
 ```
+
+`auditor_model` matters for the agreement rate. kiro-cli's stream-json output
+doesn't say which model ran a turn, and an unpinned agent runs on kiro-cli's
+default (`auto`), which can change from run to run. Pinning the model keeps the
+measurement stable and is the only way the audit record's `model` field gets a
+value; unpinned runs record `null` rather than a guess.
 
 ## Audit trail (feeds Stage 4 Audit Trail + E2E rate)
 

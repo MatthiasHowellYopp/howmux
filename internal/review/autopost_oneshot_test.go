@@ -55,7 +55,7 @@ func TestKiroOneshotMeta_CarriesStreamMetadata(t *testing.T) {
 	orig := kiroOneshotFunc
 	t.Cleanup(func() { kiroOneshotFunc = orig })
 	turn, pct := 1497.0, 2.37
-	kiroOneshotFunc = func(context.Context, string, string) (kirocli.Result, error) {
+	kiroOneshotFunc = func(context.Context, string, string, string) (kirocli.Result, error) {
 		return kirocli.Result{Text: "VERDICT: POST_OK", Meta: kirocli.Meta{
 			TurnDurationMs: &turn, ContextUsagePct: &pct, Engine: "v3", StopReason: "end_turn"}}, nil
 	}

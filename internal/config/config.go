@@ -30,6 +30,7 @@ type AutoPostConfig struct {
 	Mode          string   `yaml:"mode"`            // dry-run | own-repos | all
 	MaxFindings   int      `yaml:"max_findings"`    // guardrail finding-count cap (<=0 disables)
 	OwnRepoOwners []string `yaml:"own_repo_owners"` // owners allowed to auto-post in own-repos mode
+	AuditorModel  string   `yaml:"auditor_model"`   // kiro-cli --model for the review-auditor; "" = kiro-cli's default
 }
 
 // ReviewConfig groups review-workflow configuration.
@@ -148,6 +149,10 @@ func Load() (*Config, error) {
 		// valid
 	default:
 		return nil, fmt.Errorf("review.auto_post.mode must be one of: dry-run, own-repos, all (got %q)", cfg.Review.AutoPost.Mode)
+	}
+	cfg.Review.AutoPost.AuditorModel = strings.TrimSpace(cfg.Review.AutoPost.AuditorModel)
+	if strings.ContainsAny(cfg.Review.AutoPost.AuditorModel, " \t") {
+		return nil, fmt.Errorf("review.auto_post.auditor_model must be a single model id, e.g. claude-sonnet-5.5 (got %q)", cfg.Review.AutoPost.AuditorModel)
 	}
 	if cfg.Review.AutoPost.MaxFindings < 0 {
 		return nil, fmt.Errorf("review.auto_post.max_findings must be >= 0 (0 disables the cap)")

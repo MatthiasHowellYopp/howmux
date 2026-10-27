@@ -64,8 +64,10 @@ func cleanKiroStdout(raw string) string {
 // or an empty answer (KiroOneshotError's two conditions), and returns the
 // per-turn metadata (engine, turn duration, context usage, stop reason) for
 // the audit trail.
-func defaultKiroOneshot(ctx context.Context, agentName string, prompt string) (kirocli.Result, error) {
-	return kirocli.Run(ctx, kirocli.Request{Agent: agentName, Prompt: prompt, TrustAllTools: true})
+//
+// model is passed as --model; "" passes none, so kiro-cli uses its default.
+func defaultKiroOneshot(ctx context.Context, agentName, model, prompt string) (kirocli.Result, error) {
+	return kirocli.Run(ctx, kirocli.Request{Agent: agentName, Prompt: prompt, Model: model, TrustAllTools: true})
 }
 
 // postReviewCommandFunc is the subprocess-execution seam PostReview invokes
@@ -384,7 +386,7 @@ byte-for-byte.
 %s
 --- END TEXT ---`, body)
 
-	res, err := kiroOneshotFunc(ctx, "humanizer", prompt)
+	res, err := kiroOneshotFunc(ctx, "humanizer", "", prompt)
 	if err != nil {
 		logging.Debug("humanizeReviewBody: degraded to original body", "error", err)
 		return body
@@ -886,7 +888,7 @@ func ReviseReview(ctx context.Context, rec Record, inlineNotes string) (newVerdi
 	}
 
 	prompt := buildRevisePrompt(body, notes)
-	res, err := kiroOneshotFunc(ctx, "review-consolidator", prompt)
+	res, err := kiroOneshotFunc(ctx, "review-consolidator", "", prompt)
 	if err != nil {
 		return "", fmt.Errorf("revise failed for %s#%d: %w", rec.Repo, rec.PR, err)
 	}
@@ -1014,7 +1016,7 @@ func RereviewReview(ctx context.Context, rec Record, inlineNotes string) (newVer
 		go func() {
 			defer wg.Done()
 			prompt := buildLensPrompt(lensName, diffFile, context_)
-			res, callErr := kiroOneshotFunc(fanCtx, profile, prompt)
+			res, callErr := kiroOneshotFunc(fanCtx, profile, "", prompt)
 			results[i] = lensResult{lensName: lensName, profile: profile, output: res.Text, err: callErr}
 			if callErr != nil {
 				// Signal siblings to stop; the aggregate check below still
@@ -1032,7 +1034,7 @@ func RereviewReview(ctx context.Context, rec Record, inlineNotes string) (newVer
 	}
 
 	consolidatePrompt := buildConsolidatePrompt(diffFile, results)
-	res, err := kiroOneshotFunc(ctx, "review-consolidator", consolidatePrompt)
+	res, err := kiroOneshotFunc(ctx, "review-consolidator", "", consolidatePrompt)
 	if err != nil {
 		return "", false, fmt.Errorf("rereview consolidation failed for %s#%d: %w", rec.Repo, rec.PR, err)
 	}

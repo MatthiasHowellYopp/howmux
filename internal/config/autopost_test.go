@@ -92,3 +92,28 @@ review:
 		t.Fatal("expected error for negative max_findings, got nil")
 	}
 }
+
+func TestLoad_AutoPostAuditorModel(t *testing.T) {
+	cfg, err := loadConfigFrom(t, "repo: test/repo\nreview:\n  auto_post:\n    auditor_model: \"  claude-sonnet-5.5 \"")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.Review.AutoPost.AuditorModel; got != "claude-sonnet-5.5" {
+		t.Errorf("AuditorModel = %q, want trimmed claude-sonnet-5.5", got)
+	}
+
+	cfg, err = loadConfigFrom(t, "repo: test/repo")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.Review.AutoPost.AuditorModel; got != "" {
+		t.Errorf("default AuditorModel = %q, want empty (kiro-cli default)", got)
+	}
+}
+
+func TestLoad_AutoPostAuditorModelWithSpaceRejected(t *testing.T) {
+	_, err := loadConfigFrom(t, "repo: test/repo\nreview:\n  auto_post:\n    auditor_model: claude sonnet")
+	if err == nil {
+		t.Fatal("expected error for auditor_model containing a space, got nil")
+	}
+}
