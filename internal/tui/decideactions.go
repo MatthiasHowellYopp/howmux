@@ -242,7 +242,9 @@ func launchDecidePostCmd(rec review.Record, _ string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), decidePostTimeout)
 		defer cancel()
+		finish := recordHumanDecisionFunc(rec, "post")
 		commentsPosted, err := postReviewFunc(ctx, rec)
+		finish(err)
 		if err != nil {
 			return decidePostErrorMsg{rec: rec, err: err}
 		}
@@ -261,7 +263,9 @@ func (m model) launchDecideRevise(rec review.Record, inlineNotes string) (model,
 	return m, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), decideReviseTimeout)
 		defer cancel()
+		finish := recordHumanDecisionFunc(rec, "revise")
 		newVerdict, err := reviseReviewFunc(ctx, rec, inlineNotes)
+		finish(err)
 		if err != nil {
 			return decideReviseErrorMsg{rec: rec, err: err}
 		}
@@ -279,7 +283,9 @@ func (m model) launchDecideRereview(rec review.Record, inlineNotes string) (mode
 	return m, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), decideRereviewTimeout)
 		defer cancel()
+		finish := recordHumanDecisionFunc(rec, "rereview")
 		newVerdict, degraded, err := rereviewReviewFunc(ctx, rec, inlineNotes)
+		finish(err)
 		if err != nil {
 			return decideRereviewErrorMsg{rec: rec, err: err}
 		}
@@ -294,7 +300,10 @@ func (m model) launchDecideRereview(rec review.Record, inlineNotes string) (mode
 // structural uniformity with the other three decide actions.
 func (m model) launchDecideDiscard(rec review.Record) (model, tea.Cmd) {
 	return m, func() tea.Msg {
-		if err := discardReviewFunc(rec); err != nil {
+		finish := recordHumanDecisionFunc(rec, "discard")
+		err := discardReviewFunc(rec)
+		finish(err)
+		if err != nil {
 			return decideDiscardErrorMsg{rec: rec, err: err}
 		}
 		return decideDiscardCompleteMsg{rec: rec}
@@ -302,6 +311,15 @@ func (m model) launchDecideDiscard(rec review.Record) (model, tea.Cmd) {
 }
 
 // --- internal/review call seams (package-level vars so tests substitute fakes) ---
+
+// recordHumanDecisionFunc snapshots a review before a human decision runs and
+// returns the function that writes the decision's audit record once the action
+// finishes (review.BeginHumanDecision / Finish). These records are what the
+// auto-post agreement report compares the gate's dry-run calls against. Tests
+// replace it so they never write to the real ~/PR-Review/audit.
+var recordHumanDecisionFunc = func(rec review.Record, decision string) func(error) {
+	return review.BeginHumanDecision(rec, decision).Finish
+}
 
 // postReviewFunc wraps review.PostReview for testability, mirroring
 // runReviewFunc's/ensureCheckoutFunc's existing seam pattern in commands.go.
