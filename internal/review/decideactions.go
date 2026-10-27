@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -820,6 +821,30 @@ var languageReviewers = map[string]string{
 	"java":   "java-reviewer",
 	"astro":  "astro-reviewer",
 	"infra":  "infra-reviewer",
+	"docs":   "docs-reviewer",
+}
+
+// languagesWithoutCrossCutting mirrors pr_review.py's _LANG_CROSS_CUTTING for
+// the languages that run no cross-cutting lenses: a docs-only diff has no code
+// for the security/performance/testing lenses to review.
+var languagesWithoutCrossCutting = map[string]bool{"docs": true}
+
+// rereviewLenses returns the lens names (sorted, "language" first by
+// alphabetical order as in pr_review.py) and their profiles for a rereview of
+// a review recorded with the given language.
+func rereviewLenses(language, languageReviewer string) ([]string, map[string]string) {
+	profiles := map[string]string{"language": languageReviewer}
+	if !languagesWithoutCrossCutting[strings.ToLower(strings.TrimSpace(language))] {
+		for name, profile := range crossCuttingLenses {
+			profiles[name] = profile
+		}
+	}
+	names := make([]string, 0, len(profiles))
+	for name := range profiles {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names, profiles
 }
 
 // valkeyReviewers mirrors pr_review.py's _VALKEY_REVIEWER table: languages
@@ -1003,13 +1028,7 @@ func RereviewReview(ctx context.Context, rec Record, inlineNotes string) (newVer
 	// Re-run the same language lens the original review used.
 	valkey := strings.EqualFold(strings.TrimSpace(fields["valkey"]), "true")
 	language := resolveLanguageReviewer(fields["language"], valkey)
-	lensNames := []string{"language", "performance", "security", "testing"}
-	lensProfiles := map[string]string{
-		"language":    language,
-		"security":    crossCuttingLenses["security"],
-		"performance": crossCuttingLenses["performance"],
-		"testing":     crossCuttingLenses["testing"],
-	}
+	lensNames, lensProfiles := rereviewLenses(fields["language"], language)
 
 	// Disjoint pre-allocated slice: goroutine i writes ONLY results[i].
 	// No shared map, no mutex, no read of results until after wg.Wait().

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -1640,6 +1641,7 @@ func TestRereviewReview_UsesSpoolLanguageLens(t *testing.T) {
 		{"go valkey", "go", "true", "valkey-go-reviewer"},
 		{"valkey without variant", "infra", "true", "infra-reviewer"},
 		{"java", "java", "", "java-reviewer"},
+		{"docs", "docs", "", "docs-reviewer"},
 		{"legacy spool", "", "", "python-reviewer"},
 		{"unknown language", "cobol", "", "python-reviewer"},
 	}
@@ -1681,6 +1683,44 @@ func TestRereviewReview_UsesSpoolLanguageLens(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestRereviewReview_DocsRunsOnlyLanguageLens checks that a docs rereview
+// skips the cross-cutting lenses, as pr_review.py does.
+func TestRereviewReview_DocsRunsOnlyLanguageLens(t *testing.T) {
+	base := t.TempDir()
+	diffPath := filepath.Join(base, "pr.diff")
+	if err := os.WriteFile(diffPath, []byte("diff --git a/README.md b/README.md\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	spoolPath := writeFakeSpoolFile(t, base, map[string]string{
+		"repo": "owner/repo", "pr": "9", "verdict": "COMMENT", "decision": "rereview",
+		"diff_file": diffPath, "language": "docs",
+	}, "# Review\n\nVERDICT: COMMENT\n")
+	calls := withFakeKiroOneshot(t, map[string]string{"review-consolidator": "# C\nVERDICT: COMMENT"}, nil)
+
+	if _, _, err := RereviewReview(context.Background(), recordForSpool("owner/repo", 9, spoolPath), ""); err != nil {
+		t.Fatalf("RereviewReview() error: %v", err)
+	}
+	var agents []string
+	for _, c := range *calls {
+		agents = append(agents, c.agentName)
+	}
+	sort.Strings(agents)
+	if want := []string{"docs-reviewer", "review-consolidator"}; strings.Join(agents, ",") != strings.Join(want, ",") {
+		t.Errorf("agents called = %v, want %v", agents, want)
+	}
+}
+
+func TestRereviewLenses(t *testing.T) {
+	names, profiles := rereviewLenses("go", "go-reviewer")
+	if strings.Join(names, ",") != "language,performance,security,testing" || profiles["language"] != "go-reviewer" {
+		t.Errorf("go lenses = %v %v", names, profiles)
+	}
+	names, _ = rereviewLenses(" Docs ", "docs-reviewer")
+	if strings.Join(names, ",") != "language" {
+		t.Errorf("docs lenses = %v, want [language]", names)
 	}
 }
 
