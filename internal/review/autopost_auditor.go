@@ -133,7 +133,7 @@ type auditorResult struct {
 //   - kiro-cli not on PATH (agent not runnable)
 //   - kiroOneshotMeta error (non-zero exit / empty output)
 //   - the answer has no well-formed VERDICT: line
-func callReviewAuditor(ctx context.Context, repo string, pr int, verdict, body, diff string) auditorResult {
+func callReviewAuditor(ctx context.Context, repo string, pr int, verdict, body, diff, model string) auditorResult {
 	// Preflight: the agent runs via kiro-cli. If kiro-cli isn't resolvable,
 	// the auditor cannot run — fail closed without attempting the call.
 	if _, err := lookPathForDecideActionsFunc("kiro-cli"); err != nil {
@@ -145,7 +145,7 @@ func callReviewAuditor(ctx context.Context, repo string, pr int, verdict, body, 
 	}
 
 	prompt := buildAuditorPrompt(repo, pr, verdict, body, diff)
-	meta, err := kiroOneshotMeta(ctx, reviewAuditorAgent, "", prompt)
+	meta, err := kiroOneshotMeta(ctx, reviewAuditorAgent, model, prompt)
 	if err != nil {
 		return auditorResult{
 			verdict: auditorNeedsHuman,

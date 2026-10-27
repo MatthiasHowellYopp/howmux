@@ -361,6 +361,7 @@ func newModel(w *watcher.Watcher, m *agent.Manager, cfg *config.Config, logFile 
 		Mode:          review.AutoPostMode(cfg.Review.AutoPost.Mode),
 		MaxFindings:   cfg.Review.AutoPost.MaxFindings,
 		OwnRepoOwners: cfg.Review.AutoPost.OwnRepoOwners,
+		AuditorModel:  cfg.Review.AutoPost.AuditorModel,
 	})
 	footerManager.SetReviewWatcher(reviewWatcher) // NEW — wires footer to the review watcher built above
 

@@ -21,6 +21,7 @@ import (
 // the agent name it was called with and the prompt text passed.
 type fakeKiroCall struct {
 	agentName string
+	model     string
 	prompt    string
 }
 
@@ -40,9 +41,9 @@ func withFakeKiroOneshot(t *testing.T, responses map[string]string, errors map[s
 	var mu sync.Mutex
 	calls := []fakeKiroCall{}
 
-	kiroOneshotFunc = func(ctx context.Context, agentName string, prompt string) (kirocli.Result, error) {
+	kiroOneshotFunc = func(ctx context.Context, agentName, model, prompt string) (kirocli.Result, error) {
 		mu.Lock()
-		calls = append(calls, fakeKiroCall{agentName: agentName, prompt: prompt})
+		calls = append(calls, fakeKiroCall{agentName: agentName, model: model, prompt: prompt})
 		mu.Unlock()
 
 		if errors != nil {
@@ -286,7 +287,7 @@ func TestDefaultKiroOneshot_EmptyOutput_ReturnsError(t *testing.T) {
 	restorePath := prependPath(t, dir)
 	defer restorePath()
 
-	_, err := defaultKiroOneshot(context.Background(), "review-consolidator", "prompt")
+	_, err := defaultKiroOneshot(context.Background(), "review-consolidator", "", "prompt")
 	if err == nil {
 		t.Fatal("defaultKiroOneshot() error = nil, want non-nil error for empty output")
 	}
@@ -305,7 +306,7 @@ func TestDefaultKiroOneshot_NonZeroExit_ReturnsError(t *testing.T) {
 	restorePath := prependPath(t, dir)
 	defer restorePath()
 
-	_, err := defaultKiroOneshot(context.Background(), "review-consolidator", "prompt")
+	_, err := defaultKiroOneshot(context.Background(), "review-consolidator", "", "prompt")
 	if err == nil {
 		t.Fatal("defaultKiroOneshot() error = nil, want non-nil error for non-zero exit")
 	}
@@ -335,7 +336,7 @@ JSONL
 	restorePath := prependPath(t, dir)
 	defer restorePath()
 
-	got, err := defaultKiroOneshot(context.Background(), "review-consolidator", "prompt")
+	got, err := defaultKiroOneshot(context.Background(), "review-consolidator", "", "prompt")
 	if err != nil {
 		t.Fatalf("defaultKiroOneshot() unexpected error: %v", err)
 	}
@@ -348,6 +349,15 @@ JSONL
 	argv, _ := os.ReadFile(filepath.Join(dir, "argv.txt"))
 	if want := "chat --no-interactive --trust-all-tools --agent review-consolidator --output-format stream-json prompt\n"; string(argv) != want {
 		t.Errorf("argv = %q, want %q", argv, want)
+	}
+
+	// A pinned model is forwarded as --model.
+	if _, err := defaultKiroOneshot(context.Background(), "review-auditor", "claude-sonnet-5.5", "prompt"); err != nil {
+		t.Fatalf("defaultKiroOneshot() with model: %v", err)
+	}
+	argv, _ = os.ReadFile(filepath.Join(dir, "argv.txt"))
+	if want := "chat --no-interactive --trust-all-tools --agent review-auditor --output-format stream-json --model claude-sonnet-5.5 prompt\n"; string(argv) != want {
+		t.Errorf("argv with model = %q, want %q", argv, want)
 	}
 }
 
@@ -1683,7 +1693,7 @@ func TestRereviewReview_LensCallFails_CancelsSiblings(t *testing.T) {
 	var mu sync.Mutex
 	siblingObservedCancel := false
 
-	kiroOneshotFunc = func(ctx context.Context, agentName string, prompt string) (kirocli.Result, error) {
+	kiroOneshotFunc = func(ctx context.Context, agentName, _ string, prompt string) (kirocli.Result, error) {
 		// One lens fails immediately, triggering the shared cancel().
 		if agentName == "review-security-agent" {
 			return kirocli.Result{}, fmt.Errorf("kiro-cli exited 1 for security lens")
@@ -1739,7 +1749,7 @@ func TestRereviewReview_LensFanOut_NoRaceCondition(t *testing.T) {
 
 	var counter int64
 	var mu sync.Mutex
-	kiroOneshotFunc = func(ctx context.Context, agentName string, prompt string) (kirocli.Result, error) {
+	kiroOneshotFunc = func(ctx context.Context, agentName, _ string, prompt string) (kirocli.Result, error) {
 		// Small jittered sleep to widen the window in which a shared-state
 		// race (if present) would manifest.
 		sleepFor := time.Duration(1+(len(agentName)%3)) * time.Millisecond

@@ -46,6 +46,7 @@ type AutoPostConfig struct {
 	Mode          AutoPostMode // dry-run | own-repos | all
 	MaxFindings   int          // guardrail finding-count cap (<=0 disables)
 	OwnRepoOwners []string     // owners allowed to auto-post in own-repos mode (owner part of owner/repo)
+	AuditorModel  string       // kiro-cli --model for the review-auditor; "" = kiro-cli's default
 }
 
 // autoPostOutcome is the gate's final decision for one review.
@@ -114,7 +115,7 @@ func EvaluateAndMaybePost(ctx context.Context, rec Record, body, verdict, headSH
 	recordAudit(audit, auditStep{step: "guardrail", status: "pass", detail: "all deterministic checks clean"})
 
 	// Step 2: adversarial auditor.
-	ar := callReviewAuditor(ctx, rec.Repo, rec.PR, verdict, body, diff)
+	ar := callReviewAuditor(ctx, rec.Repo, rec.PR, verdict, body, diff, cfg.AuditorModel)
 	auditorStatus := "pass"
 	if ar.meta.Status == "error" {
 		auditorStatus = "error"

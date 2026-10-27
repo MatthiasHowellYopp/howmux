@@ -92,3 +92,54 @@ review:
 		t.Fatal("expected error for negative max_findings, got nil")
 	}
 }
+
+func TestLoad_AutoPostAuditorModel(t *testing.T) {
+	cfg, err := loadConfigFrom(t, "repo: test/repo\nreview:\n  auto_post:\n    auditor_model: \"  claude-sonnet-5.5 \"")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.Review.AutoPost.AuditorModel; got != "claude-sonnet-5.5" {
+		t.Errorf("AuditorModel = %q, want trimmed claude-sonnet-5.5", got)
+	}
+
+	cfg, err = loadConfigFrom(t, "repo: test/repo")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.Review.AutoPost.AuditorModel; got != "" {
+		t.Errorf("default AuditorModel = %q, want empty (kiro-cli default)", got)
+	}
+}
+
+func TestLoad_AutoPostAuditorModelShapeRejected(t *testing.T) {
+	for _, v := range []string{
+		`claude sonnet`,    // space
+		`"claude\tsonnet"`, // tab
+		`"claude\nsonnet"`, // newline
+		`"claude\u00a0x"`,  // non-breaking space
+		`--help`,           // looks like a flag
+		`"-model"`,         // leading dash
+		`"claude;rm"`,      // not a model-id character
+	} {
+		t.Run(v, func(t *testing.T) {
+			_, err := loadConfigFrom(t, "repo: test/repo\nreview:\n  auto_post:\n    auditor_model: "+v)
+			if err == nil {
+				t.Fatalf("expected error for auditor_model %s, got nil", v)
+			}
+		})
+	}
+}
+
+func TestLoad_AutoPostAuditorModelShapeAccepted(t *testing.T) {
+	for _, v := range []string{"claude-sonnet-5.5", "gpt-5.6-luna", "auto", "qwen3-coder-next"} {
+		t.Run(v, func(t *testing.T) {
+			cfg, err := loadConfigFrom(t, "repo: test/repo\nreview:\n  auto_post:\n    auditor_model: "+v)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.Review.AutoPost.AuditorModel != v {
+				t.Errorf("AuditorModel = %q, want %q", cfg.Review.AutoPost.AuditorModel, v)
+			}
+		})
+	}
+}

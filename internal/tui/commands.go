@@ -1017,6 +1017,7 @@ func (m model) handleReview(args []string) (model, tea.Cmd) {
 			Mode:          review.AutoPostMode(m.config.Review.AutoPost.Mode),
 			MaxFindings:   m.config.Review.AutoPost.MaxFindings,
 			OwnRepoOwners: m.config.Review.AutoPost.OwnRepoOwners,
+			AuditorModel:  m.config.Review.AutoPost.AuditorModel,
 		}
 	}
 

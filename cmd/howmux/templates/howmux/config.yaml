@@ -21,3 +21,5 @@ enable_copilot_review: true  # Enable AI-powered code review feedback
 #     max_findings: 25         # guardrail cap; 0 disables the count check
 #     own_repo_owners:         # owners auto-posted in own-repos mode
 #       - matthiashowellyopp
+#       - Bit-Quill
+#     auditor_model: claude-sonnet-5.5  # optional; default is kiro-cli's (auto)
