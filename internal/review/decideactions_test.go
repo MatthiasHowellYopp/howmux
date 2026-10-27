@@ -1629,6 +1629,61 @@ func TestRereviewReview_DiffFileExists_FansOutToAllLenses(t *testing.T) {
 	}
 }
 
+// TestRereviewReview_UsesSpoolLanguageLens checks that rereview runs the
+// language lens the original review recorded (language:/valkey: in the spool
+// front-matter), not a hardcoded python-reviewer.
+func TestRereviewReview_UsesSpoolLanguageLens(t *testing.T) {
+	cases := []struct {
+		name, language, valkey, want string
+	}{
+		{"infra", "infra", "false", "infra-reviewer"},
+		{"go valkey", "go", "true", "valkey-go-reviewer"},
+		{"valkey without variant", "infra", "true", "infra-reviewer"},
+		{"java", "java", "", "java-reviewer"},
+		{"legacy spool", "", "", "python-reviewer"},
+		{"unknown language", "cobol", "", "python-reviewer"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			base := t.TempDir()
+			diffPath := filepath.Join(base, "pr.diff")
+			if err := os.WriteFile(diffPath, []byte("diff --git a/x b/x\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			fields := map[string]string{
+				"repo": "owner/repo", "pr": "23", "verdict": "COMMENT", "decision": "rereview",
+				"diff_file": diffPath,
+			}
+			if tc.language != "" {
+				fields["language"] = tc.language
+			}
+			if tc.valkey != "" {
+				fields["valkey"] = tc.valkey
+			}
+			spoolPath := writeFakeSpoolFile(t, base, fields, "# Review\n\nVERDICT: COMMENT\n")
+			calls := withFakeKiroOneshot(t, map[string]string{
+				"review-consolidator": "# Consolidated\nVERDICT: COMMENT",
+			}, nil)
+
+			if _, _, err := RereviewReview(context.Background(), recordForSpool("owner/repo", 23, spoolPath), ""); err != nil {
+				t.Fatalf("RereviewReview() error: %v", err)
+			}
+			got := map[string]bool{}
+			for _, c := range *calls {
+				got[c.agentName] = true
+			}
+			if !got[tc.want] {
+				t.Errorf("language lens %q not called; calls: %+v", tc.want, *calls)
+			}
+			for _, r := range languageReviewers {
+				if r != tc.want && got[r] {
+					t.Errorf("unexpected language lens %q called (want only %q)", r, tc.want)
+				}
+			}
+		})
+	}
+}
+
 func TestRereviewReview_LensCallFails_PropagatesError(t *testing.T) {
 	base := t.TempDir()
 	diffPath := filepath.Join(base, "pr.diff")

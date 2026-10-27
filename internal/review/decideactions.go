@@ -819,13 +819,28 @@ var languageReviewers = map[string]string{
 	"node":   "node-reviewer",
 	"java":   "java-reviewer",
 	"astro":  "astro-reviewer",
+	"infra":  "infra-reviewer",
 }
 
-// resolveLanguageReviewer mirrors pr_review.py's resolve_language_reviewer
-// for the non-valkey case (rereview's fan-out does not carry a valkey
-// flag through the spool front-matter, matching the Python reference's
-// own do_rereview, which never passes valkey=True either).
-func resolveLanguageReviewer(language string) string {
+// valkeyReviewers mirrors pr_review.py's _VALKEY_REVIEWER table: languages
+// with a Valkey-specific reviewer variant.
+var valkeyReviewers = map[string]string{
+	"python": "valkey-python-reviewer",
+	"go":     "valkey-go-reviewer",
+}
+
+// resolveLanguageReviewer mirrors pr_review.py's resolve_language_reviewer.
+// language and valkey come from the spool front-matter, which pr_review.py
+// writes with the lens the original review used. An unknown or missing
+// language (older spools have none) falls back to python-reviewer, matching
+// pr_review_finalize.py's --language default.
+func resolveLanguageReviewer(language string, valkey bool) string {
+	language = strings.ToLower(strings.TrimSpace(language))
+	if valkey {
+		if reviewer, ok := valkeyReviewers[language]; ok {
+			return reviewer
+		}
+	}
 	if reviewer, ok := languageReviewers[language]; ok {
 		return reviewer
 	}
@@ -985,7 +1000,9 @@ func RereviewReview(ctx context.Context, rec Record, inlineNotes string) (newVer
 	}
 	context_ := fmt.Sprintf("Re-review requested. Human revision notes to weigh: %s", notes)
 
-	language := resolveLanguageReviewer("python")
+	// Re-run the same language lens the original review used.
+	valkey := strings.EqualFold(strings.TrimSpace(fields["valkey"]), "true")
+	language := resolveLanguageReviewer(fields["language"], valkey)
 	lensNames := []string{"language", "performance", "security", "testing"}
 	lensProfiles := map[string]string{
 		"language":    language,

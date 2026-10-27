@@ -26,6 +26,7 @@ func RequiredReviewAssets() []string {
 		"agent:node-reviewer",
 		"agent:java-reviewer",
 		"agent:astro-reviewer",
+		"agent:infra-reviewer",
 
 		// Valkey-specific reviewer agents
 		"agent:valkey-python-reviewer",

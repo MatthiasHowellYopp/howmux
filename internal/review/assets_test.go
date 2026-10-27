@@ -62,6 +62,7 @@ func TestRequiredReviewAssets(t *testing.T) {
 		"skill:humanizer",
 		"agent:python-reviewer",
 		"agent:go-reviewer",
+		"agent:infra-reviewer",
 		"agent:review-consolidator",
 		"skill:review-protocol",
 		"skill:python-reviewer",
