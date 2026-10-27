@@ -94,6 +94,14 @@ var discardReviewFunc = DiscardReview
 func EvaluateAndMaybePost(ctx context.Context, rec Record, body, verdict, headSHA, reviewedSHA, diff string, cfg AutoPostConfig) (GateResult, error) {
 	audit := NewAuditLog(newRunID(), rec.Repo, rec.PR)
 
+	// Step 0: record the inputs, so the agreement report can tie this run to
+	// the exact review generation (reviewed_sha) a human later decided on.
+	recordAudit(audit, auditStep{step: "inputs", status: "pass", detail: formatKV(
+		"verdict", strings.ToUpper(strings.TrimSpace(verdict)),
+		"reviewed_sha", reviewedSHA,
+		"head_sha", headSHA,
+	)})
+
 	// Step 1: deterministic guardrail.
 	commentable := parseDiffCommentableLines(diff)
 	g := evaluateAutoPostGuardrail(verdict, body, headSHA, reviewedSHA, commentable, cfg.MaxFindings)

@@ -166,6 +166,15 @@ The gate is **fail-closed**: anything it cannot be sure about — a failed check
 
 Every gate run is recorded to `~/PR-Review/audit/` as a per-run `.jsonl` trace (which checks ran, the auditor verdict, the step's model and wall-clock duration, and the outcome). Note that `kiro-cli` does not report token counts or cost, so those fields are recorded as null rather than estimated.
 
+Each decision you make in the TUI (post, revise, rereview, discard) is recorded too, under `~/PR-Review/audit/decisions/`. To see how often the gate's calls match yours, run:
+
+```bash
+howmux review agreement          # table + agreement rate
+howmux review agreement --json   # same data as JSON
+```
+
+Agreement counts only runs where the gate made a call (post or discard) and you've decided. `too_permissive` rows are reviews the gate would have posted that you didn't post as-is; check those before moving off `dry-run`.
+
 Configure it under `review.auto_post` in `.howmux/config.yaml`:
 
 ```yaml

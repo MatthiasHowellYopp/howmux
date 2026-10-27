@@ -203,7 +203,7 @@ Per-step record (one JSON object per line):
 run_id            str      — groups every step of one gate invocation
 pipeline          str      — "review_auto_post"
 repo, pr          str      — subject of the run
-step              str      — "guardrail" | "auditor"  (plus the review steps if wired through)
+step              str      — "inputs" | "guardrail" | "auditor" | "outcome"
 agent             str|null — "review-auditor" for the adversarial step; null for the deterministic guardrail
 model             str|null — the --model value we pass (null if we pass none)
 status            str      — "pass" | "fail" | "error"
@@ -257,6 +257,43 @@ gate records what it *would* have done; the human still decides; we compare.)
 That agreement rate is the number that must clear a bar before we widen the
 trust scope in Phase 1/2, and it is traceable back to the exact check or auditor
 verdict via the per-step records.
+
+#### Agreement report
+
+`howmux review agreement` (add `--json` for machine-readable output) computes
+this number. Two record types feed it, both in `~/PR-Review/audit/`:
+
+- **Gate runs** (`review_auto_post-*.jsonl`). The first step, `inputs`, records
+  `verdict=… reviewed_sha=… head_sha=…`. The auditor step gives what the gate
+  would do (`POST_OK` → post, `DISCARD` → discard, otherwise punch). A failed
+  guardrail is a punch.
+- **Human decisions** (`decisions/review_decision-*.jsonl`, step
+  `human_decision`). They sit in a subdirectory because `e2e_report.py` treats
+  every top-level `.jsonl` as a pipeline run, and a human decision isn't one. The
+  TUI writes one record per post / revise / rereview / discard, with
+  `decision=… verdict=… reviewed_sha=…` captured *before* the action runs. Each
+  decision gets its own file, so re-reviews never overwrite earlier ones (the
+  `done/` file does keep only the latest).
+
+A gate run is paired with the first human decision on the same PR at or after
+the run and before that PR's next gate run, skipping decisions whose
+`reviewed_sha` differs when both sides recorded one. Gate runs from before
+decisions were audited fall back to the PR's `done/` file, but only for the
+PR's latest run and only when the file's `generated` time shows it is the
+review generation the gate saw.
+
+| Class | Meaning | Graded |
+|-------|---------|--------|
+| `agree` | gate and human chose the same action | yes |
+| `too_permissive` | gate would post; human revised, re-reviewed or discarded | yes |
+| `too_strict` | gate would discard; human posted, revised or re-reviewed | yes |
+| `punched` | gate deferred to a human | no |
+| `auto` | gate acted for real (non-dry-run) | no |
+| `undecided` | no human decision yet | no |
+
+Agreement rate = `agree / (agree + too_permissive + too_strict)`.
+`too_permissive` is the dangerous direction: those are reviews the gate would
+have posted unsupervised that a human didn't post as-is.
 
 ## Testing
 

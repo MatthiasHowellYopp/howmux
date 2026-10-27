@@ -79,16 +79,27 @@ type auditRecord struct {
 // AuditLog is one gate invocation's audit trail. All steps of one run share a
 // RunID and land in the same .jsonl file. Construct with NewAuditLog.
 type AuditLog struct {
-	RunID string
-	Repo  string
-	PR    int
-	path  string // resolved on first record(); "" until then
+	RunID    string
+	Repo     string
+	PR       int
+	pipeline string // "" means auditPipeline (review_auto_post)
+	subdir   string // optional subdirectory of the audit dir ("" = top level)
+	path     string // resolved on first record(); "" until then
 }
 
 // NewAuditLog creates an audit log for one gate run. runID groups every step
 // of this invocation; callers should pass a short unique id (see newRunID).
 func NewAuditLog(runID, repo string, pr int) *AuditLog {
 	return &AuditLog{RunID: runID, Repo: repo, PR: pr}
+}
+
+// pipelineName returns the pipeline stamped on this log's records and used in
+// its file name: auditPipeline unless a different one was set.
+func (a *AuditLog) pipelineName() string {
+	if a.pipeline == "" {
+		return auditPipeline
+	}
+	return a.pipeline
 }
 
 // auditStep is the typed set of arguments for one record() call, keeping the
@@ -116,6 +127,9 @@ func (a *AuditLog) record(s auditStep) error {
 	if err != nil {
 		return err
 	}
+	if a.subdir != "" {
+		dir = filepath.Join(dir, a.subdir)
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("audit: cannot create audit dir %s: %w", dir, err)
 	}
@@ -125,7 +139,7 @@ func (a *AuditLog) record(s auditStep) error {
 		if slug == "" {
 			slug = "unknown"
 		}
-		a.path = filepath.Join(dir, fmt.Sprintf("%s-%s-%d-%s.jsonl", auditPipeline, slug, a.PR, a.RunID))
+		a.path = filepath.Join(dir, fmt.Sprintf("%s-%s-%d-%s.jsonl", a.pipelineName(), slug, a.PR, a.RunID))
 	}
 
 	var agentPtr *string
@@ -151,7 +165,7 @@ func (a *AuditLog) record(s auditStep) error {
 
 	rec := auditRecord{
 		RunID:           a.RunID,
-		Pipeline:        auditPipeline,
+		Pipeline:        a.pipelineName(),
 		Repo:            a.Repo,
 		PR:              fmt.Sprintf("%d", a.PR),
 		Step:            s.step,
