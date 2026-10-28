@@ -42,8 +42,13 @@ var sentenceSplitRe = regexp.MustCompile("([.!?])\\s+([A-Z`*\"'(])")
 
 var (
 	summaryTitles = []string{"summary", "overview"}
-	notesTitles   = []string{"reviewer notes", "notes", "noted", "not flagged", "verified",
+	// notesTitles are matched as title prefixes, not substrings, so a
+	// heading such as "Findings (verified)" is not mistaken for notes.
+	notesTitles = []string{"reviewer notes", "notes", "noted", "not flagged", "verified",
 		"cleared", "non-issues", "rationale", "dropped"}
+	// droppedTitles are the notes prefixes that still mean "not posted" when
+	// the heading also says "findings" ("Dropped findings").
+	droppedTitles = []string{"dropped", "cleared", "not flagged", "non-issues"}
 )
 
 // reviewParts is a consolidated review split into what is posted (summary,
@@ -60,21 +65,27 @@ type reviewParts struct {
 	unparsed []string
 }
 
-// sectionKind classifies an H2+ heading title.
+// sectionKind classifies an H2 heading title. A heading that mentions
+// findings is a findings section ("Verified findings", "Findings and notes")
+// unless it names findings that were dropped ("Dropped findings"): a
+// mis-classified findings section would silently withhold real findings.
 func sectionKind(title string) string {
 	t := strings.ToLower(strings.TrimSpace(title))
-	for _, s := range summaryTitles {
-		if strings.HasPrefix(t, s) {
-			return "summary"
+	hasPrefix := func(prefixes []string) bool {
+		for _, p := range prefixes {
+			if strings.HasPrefix(t, p) {
+				return true
+			}
 		}
+		return false
 	}
-	for _, s := range notesTitles {
-		if strings.Contains(t, s) {
-			return "notes"
-		}
-	}
-	if strings.HasPrefix(t, "finding") {
+	switch {
+	case hasPrefix(summaryTitles):
+		return "summary"
+	case strings.Contains(t, "finding") && !hasPrefix(droppedTitles):
 		return "findings"
+	case hasPrefix(notesTitles):
+		return "notes"
 	}
 	return "other"
 }
@@ -112,7 +123,9 @@ func splitReview(body string) reviewParts {
 
 	for _, ln := range strings.Split(body, "\n") {
 		if h := headingRe.FindStringSubmatch(ln); h != nil {
-			if len(h[1]) >= 2 {
+			// Only H2 starts a new section; H3+ sub-headings inherit their
+			// parent's, so "### Notes on X" under Findings stays a finding.
+			if len(h[1]) == 2 {
 				kind = sectionKind(h[2])
 				if kind == "notes" {
 					noteLines = append(noteLines, ln)
