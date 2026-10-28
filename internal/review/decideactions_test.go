@@ -1029,6 +1029,53 @@ func TestPlanReview_LegacyReviewWithoutSections(t *testing.T) {
 	}
 }
 
+// TestSplitReview_FindingsHeadingVariants: headings that mention findings
+// keep their findings (posted), H3 sub-headings inherit their section, and
+// only dropped-findings headings withhold them.
+func TestSplitReview_FindingsHeadingVariants(t *testing.T) {
+	const f = "- a.go:1 - warning - x is unchecked, so bad input passes -> check x\n"
+	tests := []struct {
+		name    string
+		heading string
+		want    int
+	}{
+		{"plain", "## Findings\n", 1},
+		{"verified findings", "## Verified findings\n", 1},
+		{"findings (verified)", "## Findings (verified)\n", 1},
+		{"findings and notes", "## Findings and notes\n", 1},
+		{"H3 notes under findings", "## Findings\n### Notes on parsing\n", 1},
+		{"dropped findings", "## Dropped findings\n", 0},
+		{"reviewer notes", "## Reviewer notes\n", 0},
+		{"verified non-issues", "## Verified non-issues\n", 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := "# Review\n\n## Summary\nAdds x.\n\n" + tt.heading + f + "\nVERDICT: COMMENT\n"
+			if got := len(splitReview(body).findings); got != tt.want {
+				t.Errorf("findings = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestPlanReview_EmptySummaryNeverEmptyBody: with no summary, a COMMENT or
+// REQUEST_CHANGES review still gets a non-empty body, even when no finding
+// could be posted (GitHub would 422 an empty body).
+func TestPlanReview_EmptySummaryNeverEmptyBody(t *testing.T) {
+	offDiff := "# Review\n\n## Findings\n- other.go:5 - warning - x is unchecked, so bad input passes -> check x\n\nVERDICT: REQUEST_CHANGES\n"
+	commentable := map[string]map[int]bool{"a.go": {1: true}}
+	for _, verdict := range []string{"COMMENT", "REQUEST_CHANGES"} {
+		plan := planReview(verdict, offDiff, "", commentable)
+		if strings.TrimSpace(plan.review.Body) == "" {
+			t.Errorf("%s with only unposted findings: empty body", verdict)
+		}
+		empty := planReview(verdict, "# Review\n\nVERDICT: "+verdict+"\n", "", commentable)
+		if strings.TrimSpace(empty.review.Body) == "" {
+			t.Errorf("%s with no summary and no findings: empty body", verdict)
+		}
+	}
+}
+
 func TestCapSummary(t *testing.T) {
 	long := finding{issue: strings.Repeat("x", 200), fix: "y"}
 	short := finding{issue: "short", fix: "fix"}

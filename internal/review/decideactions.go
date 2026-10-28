@@ -656,14 +656,22 @@ func planReview(verdict, body, summaryOverride string, commentable map[string]ma
 		plan.unposted = append(plan.unposted, parts.raw[i])
 	}
 
-	// GitHub rejects a COMMENT / REQUEST_CHANGES review with an empty body.
-	// Fall back to a neutral pointer at the comments rather than inventing
-	// an assessment.
-	if summary == "" && (len(comments) > 0 || len(plan.fileComments) > 0) {
-		summary = "See the inline comments."
+	// GitHub rejects a COMMENT / REQUEST_CHANGES review with an empty body
+	// (and a 422 here would leave the spool failing on every retry). Fall
+	// back to a neutral line rather than inventing an assessment.
+	event := verdictEvent(verdict)
+	if summary == "" {
+		switch {
+		case len(comments) > 0 || len(plan.fileComments) > 0:
+			summary = "See the inline comments."
+		case len(plan.unposted) > 0 && event != "APPROVE":
+			summary = "The findings from this review refer to code outside this PR's diff, so none were posted as comments."
+		case event != "APPROVE":
+			summary = "No comments."
+		}
 	}
 
-	plan.review = reviewPayload{Event: verdictEvent(verdict), Body: summary, Comments: comments}
+	plan.review = reviewPayload{Event: event, Body: summary, Comments: comments}
 	return plan
 }
 
