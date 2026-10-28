@@ -232,6 +232,19 @@ func TestEvaluateAutoPostGuardrail(t *testing.T) {
 			maxFindings: 0,
 			wantClean:   true,
 		},
+		{
+			name:    "dropped finding under Reviewer notes does not need to anchor",
+			verdict: "COMMENT",
+			body: "# Review\n\n## Summary\nTidies foo.\n\n## Findings\n" +
+				"- internal/foo.go:10 - low - unused var -> remove it\n\n" +
+				"## Reviewer notes\nDropped: internal/other.go:99 - nit - naming -> rename\n\n" +
+				"VERDICT: COMMENT\n",
+			headSHA:     head,
+			reviewedSHA: head,
+			commentable: commentableFixture(),
+			maxFindings: 25,
+			wantClean:   true,
+		},
 	}
 
 	for _, tt := range tests {

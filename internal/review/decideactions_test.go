@@ -717,8 +717,10 @@ func TestBuildReviewPayload_ParsesFindingsIntoComments(t *testing.T) {
 	if decoded.Comments[0].Path != "src/foo.py" || decoded.Comments[0].Line != 10 {
 		t.Errorf("comment[0] = %+v, want path=src/foo.py line=10", decoded.Comments[0])
 	}
-	if decoded.Body != body {
-		t.Errorf("decoded.Body = %q, want the full original body verbatim", decoded.Body)
+	// No ## Summary and no prose: the body is a neutral pointer, never the
+	// findings or the VERDICT line.
+	if decoded.Body != "See the inline comments." {
+		t.Errorf("decoded.Body = %q, want %q", decoded.Body, "See the inline comments.")
 	}
 }
 
@@ -922,12 +924,12 @@ func keysOf(m map[string]map[int]bool) []string {
 	return out
 }
 
-// TestBuildReviewPayload_DiffAnchoring_FoldsUnanchored verifies that with a
-// commentable set, an on-diff finding is posted inline while an off-diff
-// finding is folded into the body instead of being emitted as a comment
-// (which would 422 the whole review).
-func TestBuildReviewPayload_DiffAnchoring_FoldsUnanchored(t *testing.T) {
-	body := "# Review\n\n" +
+// TestPlanReview_DiffAnchoring verifies that with a commentable set, an
+// on-diff finding is posted inline, an off-diff finding in a diff file
+// becomes a file-level comment, and a finding in a file outside the diff is
+// unposted. None of them fold into the review body.
+func TestPlanReview_DiffAnchoring(t *testing.T) {
+	body := "# Review\n\n## Summary\nAdds a parser.\n\n## Findings\n" +
 		"src/foo.py:2 - warning - on the diff -> fix it\n" +
 		"src/foo.py:99 - warning - off the diff -> fix it too\n" +
 		"other.py:5 - nit - file not in diff -> rename\n\n" +
@@ -937,64 +939,152 @@ func TestBuildReviewPayload_DiffAnchoring_FoldsUnanchored(t *testing.T) {
 		"src/foo.py": {2: true},
 	}
 
-	payloadJSON, _, count, err := buildReviewPayload("owner/repo", 1, "COMMENT", body, commentable)
-	if err != nil {
-		t.Fatalf("buildReviewPayload() unexpected error: %v", err)
+	plan := planReview("COMMENT", body, "", commentable)
+	if len(plan.review.Comments) != 1 {
+		t.Fatalf("inline comments = %d, want 1", len(plan.review.Comments))
 	}
-	if count != 1 {
-		t.Fatalf("commentCount = %d, want 1 (only src/foo.py:2 anchors)", count)
+	if c := plan.review.Comments[0]; c.Path != "src/foo.py" || c.Line != 2 {
+		t.Errorf("comment = %+v, want src/foo.py:2", c)
 	}
-
-	var decoded reviewPayload
-	if err := json.Unmarshal(payloadJSON, &decoded); err != nil {
-		t.Fatalf("unmarshal payload: %v", err)
+	if len(plan.fileComments) != 1 {
+		t.Fatalf("file comments = %d, want 1", len(plan.fileComments))
 	}
-	if len(decoded.Comments) != 1 {
-		t.Fatalf("inline comments = %d, want 1", len(decoded.Comments))
+	fc := plan.fileComments[0]
+	if fc.Path != "src/foo.py" || fc.SubjectType != "file" || !strings.HasPrefix(fc.Body, "Line 99: warning: off the diff") {
+		t.Errorf("file comment = %+v, want src/foo.py, subject_type file, body starting Line 99", fc)
 	}
-	if decoded.Comments[0].Path != "src/foo.py" || decoded.Comments[0].Line != 2 {
-		t.Errorf("comment = %+v, want src/foo.py:2", decoded.Comments[0])
+	if len(plan.unposted) != 1 || !strings.Contains(plan.unposted[0], "other.py:5") {
+		t.Errorf("unposted = %v, want the other.py:5 finding", plan.unposted)
 	}
-	// The two off-diff findings must survive in the body, not vanish.
-	if !strings.Contains(decoded.Body, "src/foo.py:99") {
-		t.Errorf("body missing folded finding src/foo.py:99:\n%s", decoded.Body)
-	}
-	if !strings.Contains(decoded.Body, "other.py:5") {
-		t.Errorf("body missing folded finding other.py:5:\n%s", decoded.Body)
-	}
-	if !strings.Contains(decoded.Body, "Additional findings") {
-		t.Errorf("body missing the Additional findings section:\n%s", decoded.Body)
+	if plan.review.Body != "Adds a parser." {
+		t.Errorf("body = %q, want the summary only", plan.review.Body)
 	}
 }
 
 // TestBuildReviewPayload_NilCommentable_PostsAllInline confirms the
 // best-effort fallback: a nil commentable map means "no diff info", so every
-// finding is posted inline and the body is untouched (prior behavior).
+// finding is posted inline.
 func TestBuildReviewPayload_NilCommentable_PostsAllInline(t *testing.T) {
 	body := "src/foo.py:2 - warning - a -> b\nsrc/foo.py:99 - nit - c -> d\n"
-	payloadJSON, _, count, err := buildReviewPayload("owner/repo", 1, "COMMENT", body, nil)
+	_, _, count, err := buildReviewPayload("owner/repo", 1, "COMMENT", body, nil)
 	if err != nil {
 		t.Fatalf("buildReviewPayload() unexpected error: %v", err)
 	}
 	if count != 2 {
 		t.Fatalf("commentCount = %d, want 2 (nil commentable posts all)", count)
 	}
-	var decoded reviewPayload
-	if err := json.Unmarshal(payloadJSON, &decoded); err != nil {
-		t.Fatalf("unmarshal payload: %v", err)
+}
+
+// TestPlanReview_PostsSummaryOnly is the core contract: the posted body is
+// the ## Summary section, and nothing from Reviewer notes (rationale,
+// cleared items, dropped findings) reaches GitHub, not even a dropped
+// finding written in finding shape.
+func TestPlanReview_PostsSummaryOnly(t *testing.T) {
+	body := "# Consolidated Review — owner/repo PR #7\n\n" +
+		"## Summary\n" +
+		"Adds retry handling to the fetcher. One error path drops the cause.\n\n" +
+		"## Findings\n" +
+		"- internal/fetch.go:12 - warning - the wrapped error drops the cause, so callers can't match it -> wrap with %w\n\n" +
+		"## Reviewer notes\n" +
+		"Verdict is COMMENT because the issue is not blocking.\n" +
+		"Dropped: internal/fetch.go:30 - nit - naming -> rename\n" +
+		"Verified the timeout change is safe.\n\n" +
+		"VERDICT: COMMENT\n"
+
+	plan := planReview("COMMENT", body, "", nil)
+
+	want := "Adds retry handling to the fetcher. One error path drops the cause."
+	if plan.review.Body != want {
+		t.Errorf("body = %q, want %q", plan.review.Body, want)
 	}
-	if decoded.Body != body {
-		t.Errorf("body = %q, want verbatim (no folding when commentable is nil)", decoded.Body)
+	if len(plan.review.Comments) != 1 || plan.review.Comments[0].Line != 12 {
+		t.Fatalf("comments = %+v, want just internal/fetch.go:12", plan.review.Comments)
 	}
+	for _, leaked := range []string{"Verdict is", "Dropped", "Verified", "VERDICT", "fetch.go:30"} {
+		if strings.Contains(plan.review.Body, leaked) {
+			t.Errorf("posted body leaked %q: %q", leaked, plan.review.Body)
+		}
+	}
+	if !strings.Contains(plan.notes, "Verdict is COMMENT") || !strings.Contains(plan.notes, "fetch.go:30") {
+		t.Errorf("notes = %q, want the rationale and dropped finding kept as notes", plan.notes)
+	}
+}
+
+// TestPlanReview_LegacyReviewWithoutSections: an older review with no
+// ## Summary uses its first prose paragraph as the summary; the rest of the
+// prose (rationale) is not posted.
+func TestPlanReview_LegacyReviewWithoutSections(t *testing.T) {
+	body := "# Consolidated Review\n\n" +
+		"Refactors the config loader.\n\n" +
+		"src/a.go:3 - warning - unchecked error is discarded, so a bad file loads silently -> return it\n\n" +
+		"I approved-with-comments because the rest is cosmetic. The lenses also flagged formatting, which I dropped.\n\n" +
+		"VERDICT: COMMENT\n"
+
+	plan := planReview("COMMENT", body, "", nil)
+	if plan.review.Body != "Refactors the config loader." {
+		t.Errorf("body = %q, want the first paragraph only", plan.review.Body)
+	}
+	if strings.Contains(plan.review.Body, "dropped") {
+		t.Errorf("body leaked rationale: %q", plan.review.Body)
+	}
+}
+
+func TestCapSummary(t *testing.T) {
+	long := finding{issue: strings.Repeat("x", 200), fix: "y"}
+	short := finding{issue: "short", fix: "fix"}
+	tests := []struct {
+		name     string
+		summary  string
+		findings []finding
+		want     string
+	}{
+		{"caps at three sentences", "One. Two. Three. Four.", nil, "One. Two. Three."},
+		{"kept when shorter than findings", "One. Two.", []finding{long}, "One. Two."},
+		{"trimmed to be shorter than findings", "First sentence here. Second sentence here.", []finding{short}, "First sentence here."},
+		{"never below one sentence", "A rather long single sentence.", []finding{short}, "A rather long single sentence."},
+		{"empty stays empty", "", nil, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := capSummary(tt.summary, tt.findings); got != tt.want {
+				t.Errorf("capSummary(%q) = %q, want %q", tt.summary, got, tt.want)
+			}
+		})
+	}
+}
+
+// withFakeFileComments substitutes the file-level comment and head-SHA seams
+// and returns a pointer to the posted comments.
+func withFakeFileComments(t *testing.T) *[]fileComment {
+	t.Helper()
+	origPost, origSHA := postFileCommentFunc, prHeadSHAFunc
+	t.Cleanup(func() { postFileCommentFunc, prHeadSHAFunc = origPost, origSHA })
+	var posted []fileComment
+	postFileCommentFunc = func(ctx context.Context, payloadFile string, repo string, pr int) error {
+		data, err := os.ReadFile(payloadFile)
+		if err != nil {
+			t.Fatalf("fake gh: read file comment: %v", err)
+		}
+		var c fileComment
+		if err := json.Unmarshal(data, &c); err != nil {
+			t.Fatalf("fake gh: unmarshal file comment: %v", err)
+		}
+		posted = append(posted, c)
+		return nil
+	}
+	prHeadSHAFunc = func(repo string, pr int) (string, error) { return "headsha", nil }
+	return &posted
 }
 
 // TestPostReview_422_FallsBackToBodyOnly verifies that when the first post
 // 422s, PostReview retries once with a comments-less payload so the review
-// still lands, and archives on the fallback's success.
+// still lands, posts the findings as file-level comments instead of folding
+// them into the summary, and archives on the fallback's success.
 func TestPostReview_422_FallsBackToBodyOnly(t *testing.T) {
 	withFakeDecisionScript(t)
 	os.Setenv("HOWMUX_NO_HUMANIZE", "1")
 	defer os.Unsetenv("HOWMUX_NO_HUMANIZE")
+	fileComments := withFakeFileComments(t)
 
 	base := t.TempDir()
 	// No diff_file, so buildReviewPayload posts the finding inline on the
@@ -1043,6 +1133,13 @@ func TestPostReview_422_FallsBackToBodyOnly(t *testing.T) {
 		t.Errorf("second payload had %d comments, want 0 (body-only fallback)", commentCounts[1])
 	}
 
+	if len(*fileComments) != 1 {
+		t.Fatalf("file comments = %d, want 1 (the inline finding moved to file level)", len(*fileComments))
+	}
+	if fc := (*fileComments)[0]; fc.Path != "src/foo.py" || fc.CommitID != "headsha" || !strings.HasPrefix(fc.Body, "Line 10: ") {
+		t.Errorf("file comment = %+v, want src/foo.py at headsha, body starting Line 10", fc)
+	}
+
 	// Fallback succeeded, so the file must be archived to done/.
 	if _, statErr := os.Stat(spoolPath); !os.IsNotExist(statErr) {
 		t.Errorf("expected spool archived out of pending/, stat err = %v", statErr)
@@ -1050,6 +1147,78 @@ func TestPostReview_422_FallsBackToBodyOnly(t *testing.T) {
 	donePath := swapPendingDone(spoolPath, true)
 	if _, statErr := os.Stat(donePath); statErr != nil {
 		t.Errorf("expected archived file at %s: %v", donePath, statErr)
+	}
+}
+
+// TestPostReview_PostsSummaryOnly_NotesStayInSpool drives PostReview end to
+// end: the humanizer sees only the summary, the posted body is the summary,
+// the reviewer notes never reach GitHub, an off-diff finding becomes a
+// file-level comment on reviewed_sha, and the archived spool keeps the full
+// review (notes included).
+func TestPostReview_PostsSummaryOnly_NotesStayInSpool(t *testing.T) {
+	withFakeDecisionScript(t)
+	fileComments := withFakeFileComments(t)
+
+	base := t.TempDir()
+	diffPath := filepath.Join(base, "pr.diff")
+	diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1,2 +1,3 @@\n x\n+y\n z\n"
+	if err := os.WriteFile(diffPath, []byte(diff), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	body := "# Consolidated Review — owner/repo PR #9\n\n" +
+		"## Summary\nAdds y to a.go.\n\n" +
+		"## Findings\n" +
+		"- a.go:2 - warning - y is never validated, so bad input is stored -> validate y\n" +
+		"- a.go:40 - nit - stale comment above the function misleads readers -> update it\n\n" +
+		"## Reviewer notes\nCleared the security lens's SQL concern: no SQL here.\n\n" +
+		"VERDICT: COMMENT\n"
+	spoolPath := writeFakeSpoolFile(t, base, map[string]string{
+		"repo": "owner/repo", "pr": "9", "verdict": "COMMENT", "decision": "",
+		"diff_file": diffPath, "reviewed_sha": "abc123",
+	}, body)
+	rec := recordForSpool("owner/repo", 9, spoolPath)
+
+	origKiro := kiroOneshotFunc
+	defer func() { kiroOneshotFunc = origKiro }()
+	var humanizePrompt string
+	kiroOneshotFunc = func(ctx context.Context, agentName, model, prompt string) (kirocli.Result, error) {
+		humanizePrompt = prompt
+		return kirocli.Result{Text: "This adds y to a.go."}, nil
+	}
+
+	origPost := postReviewCommandFunc
+	defer func() { postReviewCommandFunc = origPost }()
+	var posted reviewPayload
+	postReviewCommandFunc = func(ctx context.Context, payloadFile string, repo string, pr int) ([]byte, error) {
+		data, _ := os.ReadFile(payloadFile)
+		if err := json.Unmarshal(data, &posted); err != nil {
+			t.Fatalf("unmarshal payload: %v", err)
+		}
+		return []byte(`{"id":1}`), nil
+	}
+
+	n, err := PostReview(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("PostReview() error: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("inline comments posted = %d, want 1", n)
+	}
+	if strings.Contains(humanizePrompt, "Cleared") || strings.Contains(humanizePrompt, "a.go:2") {
+		t.Errorf("humanizer was given more than the summary:\n%s", humanizePrompt)
+	}
+	if posted.Body != "This adds y to a.go." {
+		t.Errorf("posted body = %q, want the humanized summary only", posted.Body)
+	}
+	if len(*fileComments) != 1 || (*fileComments)[0].CommitID != "abc123" || (*fileComments)[0].Path != "a.go" {
+		t.Errorf("file comments = %+v, want one on a.go at abc123", *fileComments)
+	}
+	archived, err := os.ReadFile(swapPendingDone(spoolPath, true))
+	if err != nil {
+		t.Fatalf("read archived spool: %v", err)
+	}
+	if !strings.Contains(string(archived), "Cleared the security lens") {
+		t.Errorf("archived spool lost the reviewer notes:\n%s", archived)
 	}
 }
 

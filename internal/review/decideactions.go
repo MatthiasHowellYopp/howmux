@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/matthiashowellyopp/howmux/internal/github"
 	"github.com/matthiashowellyopp/howmux/internal/kirocli"
 	"github.com/matthiashowellyopp/howmux/internal/logging"
 )
@@ -76,6 +77,35 @@ func defaultKiroOneshot(ctx context.Context, agentName, model, prompt string) (k
 // a fake `gh` and assert on the invocation without hitting the network.
 // Mirrors fetchDiffFunc's (runner.go) established seam pattern.
 var postReviewCommandFunc = defaultPostReviewCommand
+
+// postFileCommentFunc is the seam PostReview posts each file-level comment
+// through (a finding whose file is in the diff but whose line isn't).
+var postFileCommentFunc = defaultPostFileComment
+
+// prHeadSHAFunc resolves a PR's head commit, used as a file-level comment's
+// commit_id when the spool recorded no reviewed_sha.
+var prHeadSHAFunc = func(repo string, pr int) (string, error) {
+	p, err := github.GetPR(repo, pr)
+	if err != nil {
+		return "", err
+	}
+	return p.HeadSHA(), nil
+}
+
+// defaultPostFileComment shells to `gh api repos/<repo>/pulls/<pr>/comments
+// --method POST --input <payloadFile>`.
+func defaultPostFileComment(ctx context.Context, payloadFile string, repo string, pr int) error {
+	cmd := exec.CommandContext(ctx, "gh", "api",
+		fmt.Sprintf("repos/%s/pulls/%d/comments", repo, pr),
+		"--method", "POST",
+		"--input", payloadFile,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("gh api pulls/comments failed: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
 
 // defaultPostReviewCommand shells to `gh api
 // repos/<repo>/pulls/<pr>/reviews --method POST --input <payloadFile>
@@ -310,10 +340,8 @@ func parseFindingLine(line string) (finding, bool) {
 // warnings, 5 nits" by tallying the recognized severity token
 // (critical/warning/nit, case-insensitive) captured from each finding
 // line. This is a display-only heuristic for the post confirm prompt, not
-// a full review-body parser: false positives/negatives on unusually
-// formatted lines only affect the displayed count, never what PostReview
-// actually posts (see buildReviewPayload, which posts the whole body
-// regardless).
+// a full review-body parser. It counts the same findings planReview posts
+// (finding lines under Reviewer notes are excluded).
 //
 // If no recognized severities are found among the matched findings,
 // breakdown is "" so the caller can fall back to a prompt with no
@@ -321,11 +349,7 @@ func parseFindingLine(line string) (finding, bool) {
 func countFindings(body string) (total int, breakdown string) {
 	counts := map[string]int{}
 	order := []string{}
-	for _, line := range strings.Split(body, "\n") {
-		f, ok := parseFindingLine(line)
-		if !ok {
-			continue
-		}
+	for _, f := range splitReview(body).findings {
 		total++
 		switch f.severity {
 		case "critical", "warning", "nit":
@@ -352,8 +376,8 @@ func countFindings(body string) (total int, breakdown string) {
 	return total, strings.Join(parts, ", ")
 }
 
-// humanizeReviewBody best-effort rewrites body's prose via the humanizer
-// agent, preserving every finding line and the VERDICT: line byte-for-byte
+// humanizeReviewBody best-effort rewrites the review summary (the only prose
+// PostReview posts) via the humanizer agent, keeping it as short or shorter
 // per the standing instruction below. This call can never fail the
 // caller: on any error (opt-out env var set, kiro-cli error, empty result)
 // it returns the original body unchanged, mirroring
@@ -379,9 +403,8 @@ Rewrite for tone only. Do not change, add, or remove any fact, claim, name,
 number, date, or citation. Preserve the Markdown structure (headings, lists,
 code fences).
 
-This is a PR review body. Humanize ONLY the summary/overview prose
-sentences. Every finding line and the VERDICT: line must pass through
-byte-for-byte.
+This is the summary of a PR review. Keep it as short as it is now or
+shorter; do not add findings, rationale or caveats.
 
 --- BEGIN TEXT ---
 %s
@@ -542,91 +565,118 @@ func parseDiffCommentableLines(diff string) map[string]map[int]bool {
 	return result
 }
 
-// buildReviewPayload parses findings out of body (reusing findingLineRe,
-// the same line-matching regex countFindings uses) into one inline
-// GitHub review comment per finding, maps verdict to the GitHub review
-// "event" per verdictEvent, and marshals the whole thing into the JSON
-// shape gh api pulls/reviews expects. Returns the marshaled payload, the
-// resolved event, and the number of comments produced.
+// fileComment is the body of a file-level PR comment (POST
+// repos/<repo>/pulls/<pr>/comments with subject_type=file). Used for a
+// finding whose file is in the diff but whose line isn't: GitHub rejects the
+// whole review if any inline comment misses the diff.
+type fileComment struct {
+	Path        string `json:"path"`
+	Body        string `json:"body"`
+	CommitID    string `json:"commit_id"`
+	SubjectType string `json:"subject_type"`
+}
+
+// reviewPlan is everything PostReview needs to publish one review, built in
+// code from the consolidated review so what reaches GitHub doesn't depend on
+// a model's judgment.
+type reviewPlan struct {
+	// review is the create-review payload: the summary as the body and one
+	// inline comment per on-diff finding.
+	review reviewPayload
+	// fileComments are off-diff findings in files the diff touches. CommitID
+	// is left blank; PostReview fills it in.
+	fileComments []fileComment
+	// unposted are finding lines that can't be anchored anywhere (file not
+	// in the diff, or an unparseable item under Findings). Never posted; the
+	// full review stays in the archived spool file.
+	unposted []string
+	// notes is the non-posted part of the review: verdict rationale,
+	// verified non-issues, dropped findings. Never posted.
+	notes string
+}
+
+// findingCommentBody renders a parsed finding as comment text. A missing
+// severity (the line carried no recognized keyword, e.g. #78) drops the
+// "severity:" prefix; a missing fix (no "->" arrow) drops the "→ fix" suffix.
+func findingCommentBody(f finding) string {
+	switch {
+	case f.severity != "" && f.fix != "":
+		return fmt.Sprintf("%s: %s → %s", f.severity, f.issue, f.fix)
+	case f.severity != "":
+		return fmt.Sprintf("%s: %s", f.severity, f.issue)
+	case f.fix != "":
+		return fmt.Sprintf("%s → %s", f.issue, f.fix)
+	default:
+		return f.issue
+	}
+}
+
+// planReview builds the review to post from a consolidated review body:
 //
-// When commentable is non-nil (a diff was available and parsed), a finding
-// is only emitted as an inline comment if its file:line lands on the
-// RIGHT side of the diff per commentable — this is the fix for the 422
-// "line must be part of the diff" that GitHub rejects the whole review
-// with when even one comment can't anchor. Findings that can't be anchored
-// are not dropped: they are appended to the review body under an "Additional
-// findings" section so the developer still sees them, just not inline.
+//   - Review body: the ## Summary section only (or summaryOverride, the
+//     humanized summary, when non-blank), capped by capSummary. No verdict
+//     rationale, no list of what was cleared or dropped, no VERDICT: line,
+//     and no findings.
+//   - Inline comments: one per finding whose file:line is on the RIGHT side
+//     of the diff per commentable.
+//   - File-level comments: findings whose file is in the diff but whose line
+//     isn't.
+//   - Unposted: findings whose file isn't in the diff at all.
 //
 // When commentable is nil (no diff_file, or it couldn't be read/parsed),
-// behavior is unchanged: every parsed finding becomes an inline comment
-// (best effort — the previous behavior, preserved so a missing diff never
-// silently strips inline comments that would have anchored fine).
-func buildReviewPayload(repo string, pr int, verdict string, body string, commentable map[string]map[int]bool) (payloadJSON []byte, event string, commentCount int, err error) {
-	event = verdictEvent(verdict)
+// every parsed finding becomes an inline comment (best effort, so a missing
+// diff never silently strips comments that would have anchored fine).
+func planReview(verdict, body, summaryOverride string, commentable map[string]map[int]bool) reviewPlan {
+	parts := splitReview(body)
+	summary := parts.summary
+	if strings.TrimSpace(summaryOverride) != "" {
+		summary = summaryOverride
+	}
+	summary = capSummary(summary, parts.findings)
 
-	lines := strings.Split(body, "\n")
-	comments := make([]reviewComment, 0, len(lines))
-	var unanchored []string
-	for _, line := range lines {
-		f, ok := parseFindingLine(line)
-		if !ok {
+	plan := reviewPlan{
+		unposted: append([]string{}, parts.unparsed...),
+		notes:    parts.notes,
+	}
+	comments := make([]reviewComment, 0, len(parts.findings))
+	for i, f := range parts.findings {
+		text := findingCommentBody(f)
+		if commentable == nil || commentable[f.file][f.line] {
+			comments = append(comments, reviewComment{Path: f.file, Line: f.line, Body: text})
 			continue
 		}
-
-		// Compose the comment body from the parsed finding. A missing
-		// severity (the line carried no recognized keyword, e.g. #78) drops
-		// the "severity:" prefix; a missing fix (no "->" arrow) drops the
-		// "→ fix" suffix — so a terse "file:line — issue" finding still posts
-		// its text inline rather than rendering an empty "→ ".
-		var commentBody string
-		switch {
-		case f.severity != "" && f.fix != "":
-			commentBody = fmt.Sprintf("%s: %s → %s", f.severity, f.issue, f.fix)
-		case f.severity != "":
-			commentBody = fmt.Sprintf("%s: %s", f.severity, f.issue)
-		case f.fix != "":
-			commentBody = fmt.Sprintf("%s → %s", f.issue, f.fix)
-		default:
-			commentBody = f.issue
+		if _, fileInDiff := commentable[f.file]; fileInDiff {
+			plan.fileComments = append(plan.fileComments, fileComment{
+				Path:        f.file,
+				Body:        fmt.Sprintf("Line %d: %s", f.line, text),
+				SubjectType: "file",
+			})
+			continue
 		}
-
-		if commentable != nil {
-			diffLines, fileInDiff := commentable[f.file]
-			if !fileInDiff || !diffLines[f.line] {
-				// Can't anchor to the diff — GitHub would 422 the whole
-				// review. Fold it into the body instead of dropping it.
-				unanchored = append(unanchored,
-					fmt.Sprintf("- `%s:%d` — %s", f.file, f.line, commentBody))
-				continue
-			}
-		}
-
-		comments = append(comments, reviewComment{
-			Path: f.file,
-			Line: f.line,
-			Body: commentBody,
-		})
+		plan.unposted = append(plan.unposted, parts.raw[i])
 	}
 
-	finalBody := body
-	if len(unanchored) > 0 {
-		finalBody = body +
-			"\n\n---\n\n### Additional findings (not on the diff)\n\n" +
-			"These reference lines outside this PR's diff, so they couldn't be posted inline:\n\n" +
-			strings.Join(unanchored, "\n")
+	// GitHub rejects a COMMENT / REQUEST_CHANGES review with an empty body.
+	// Fall back to a neutral pointer at the comments rather than inventing
+	// an assessment.
+	if summary == "" && (len(comments) > 0 || len(plan.fileComments) > 0) {
+		summary = "See the inline comments."
 	}
 
-	payload := reviewPayload{
-		Event:    event,
-		Body:     finalBody,
-		Comments: comments,
-	}
+	plan.review = reviewPayload{Event: verdictEvent(verdict), Body: summary, Comments: comments}
+	return plan
+}
 
-	payloadJSON, err = json.Marshal(payload)
+// buildReviewPayload marshals the create-review payload planReview builds for
+// body (no summary override). Returns the marshaled payload, the resolved
+// event, and the number of inline comments.
+func buildReviewPayload(repo string, pr int, verdict string, body string, commentable map[string]map[int]bool) (payloadJSON []byte, event string, commentCount int, err error) {
+	plan := planReview(verdict, body, "", commentable)
+	payloadJSON, err = json.Marshal(plan.review)
 	if err != nil {
-		return nil, event, 0, fmt.Errorf("failed to marshal review payload: %w", err)
+		return nil, plan.review.Event, 0, fmt.Errorf("failed to marshal review payload: %w", err)
 	}
-	return payloadJSON, event, len(comments), nil
+	return payloadJSON, plan.review.Event, len(plan.review.Comments), nil
 }
 
 // --- discard (Task 3) -------------------------------------------------------
@@ -667,9 +717,14 @@ func DiscardReview(rec Record) error {
 // writes decision: post first (crash-recovery write — if the process dies
 // or gh fails after this point, the file is left in pending/ with
 // decision: post already set, so a retry of PostReview can pick it up
-// again), best-effort humanizes the review body's prose, builds the
-// GitHub review payload, POSTs it via postReviewCommandFunc, and — only on
-// success — archives the file to done/. On gh failure, the file is
+// again), best-effort humanizes the review summary, builds the review via
+// planReview, POSTs it via postReviewCommandFunc, posts any file-level
+// comments, and — only on success — archives the file to done/.
+//
+// What is posted: the ## Summary section as the review body, and the
+// findings as inline (or file-level) comments. The verdict rationale,
+// reviewer notes, dropped findings and any finding that can't be anchored
+// are never posted; they stay in the spool file, archived whole to done/. On gh failure, the file is
 // deliberately left untouched in pending/ (decision already written);
 // PostReview does not attempt any cleanup of that state, since leaving it
 // as-is IS the crash-recovery contract this issue's open question
@@ -695,32 +750,37 @@ func PostReview(ctx context.Context, rec Record) (commentsPosted int, err error)
 		return 0, fmt.Errorf("failed to read spool body for %s#%d: %s", rec.Repo, rec.PR, resolved)
 	}
 
-	humanized := humanizeReviewBody(ctx, body)
+	// Load the spool front-matter once: diff_file anchors the comments and
+	// reviewed_sha is the commit file-level comments attach to.
+	var fm map[string]string
+	if data, readErr := os.ReadFile(resolved); readErr == nil {
+		fm = ParseSpoolFrontMatter(data)
+	}
 
 	// Load the saved PR diff (if the spool recorded one) and parse the set
-	// of RIGHT-side lines each file exposes. buildReviewPayload uses this to
-	// only anchor inline comments to lines GitHub will accept; findings off
-	// the diff fold into the review body instead. A missing/unreadable
-	// diff_file yields a nil map, which buildReviewPayload treats as "no
-	// anchoring info" and posts every finding inline (prior best-effort
-	// behavior) — the body-only fallback below still covers a resulting 422.
+	// of RIGHT-side lines each file exposes, so inline comments only anchor
+	// to lines GitHub accepts. A missing/unreadable diff_file yields a nil
+	// map, which planReview treats as "no anchoring info" and posts every
+	// finding inline; the file-comment fallback below covers a resulting 422.
 	var commentable map[string]map[int]bool
-	if data, readErr := os.ReadFile(resolved); readErr == nil {
-		if diffFile := ParseSpoolFrontMatter(data)["diff_file"]; diffFile != "" {
-			if diffData, diffErr := os.ReadFile(diffFile); diffErr == nil {
-				commentable = parseDiffCommentableLines(string(diffData))
-			}
+	if diffFile := fm["diff_file"]; diffFile != "" {
+		if diffData, diffErr := os.ReadFile(diffFile); diffErr == nil {
+			commentable = parseDiffCommentableLines(string(diffData))
 		}
 	}
 
-	payloadJSON, _, commentCount, err := buildReviewPayload(rec.Repo, rec.PR, info.Verdict, humanized, commentable)
+	// Only the summary is posted as prose, so only the summary is humanized.
+	summary := humanizeReviewBody(ctx, splitReview(body).summary)
+	plan := planReview(info.Verdict, body, summary, commentable)
+	payloadJSON, err := json.Marshal(plan.review)
 	if err != nil {
-		return 0, fmt.Errorf("failed to build review payload for %s#%d: %w", rec.Repo, rec.PR, err)
+		return 0, fmt.Errorf("failed to marshal review payload for %s#%d: %w", rec.Repo, rec.PR, err)
 	}
+	commentCount := len(plan.review.Comments)
 
 	// postPayload writes a marshaled payload to a throwaway temp file and
-	// POSTs it via the seam. Factored out so the body-only fallback below
-	// can reuse the exact same write+post path with a second payload.
+	// POSTs it via the seam. Factored out so the fallback below can reuse
+	// the exact same write+post path with a second payload.
 	postPayload := func(pj []byte) error {
 		tmp, err := os.CreateTemp("", fmt.Sprintf("pr-review-payload-%d-*.json", rec.PR))
 		if err != nil {
@@ -745,46 +805,56 @@ func PostReview(ctx context.Context, rec Record) (commentsPosted int, err error)
 		// GitHub forbids APPROVE / REQUEST_CHANGES on your OWN pull request
 		// ("Review cannot approve/request changes on your own pull request")
 		// — the only event self-authored PRs accept is COMMENT. Downgrade
-		// the event to COMMENT and retry once. The findings, verdict prose,
-		// and inline comments are all preserved; only the review's blocking
-		// disposition changes, which GitHub was rejecting outright anyway.
+		// the event to COMMENT and retry once. The summary and inline
+		// comments are preserved; only the review's blocking disposition
+		// changes, which GitHub was rejecting outright anyway.
 		if downgraded, ok := downgradeEventToComment(payloadJSON); ok {
 			if dgErr := postPayload(downgraded); dgErr == nil {
 				postErr = nil
 			} else {
-				// Keep going to the body-only fallback below using the
-				// downgraded error (e.g. own-PR AND an off-diff comment).
+				// Keep going to the fallback below using the downgraded
+				// error (e.g. own-PR AND an off-diff comment).
 				postErr = dgErr
 				payloadJSON = downgraded
 			}
 		}
 	}
 
+	fileComments := plan.fileComments
 	if postErr != nil && commentCount > 0 && is422(postErr) {
 		// GitHub rejected the review with a 422 despite our best effort to
-		// anchor comments (a comment line the diff parser accepted may still
-		// be unmappable to a diff position — e.g. a line inside an
-		// expanded/collapsed hunk GitHub treats differently). Rather than
-		// lose the entire review, retry once with a comments-less payload so
-		// the summary + verdict still land. The individual findings remain
-		// in the body prose, so nothing is silently dropped.
-		// An empty (non-nil) commentable map anchors nothing, so every
-		// finding folds into the body prose and the payload carries zero
-		// inline comments — exactly the body-only review we want to retry.
-		fallbackJSON, _, _, buildErr := buildReviewPayload(rec.Repo, rec.PR, info.Verdict, humanized, map[string]map[int]bool{})
-		if buildErr == nil {
-			// If we already downgraded the event above, keep it downgraded
-			// on the body-only retry too, otherwise GitHub would reject it
-			// for the same own-PR reason.
-			if isOwnPRReviewError(postErr) {
-				if dg, ok := downgradeEventToComment(fallbackJSON); ok {
-					fallbackJSON = dg
+		// anchor comments (a line the diff parser accepted may still be
+		// unmappable to a diff position). Rather than lose the review, retry
+		// once without inline comments and post those findings as
+		// file-level comments instead. They never fold into the summary.
+		var fallback reviewPayload
+		if err := json.Unmarshal(payloadJSON, &fallback); err == nil {
+			moved := fallback.Comments
+			fallback.Comments = []reviewComment{}
+			if fbJSON, err := json.Marshal(fallback); err == nil {
+				if fbErr := postPayload(fbJSON); fbErr == nil {
+					postErr = nil
+					commentCount = 0
+					for _, c := range moved {
+						fileComments = append(fileComments, fileComment{
+							Path:        c.Path,
+							Body:        fmt.Sprintf("Line %d: %s", c.Line, c.Body),
+							SubjectType: "file",
+						})
+					}
 				}
 			}
-			if fbErr := postPayload(fallbackJSON); fbErr == nil {
-				commentCount = 0
-				postErr = nil
-			}
+		}
+	}
+
+	if postErr == nil {
+		// The review is posted; file-level comments are best effort and
+		// never fail the post. A finding that couldn't be posted stays in
+		// the archived spool file with the rest of the review.
+		postFileComments(ctx, rec, fm["reviewed_sha"], fileComments)
+		if len(plan.unposted) > 0 {
+			logging.Info("review findings not on the diff were not posted; kept in the archived spool",
+				"repo", rec.Repo, "pr", rec.PR, "findings", strings.Join(plan.unposted, " | "))
 		}
 	}
 
@@ -800,6 +870,57 @@ func PostReview(ctx context.Context, rec Record) (commentsPosted int, err error)
 	}
 
 	return commentCount, nil
+}
+
+// postFileComments posts each file-level comment against commitID (the
+// spool's reviewed_sha, falling back to the record's last reviewed SHA and
+// then the PR's current head). Failures are logged, never returned: the
+// review itself is already posted, and the finding stays in the archived
+// spool file.
+func postFileComments(ctx context.Context, rec Record, commitID string, comments []fileComment) {
+	if len(comments) == 0 {
+		return
+	}
+	if commitID == "" {
+		commitID = rec.LastReviewedSHA
+	}
+	if commitID == "" {
+		sha, err := prHeadSHAFunc(rec.Repo, rec.PR)
+		if err != nil || sha == "" {
+			logging.Warn("file-level review comments not posted: no commit to attach them to",
+				"repo", rec.Repo, "pr", rec.PR, "count", len(comments), "error", err)
+			return
+		}
+		commitID = sha
+	}
+	for _, c := range comments {
+		c.CommitID = commitID
+		if err := postOneFileComment(ctx, rec, c); err != nil {
+			logging.Warn("file-level review comment not posted", "repo", rec.Repo, "pr", rec.PR,
+				"path", c.Path, "error", err)
+		}
+	}
+}
+
+func postOneFileComment(ctx context.Context, rec Record, c fileComment) error {
+	data, err := json.Marshal(c)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp("", fmt.Sprintf("pr-file-comment-%d-*.json", rec.PR))
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return postFileCommentFunc(ctx, tmpPath, rec.Repo, rec.PR)
 }
 
 // --- revise / rereview (Task 4) --------------------------------------------
@@ -892,8 +1013,9 @@ Existing consolidated review to revise:
 Human revision notes (apply these):
 %s
 
-Produce the updated single markdown review document, most-severe first. Print
-the whole review as your reply. End with a final line exactly:
+Produce the updated single markdown review document in your output format
+(`+"`## Summary`, `## Findings` most-severe first, optional `## Reviewer notes`"+`).
+Print the whole review as your reply. End with a final line exactly:
 `+"`VERDICT: <APPROVE|COMMENT|REQUEST_CHANGES>`", body, notes)
 }
 
@@ -1147,7 +1269,20 @@ Then give an overall verdict: APPROVE, COMMENT, or REQUEST_CHANGES.
 Raw lens findings:
 %s
 
-Produce a markdown review document as the deliverable, most-severe first.
+Produce a markdown review document as the deliverable, in this shape:
+
+# Consolidated Review
+## Summary
+<1-3 sentences: what the change does and the overall assessment. This is the
+only prose posted to the PR, so no verdict rationale and nothing about what
+you cleared, dropped or chose not to flag.>
+## Findings
+<surviving findings most-severe first, one per line as
+`+"`file:line - severity - issue -> fix`"+`; omit the section if none>
+## Reviewer notes
+<optional, never posted: verdict rationale, verified non-issues, dropped
+findings and why. Do not write finding-shaped lines here.>
+
 End with a final line exactly:
 `+"`VERDICT: <APPROVE|COMMENT|REQUEST_CHANGES>`", diffFile, digest.String())
 }

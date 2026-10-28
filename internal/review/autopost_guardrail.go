@@ -109,8 +109,9 @@ func evaluateAutoPostGuardrail(verdict, body, headSHA, reviewedSHA string, comme
 		detail: fmt.Sprintf("body verdict %q, record verdict %q", bodyVerdict, verdict),
 	})
 
-	// 2. Every finding must anchor to the diff. Reuse the exact anchoring logic
-	// buildReviewPayload uses: parse findings, and for each, confirm its
+	// 2. Every posted finding must anchor to the diff. Reuse the findings
+	// planReview posts (finding-shaped lines under Reviewer notes are notes,
+	// not findings): parse findings, and for each, confirm its
 	// file:line is a commentable right-side line. If commentable is nil we have
 	// no diff to prove anchoring against — fail closed.
 	anchorOK := true
@@ -120,11 +121,7 @@ func evaluateAutoPostGuardrail(verdict, body, headSHA, reviewedSHA string, comme
 		anchorDetail = "no diff available to verify finding anchoring"
 	} else {
 		var unanchored []string
-		for _, line := range strings.Split(body, "\n") {
-			f, ok := parseFindingLine(line)
-			if !ok {
-				continue
-			}
+		for _, f := range splitReview(body).findings {
 			diffLines, fileInDiff := commentable[f.file]
 			if !fileInDiff || !diffLines[f.line] {
 				unanchored = append(unanchored, fmt.Sprintf("%s:%d", f.file, f.line))
@@ -180,12 +177,7 @@ func evaluateAutoPostGuardrail(verdict, body, headSHA, reviewedSHA string, comme
 	// 6. Finding-count sanity. Zero findings is fine (a clean APPROVE/COMMENT).
 	// An unbounded count suggests a runaway or low-signal review that a human
 	// should triage. maxFindings <= 0 disables the cap.
-	count := 0
-	for _, line := range strings.Split(body, "\n") {
-		if _, ok := parseFindingLine(line); ok {
-			count++
-		}
-	}
+	count := len(splitReview(body).findings)
 	countOK := maxFindings <= 0 || count <= maxFindings
 	checks = append(checks, gateCheck{
 		name:   "finding_count",
