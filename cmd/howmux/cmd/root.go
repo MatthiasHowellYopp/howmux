@@ -41,6 +41,9 @@ var rootCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("failed to load config: %w", err)
 		}
+		if err := validateAuditorModel(cmd.Context(), cfg, cmd.ErrOrStderr()); err != nil {
+			return err
+		}
 
 		manager := agent.NewManager(cfg)
 		w := watcher.New(cfg, manager)
