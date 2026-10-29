@@ -151,6 +151,15 @@ The review loop polls enrolled PRs periodically and triggers reviews when:
 - A review is requested from you
 - A new commit is pushed after the last review
 
+To have howmux pick up other PRs automatically, turn on discovery:
+
+```yaml
+review:
+  discover_requested: true
+```
+
+On each poll, howmux then checks every repo that has an enrolled PR for other open PRs that request your review, enrolls them, and reviews them in the same round. Draft PRs are skipped until they're marked ready. Discovered PRs follow the same auto-post rules as PRs you enroll yourself, so in `own-repos` mode a discovered PR in one of your `own_repo_owners` can be posted without you seeing it first. A repo stays in the scan only while it has at least one enrolled PR; once the last one merges and is pruned, enroll a PR there again to resume discovery. The search uses the same identity as re-request detection: your `gh` login, or `reviewer:` if set. Discovery is skipped if that identity can't be resolved.
+
 Setting a decision on a review with `decide` (`post`, `revise`, `rereview`, or `discard`) acts on the selected review. `revise` and `rereview` open a multi-line notes composer in howmux, pre-populated with any persisted `decision_notes`: type instructions for the reviser (optional), then **Ctrl+D** to run or **Esc** to cancel. The notes are passed to the reviser in-memory (multi-line supported) and are not written to the spool front-matter. Both re-run locally and land back in `pending/` with the decision cleared; `discard` archives to `done/` right away. `post` is the one irreversible step — it shows an inline `y/N` confirm (repo, PR number, and finding count) before publishing inline PR comments and archiving to `done/`; declining leaves the review untouched in `pending/` with no decision recorded.
 
 For the manual/headless flow, editing the single-line `decision_notes:` field in the spool front-matter directly still works: when the composer is left empty (or when a review is driven outside howmux), `revise`/`rereview` fall back to the persisted `decision_notes` value.

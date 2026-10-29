@@ -96,6 +96,59 @@ func GetPR(repo string, pr int) (PR, error) {
 	return parsed, nil
 }
 
+// PRRef is the minimal identity of an open PR returned by a list query.
+type PRRef struct {
+	Number  int    `json:"number"`
+	URL     string `json:"url"`
+	IsDraft bool   `json:"isDraft"`
+}
+
+// reviewRequestedListLimit caps how many open review-requested PRs one list
+// call returns per repo. Well above any realistic pending-request count.
+const reviewRequestedListLimit = 100
+
+// reviewRequestedArgs returns the argv for listing open PRs in repo with a
+// pending review request for reviewer (a user login, or org/team for a team).
+func reviewRequestedArgs(repo, reviewer string) []string {
+	return []string{
+		"pr", "list",
+		"--repo", repo,
+		"--state", "open",
+		"--search", "review-requested:" + reviewer,
+		"--json", "number,url,isDraft",
+		"--limit", strconv.Itoa(reviewRequestedListLimit),
+	}
+}
+
+// parsePRRefs unmarshals JSON from gh pr list into PR refs.
+func parsePRRefs(data []byte) ([]PRRef, error) {
+	var refs []PRRef
+	if err := json.Unmarshal(data, &refs); err != nil {
+		return nil, fmt.Errorf("failed to parse PR list JSON: %w", err)
+	}
+	return refs, nil
+}
+
+// ListReviewRequested returns the open PRs in repo that have a pending review
+// request for reviewer. Drafts are included; callers decide whether to skip
+// them. An empty reviewer is rejected: the search qualifier would be empty and
+// GitHub would match nothing useful.
+func ListReviewRequested(repo, reviewer string) ([]PRRef, error) {
+	if strings.TrimSpace(reviewer) == "" {
+		return nil, fmt.Errorf("reviewer is required to list review-requested PRs")
+	}
+	cmd := exec.Command("gh", reviewRequestedArgs(repo, reviewer)...)
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("gh pr list failed for %s: %w", repo, err)
+	}
+	refs, err := parsePRRefs(output)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse PR list for %s: %w", repo, err)
+	}
+	return refs, nil
+}
+
 // ResolvePRURL parses a GitHub PR URL and extracts owner, repo, and PR number
 func ResolvePRURL(prURL string) (owner, repo string, pr int, err error) {
 	parsed, err := url.Parse(prURL)

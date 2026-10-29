@@ -363,6 +363,7 @@ func newModel(w *watcher.Watcher, m *agent.Manager, cfg *config.Config, logFile 
 		OwnRepoOwners: cfg.Review.AutoPost.OwnRepoOwners,
 		AuditorModel:  cfg.Review.AutoPost.AuditorModel,
 	})
+	reviewWatcher.SetDiscoverRequested(cfg.Review.DiscoverRequested)
 	footerManager.SetReviewWatcher(reviewWatcher) // NEW — wires footer to the review watcher built above
 
 	initialActivity := make([]string, 0)

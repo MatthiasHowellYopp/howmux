@@ -43,6 +43,11 @@ type AutoPostConfig struct {
 // ReviewConfig groups review-workflow configuration.
 type ReviewConfig struct {
 	AutoPost AutoPostConfig `yaml:"auto_post"`
+	// DiscoverRequested makes the watcher scan every repo that already has an
+	// enrolled PR for other open PRs requesting your review, and enroll them.
+	// Off by default. Discovered PRs follow the same auto-post rules as
+	// manually enrolled ones.
+	DiscoverRequested bool `yaml:"discover_requested"`
 }
 
 type Config struct {
