@@ -28,6 +28,11 @@ var (
 	// default implementation (RunAutoPostGate) reads the freshly-updated
 	// record + spool body, fetches the diff, and calls EvaluateAndMaybePost.
 	runAutoPostGateFunc = RunAutoPostGate
+	// listReviewRequestedFunc lists open PRs in a repo that request a review
+	// from reviewer. Seam for the discovery pass.
+	listReviewRequestedFunc = func(repo, reviewer string) ([]github.PRRef, error) {
+		return github.ListReviewRequested(repo, reviewer)
+	}
 )
 
 // Watcher polls enrolled PRs and dispatches reviews based on GitHub state
@@ -38,6 +43,11 @@ type Watcher struct {
 	reviewer      string // GitHub username or team for IsReviewRequestedFor
 
 	autoPost AutoPostConfig // review auto-post gate config; zero value = dry-run (safe)
+
+	// discoverRequested enables the per-poll scan of enrolled repos for other
+	// PRs requesting the reviewer's review. Off by default.
+	discoverRequested bool
+	discoveryWarnOnce sync.Once // logs "discovery disabled" once, not every poll
 
 	stop     chan struct{}
 	stopOnce sync.Once
@@ -73,6 +83,16 @@ func (w *Watcher) SetAutoPostConfig(cfg AutoPostConfig) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.autoPost = cfg
+}
+
+// SetDiscoverRequested turns on the discovery pass: each poll, every repo
+// that has an enrolled PR is scanned for other open, non-draft PRs that
+// request the watcher's reviewer, and those PRs are enrolled. Must be called
+// before Start.
+func (w *Watcher) SetDiscoverRequested(enabled bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.discoverRequested = enabled
 }
 
 // Start spawns the poll loop goroutine
@@ -180,6 +200,15 @@ func (w *Watcher) pollOnce() {
 
 	logging.Debug("poll round fetched records", "count", len(records))
 
+	w.mu.RLock()
+	discover := w.discoverRequested
+	w.mu.RUnlock()
+	if discover {
+		// Discovered records join this round, so they're reviewed right away
+		// (Rule 2: never reviewed) instead of waiting a full poll interval.
+		records = append(records, w.discoverRequestedPRs(records)...)
+	}
+
 	for _, rec := range records {
 		select {
 		case <-w.stop:
@@ -221,6 +250,95 @@ func (w *Watcher) pollOnce() {
 	}
 
 	logging.Debug("poll round complete")
+}
+
+// discoverRequestedPRs scans each distinct repo in records for open PRs that
+// request w.reviewer's review and enrolls any that aren't tracked yet. Drafts
+// are skipped; a draft that's later marked ready is picked up on a later poll
+// while the request is still pending. It returns the newly saved records.
+// Failures are logged per repo and never abort the poll round.
+func (w *Watcher) discoverRequestedPRs(records []Record) []Record {
+	if err := github.ValidateReviewerLogin(w.reviewer); err != nil {
+		// No usable user login: gh login resolution failed (the TUI already
+		// warns at startup) or reviewer: is set to a team. Check once here
+		// instead of letting every repo's list call fail on every poll.
+		w.discoveryWarnOnce.Do(func() {
+			logging.Warn("review-request discovery disabled", "reviewer", w.reviewer, "reason", err)
+		})
+		return nil
+	}
+
+	enrolled := make(map[string]bool, len(records)) // "owner/repo#pr"
+	seenRepo := make(map[string]bool)
+	var repos []string
+	for _, rec := range records {
+		enrolled[fmt.Sprintf("%s#%d", rec.Repo, rec.PR)] = true
+		if !seenRepo[rec.Repo] {
+			seenRepo[rec.Repo] = true
+			repos = append(repos, rec.Repo)
+		}
+	}
+
+	var added []Record
+	for _, repo := range repos {
+		select {
+		case <-w.stop:
+			return added
+		default:
+		}
+
+		parts := strings.Split(repo, "/")
+		if len(parts) != 2 {
+			continue // pollOnce logs invalid repos
+		}
+
+		refs, err := listReviewRequestedFunc(repo, w.reviewer)
+		if err != nil {
+			logging.Error("failed to list review-requested PRs", "repo", repo, "error", err)
+			continue
+		}
+
+		for _, ref := range refs {
+			if ref.IsDraft || ref.Number <= 0 {
+				continue
+			}
+			key := fmt.Sprintf("%s#%d", repo, ref.Number)
+			if enrolled[key] {
+				continue
+			}
+			url := ref.URL
+			if url == "" {
+				url = fmt.Sprintf("https://github.com/%s/pull/%d", repo, ref.Number)
+			}
+			rec := Record{
+				Repo:       repo,
+				PR:         ref.Number,
+				URL:        url,
+				Status:     StatusWatching,
+				EnrolledAt: time.Now().Format(time.RFC3339),
+				ReviewDir:  fmt.Sprintf(".worktrees/review-%s-%s-%d", parts[0], parts[1], ref.Number),
+			}
+			// Re-check right before saving: the snapshot above was taken
+			// before the gh calls, and Save overwrites unconditionally, so a
+			// PR enrolled from the TUI in the meantime (possibly mid-review)
+			// must not be replaced with a fresh Watching record.
+			if _, exists, err := w.store.Get(repo, ref.Number); err != nil {
+				logging.Error("failed to check discovered PR enrollment", "repo", repo, "pr", ref.Number, "error", err)
+				continue
+			} else if exists {
+				enrolled[key] = true
+				continue
+			}
+			if err := w.store.Save(rec); err != nil {
+				logging.Error("failed to enroll discovered PR", "repo", repo, "pr", ref.Number, "error", err)
+				continue
+			}
+			enrolled[key] = true
+			added = append(added, rec)
+			logging.Info("enrolled review-requested PR", "repo", repo, "pr", ref.Number)
+		}
+	}
+	return added
 }
 
 // dispatch admits a review for the given record if the same PR is not already

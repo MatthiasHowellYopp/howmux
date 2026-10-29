@@ -96,6 +96,80 @@ func GetPR(repo string, pr int) (PR, error) {
 	return parsed, nil
 }
 
+// PRRef is the minimal identity of an open PR returned by a list query.
+type PRRef struct {
+	Number  int    `json:"number"`
+	URL     string `json:"url"`
+	IsDraft bool   `json:"isDraft"`
+}
+
+// reviewRequestedListLimit caps how many open review-requested PRs one list
+// call returns per repo. Well above any realistic pending-request count.
+const reviewRequestedListLimit = 100
+
+// ValidateReviewerLogin checks that reviewer is usable as a GitHub user login
+// for the user-review-requested: search qualifier. Discovery only matches
+// direct requests to a user, so empty values and team identifiers (org/team)
+// are rejected; GitHub's search API returns HTTP 422 for a team there.
+func ValidateReviewerLogin(reviewer string) error {
+	if strings.TrimSpace(reviewer) == "" {
+		return fmt.Errorf("reviewer is required to list review-requested PRs")
+	}
+	if strings.ContainsAny(reviewer, "/ \t") {
+		return fmt.Errorf("reviewer %q is not a GitHub user login; discovery only matches direct user review requests", reviewer)
+	}
+	return nil
+}
+
+// reviewRequestedArgs returns the argv for listing open PRs in repo with a
+// pending review request made directly to the user login. It uses
+// user-review-requested: rather than review-requested:, because the latter
+// also matches requests to any team the user belongs to (e.g. CODEOWNERS
+// teams), which would make discovery far broader than intended.
+func reviewRequestedArgs(repo, login string) ([]string, error) {
+	if err := ValidateReviewerLogin(login); err != nil {
+		return nil, err
+	}
+	return []string{
+		"pr", "list",
+		"--repo", repo,
+		"--state", "open",
+		"--search", "user-review-requested:" + login,
+		"--json", "number,url,isDraft",
+		"--limit", strconv.Itoa(reviewRequestedListLimit),
+	}, nil
+}
+
+// parsePRRefs unmarshals JSON from gh pr list into PR refs.
+func parsePRRefs(data []byte) ([]PRRef, error) {
+	var refs []PRRef
+	if err := json.Unmarshal(data, &refs); err != nil {
+		return nil, fmt.Errorf("failed to parse PR list JSON: %w", err)
+	}
+	return refs, nil
+}
+
+// ListReviewRequested returns the open PRs in repo that have a pending review
+// request made directly to the user login (team requests are not matched).
+// Drafts are included; callers decide whether to skip them. A login that
+// fails ValidateReviewerLogin is rejected before anything is executed.
+func ListReviewRequested(repo, login string) ([]PRRef, error) {
+	args, err := reviewRequestedArgs(repo, login)
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.Command("gh", args...)
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("gh pr list failed for %s: %w", repo, err)
+	}
+	refs, err := parsePRRefs(output)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse PR list for %s: %w", repo, err)
+	}
+	return refs, nil
+}
+
 // ResolvePRURL parses a GitHub PR URL and extracts owner, repo, and PR number
 func ResolvePRURL(prURL string) (owner, repo string, pr int, err error) {
 	parsed, err := url.Parse(prURL)
