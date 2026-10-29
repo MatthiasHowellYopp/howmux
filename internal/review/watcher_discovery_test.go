@@ -188,6 +188,55 @@ func TestDiscovery_ListErrorDoesNotBlockOtherRepos(t *testing.T) {
 	}
 }
 
+func TestDiscovery_TeamReviewerSkips(t *testing.T) {
+	h := newDiscoveryHarness(t)
+	store := &fakeStore{records: []Record{reviewedRecord("o/r", 1), reviewedRecord("o/r2", 1)}}
+
+	w := NewWatcher(store, time.Minute, 5, "org/team")
+	w.SetDiscoverRequested(true)
+	w.pollOnce()
+	w.pollOnce()
+	w.wg.Wait()
+
+	if len(h.listCalls) != 0 {
+		t.Errorf("discovery searched with a team reviewer: %v", h.listCalls)
+	}
+}
+
+func TestDiscovery_DoesNotOverwriteConcurrentEnrollment(t *testing.T) {
+	h := newDiscoveryHarness(t)
+	store := &fakeStore{records: []Record{reviewedRecord("o/r", 1)}}
+
+	// Simulate a manual TUI enroll of #2 landing while gh pr list runs: the
+	// record appears after discovery took its snapshot.
+	manual := Record{
+		Repo: "o/r", PR: 2, URL: "https://github.com/o/r/pull/2",
+		Status: StatusReviewing, EnrolledAt: time.Now().Format(time.RFC3339),
+		ReviewDir: "manual-dir",
+	}
+	listReviewRequestedFunc = func(repo, reviewer string) ([]github.PRRef, error) {
+		h.mu.Lock()
+		h.listCalls = append(h.listCalls, repo)
+		h.mu.Unlock()
+		if err := store.Save(manual); err != nil {
+			t.Fatalf("Save: %v", err)
+		}
+		return []github.PRRef{{Number: 2, URL: manual.URL}}, nil
+	}
+
+	w := NewWatcher(store, time.Minute, 5, "me")
+	w.SetDiscoverRequested(true)
+	added := w.discoverRequestedPRs(mustList(t, store))
+
+	if len(added) != 0 {
+		t.Errorf("discovery added %+v; want nothing (PR already enrolled)", added)
+	}
+	got, ok, _ := store.Get("o/r", 2)
+	if !ok || got.Status != StatusReviewing || got.ReviewDir != "manual-dir" {
+		t.Errorf("manual record was overwritten: %+v", got)
+	}
+}
+
 func mustList(t *testing.T, s StoreInterface) []Record {
 	t.Helper()
 	recs, err := s.List()

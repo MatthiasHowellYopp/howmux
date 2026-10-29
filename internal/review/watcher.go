@@ -47,6 +47,7 @@ type Watcher struct {
 	// discoverRequested enables the per-poll scan of enrolled repos for other
 	// PRs requesting the reviewer's review. Off by default.
 	discoverRequested bool
+	discoveryWarnOnce sync.Once // logs "discovery disabled" once, not every poll
 
 	stop     chan struct{}
 	stopOnce sync.Once
@@ -257,10 +258,13 @@ func (w *Watcher) pollOnce() {
 // while the request is still pending. It returns the newly saved records.
 // Failures are logged per repo and never abort the poll round.
 func (w *Watcher) discoverRequestedPRs(records []Record) []Record {
-	if strings.TrimSpace(w.reviewer) == "" {
-		// No identity to search for (gh login resolution failed). The TUI
-		// already warns about this at startup.
-		logging.Debug("discovery skipped: no reviewer identity")
+	if err := github.ValidateReviewerLogin(w.reviewer); err != nil {
+		// No usable user login: gh login resolution failed (the TUI already
+		// warns at startup) or reviewer: is set to a team. Check once here
+		// instead of letting every repo's list call fail on every poll.
+		w.discoveryWarnOnce.Do(func() {
+			logging.Warn("review-request discovery disabled", "reviewer", w.reviewer, "reason", err)
+		})
 		return nil
 	}
 
@@ -313,6 +317,17 @@ func (w *Watcher) discoverRequestedPRs(records []Record) []Record {
 				Status:     StatusWatching,
 				EnrolledAt: time.Now().Format(time.RFC3339),
 				ReviewDir:  fmt.Sprintf(".worktrees/review-%s-%s-%d", parts[0], parts[1], ref.Number),
+			}
+			// Re-check right before saving: the snapshot above was taken
+			// before the gh calls, and Save overwrites unconditionally, so a
+			// PR enrolled from the TUI in the meantime (possibly mid-review)
+			// must not be replaced with a fresh Watching record.
+			if _, exists, err := w.store.Get(repo, ref.Number); err != nil {
+				logging.Error("failed to check discovered PR enrollment", "repo", repo, "pr", ref.Number, "error", err)
+				continue
+			} else if exists {
+				enrolled[key] = true
+				continue
 			}
 			if err := w.store.Save(rec); err != nil {
 				logging.Error("failed to enroll discovered PR", "repo", repo, "pr", ref.Number, "error", err)

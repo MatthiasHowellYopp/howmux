@@ -6,17 +6,48 @@ import (
 )
 
 func TestReviewRequestedArgs(t *testing.T) {
-	got := reviewRequestedArgs("Bit-Quill/flowdra", "someone")
+	got, err := reviewRequestedArgs("Bit-Quill/flowdra", "someone")
+	if err != nil {
+		t.Fatalf("reviewRequestedArgs() error = %v", err)
+	}
 	want := []string{
 		"pr", "list",
 		"--repo", "Bit-Quill/flowdra",
 		"--state", "open",
-		"--search", "review-requested:someone",
+		// user-review-requested: matches direct requests only; review-requested:
+		// would also match every PR assigned to a team the user is on.
+		"--search", "user-review-requested:someone",
 		"--json", "number,url,isDraft",
 		"--limit", "100",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("reviewRequestedArgs() =\n  %q\nwant\n  %q", got, want)
+	}
+}
+
+func TestValidateReviewerLogin(t *testing.T) {
+	tests := []struct {
+		reviewer string
+		wantErr  bool
+	}{
+		{"MatthiasHowellYopp", false},
+		{"some-user", false},
+		{"", true},
+		{"   ", true},
+		{"Bit-Quill/reviewers", true}, // team: 422 from the search API
+		{"two words", true},
+		{"tab\there", true},
+	}
+	for _, tt := range tests {
+		err := ValidateReviewerLogin(tt.reviewer)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("ValidateReviewerLogin(%q) error = %v, wantErr %v", tt.reviewer, err, tt.wantErr)
+		}
+		// The argv builder must reject the same inputs, so ListReviewRequested
+		// never reaches exec for them.
+		if _, aerr := reviewRequestedArgs("o/r", tt.reviewer); (aerr != nil) != tt.wantErr {
+			t.Errorf("reviewRequestedArgs(%q) error = %v, wantErr %v", tt.reviewer, aerr, tt.wantErr)
+		}
 	}
 }
 
@@ -51,12 +82,5 @@ func TestParsePRRefs_Empty(t *testing.T) {
 func TestParsePRRefs_Malformed(t *testing.T) {
 	if _, err := parsePRRefs([]byte(`{not json`)); err == nil {
 		t.Error("parsePRRefs() expected error on malformed JSON")
-	}
-}
-
-func TestListReviewRequested_EmptyReviewer(t *testing.T) {
-	// Must fail before shelling out: an empty qualifier is a meaningless search.
-	if _, err := ListReviewRequested("o/r", "  "); err == nil {
-		t.Error("ListReviewRequested() expected error for empty reviewer")
 	}
 }
