@@ -497,6 +497,23 @@ func (m model) appendActivity(lines ...string) model {
 	return m
 }
 
+// withStartupNotices seeds non-empty notices into the activity pane as
+// warnings, in both the live lines and the saved console-tab copy, the same
+// way newModel seeds reviewerNotice.
+func (m model) withStartupNotices(notices []string) model {
+	for _, n := range notices {
+		if n == "" {
+			continue
+		}
+		line := m.styles.Warning.Render(n)
+		m = m.appendActivity(line)
+		if m.consoleState != nil {
+			m.consoleState.activityLines = append(m.consoleState.activityLines, line)
+		}
+	}
+	return m
+}
+
 // isClickInFooterInput checks if mouse click is in the footer input area
 func (m model) isClickInFooterInput(mouseX, mouseY int) bool {
 	// Footer is at the bottom of the screen
@@ -2511,7 +2528,11 @@ func mapStringToLogLevel(levelStr string) clog.Level {
 	}
 }
 
-func Run(w *watcher.Watcher, m *agent.Manager, cfg *config.Config, initialCommand string) error {
+// Run starts the TUI. startupNotices are warnings found before the TUI
+// started (e.g. the auditor-model check couldn't run); they are seeded into
+// the activity pane as warnings, because the alt screen hides anything the
+// caller printed to stderr.
+func Run(w *watcher.Watcher, m *agent.Manager, cfg *config.Config, initialCommand string, startupNotices ...string) error {
 	logPath := ".howmux/kiro-krew.log"
 	if err := os.MkdirAll(".howmux", 0755); err != nil {
 		return fmt.Errorf("failed to create log directory: %w", err)
@@ -2541,6 +2562,7 @@ func Run(w *watcher.Watcher, m *agent.Manager, cfg *config.Config, initialComman
 
 	mdl := newModel(w, m, cfg, logFile, logReader, initialCommand)
 	mdl.lastLogPos = startPos
+	mdl = mdl.withStartupNotices(startupNotices)
 
 	// Setup cleanup on exit
 	defer func() {

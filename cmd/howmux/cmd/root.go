@@ -41,7 +41,8 @@ var rootCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("failed to load config: %w", err)
 		}
-		if err := validateAuditorModel(cmd.Context(), cfg, cmd.ErrOrStderr()); err != nil {
+		notice, err := validateAuditorModel(cmd.Context(), cfg)
+		if err != nil {
 			return err
 		}
 
@@ -51,7 +52,7 @@ var rootCmd = &cobra.Command{
 		defer manager.StopAll()
 		defer w.Stop()
 
-		return tui.Run(w, manager, cfg, "")
+		return tui.Run(w, manager, cfg, "", notice)
 	},
 }
 

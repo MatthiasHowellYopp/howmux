@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 
 	"github.com/matthiashowellyopp/howmux/internal/config"
 	"github.com/matthiashowellyopp/howmux/internal/review"
@@ -15,20 +14,23 @@ var checkAuditorModelFunc = review.CheckAuditorModel
 
 // validateAuditorModel checks review.auto_post.auditor_model against
 // kiro-cli's model list before the TUI starts. An unknown model is a startup
-// error: otherwise every auditor call fails and nothing ever auto-posts. If
-// the list can't be read, it only warns on warnOut, since the auditor still
-// fails closed at runtime.
-func validateAuditorModel(ctx context.Context, cfg *config.Config, warnOut io.Writer) error {
+// error: otherwise every auditor call fails and nothing ever auto-posts.
+//
+// If the list can't be read it returns a notice instead of an error, since the
+// auditor still fails closed at runtime. The caller must show the notice in
+// the TUI's activity pane (tui.Run's startup notices): the TUI runs on the
+// alt screen, so anything printed to stderr here is hidden for the whole
+// session.
+func validateAuditorModel(ctx context.Context, cfg *config.Config) (notice string, err error) {
 	if ctx == nil { // cmd.Context() is nil when RunE is called outside Execute
 		ctx = context.Background()
 	}
-	err := checkAuditorModelFunc(ctx, cfg.Review.AutoPost.AuditorModel)
+	err = checkAuditorModelFunc(ctx, cfg.Review.AutoPost.AuditorModel)
 	if err == nil {
-		return nil
+		return "", nil
 	}
 	if errors.Is(err, review.ErrModelListUnavailable) {
-		fmt.Fprintf(warnOut, "Warning: %v\n", err)
-		return nil
+		return fmt.Sprintf("PR-review: %v — auto-post may punch every review to you until this is fixed", err), nil
 	}
-	return fmt.Errorf("invalid config: %w", err)
+	return "", fmt.Errorf("invalid config: %w", err)
 }

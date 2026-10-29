@@ -2,12 +2,34 @@ package kirocli
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
+
+// TestListModels_TimeoutIsBounded: a CLI whose child keeps stdout open must
+// not hold ListModels past the deadline (+ WaitDelay), and the error must say
+// it timed out rather than "exited -1".
+func TestListModels_TimeoutIsBounded(t *testing.T) {
+	fakeCLI(t, "sleep 10 &\nwait\n")
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err := ListModels(ctx)
+	elapsed := time.Since(start)
+
+	if limit := 200*time.Millisecond + listWaitDelay + time.Second; elapsed > limit {
+		t.Errorf("ListModels took %v, want under %v", elapsed, limit)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v, want it to wrap context.DeadlineExceeded", err)
+	}
+}
 
 func TestListModels_ParsesJSON(t *testing.T) {
 	dir := fakeCLI(t, `printf '%s\n' "$*" > "$(dirname "$0")/argv.txt"

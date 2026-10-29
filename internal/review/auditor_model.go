@@ -26,8 +26,9 @@ var ErrModelListUnavailable = errors.New("could not list kiro-cli models")
 // listModelsFunc is a seam over kirocli.ListModels for tests.
 var listModelsFunc = kirocli.ListModels
 
-// modelListTimeout bounds the kiro-cli --list-models call so a hung CLI can't
-// stall startup.
+// modelListTimeout bounds the kiro-cli --list-models call (kirocli adds a
+// short WaitDelay for lingering child processes), so a hung CLI can't stall
+// startup.
 const modelListTimeout = 20 * time.Second
 
 // CheckAuditorModel returns an error if model is set but kiro-cli does not
