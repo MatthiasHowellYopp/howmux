@@ -235,3 +235,31 @@ func TestGate_GenericReview_PunchesEvenInOwnRepos(t *testing.T) {
 		t.Errorf("a generic review must not be posted: posts=%d", *posts)
 	}
 }
+
+// TestGate_UnrecognizedMode_Punches pins the fail-closed behaviour for a mode
+// the gate doesn't know. The mode comes straight from config, so a typo must
+// never fall through to a real post. Reverting to the old
+// `cfg.Mode == ModeOwnRepos && …` check would let this post.
+func TestGate_UnrecognizedMode_Punches(t *testing.T) {
+	posts, discards := withFakeActions(t)
+	withKiroCLIPresent(t)
+	withFakeKiroOneshot(t, map[string]string{reviewAuditorAgent: "VERDICT: POST_OK"}, nil)
+	t.Setenv("PR_REVIEW_DIR", t.TempDir())
+
+	rec, body, verdict, head, reviewed, diff := gateFixture()
+	cfg := AutoPostConfig{Mode: "bogus", MaxFindings: 25, OwnRepoOwners: []string{"Bit-Quill"}}
+
+	res, err := EvaluateAndMaybePost(context.Background(), rec, body, verdict, head, reviewed, diff, cfg, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Outcome != outcomePunted {
+		t.Errorf("Outcome = %q, want punch", res.Outcome)
+	}
+	if *posts != 0 || *discards != 0 {
+		t.Errorf("want no post/discard, got posts=%d discards=%d", *posts, *discards)
+	}
+	if !strings.Contains(res.Reason, "unrecognized") {
+		t.Errorf("Reason = %q, want it to mention the unrecognized mode", res.Reason)
+	}
+}

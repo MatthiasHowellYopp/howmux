@@ -226,23 +226,43 @@ func checkNotAlreadyRaised(body string, prior *LoadedPriorFeedback) gateCheck {
 		return gateCheck{name: name, passed: false, detail: detail}
 	}
 
-	open := map[string]map[int]bool{}
+	// A failed threads fetch leaves "threads": [] in the snapshot, which would
+	// otherwise look like "no open threads" and pass. pr_review.py prefixes
+	// each section's error with its name.
+	for _, e := range prior.Data.Errors {
+		if strings.HasPrefix(e, "threads:") {
+			return gateCheck{name: name, passed: false, detail: "prior review threads could not be fetched: " + e}
+		}
+	}
+
+	// Open (unresolved, not outdated) thread spans per path. A multi-line
+	// comment covers start_line..line; a single-line one is just line.
+	type span struct{ start, end int }
+	open := map[string][]span{}
 	for _, th := range prior.Data.Threads {
 		if th.Line == nil || th.IsResolved || th.IsOutdated {
 			continue
 		}
-		if open[th.Path] == nil {
-			open[th.Path] = map[int]bool{}
+		sp := span{start: *th.Line, end: *th.Line}
+		if th.StartLine != nil && *th.StartLine < sp.start {
+			sp.start = *th.StartLine
 		}
-		open[th.Path][*th.Line] = true
+		open[th.Path] = append(open[th.Path], sp)
 	}
 
 	var hits []string
 	for _, f := range splitReview(body).findings {
+		fEnd := f.line
+		if f.endLine > fEnd {
+			fEnd = f.endLine
+		}
 		// open holds only unresolved threads, so the re-raised marker is
 		// deliberately not consulted.
-		if open[f.file][f.line] {
-			hits = append(hits, fmt.Sprintf("%s:%d", f.file, f.line))
+		for _, sp := range open[f.file] {
+			if f.line <= sp.end && fEnd >= sp.start {
+				hits = append(hits, fmt.Sprintf("%s:%d", f.file, f.line))
+				break
+			}
 		}
 	}
 	if len(hits) > 0 {

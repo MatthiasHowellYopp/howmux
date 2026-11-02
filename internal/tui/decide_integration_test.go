@@ -711,9 +711,9 @@ func TestDecideRevise_OpensComposerThenLaunches(t *testing.T) {
 func TestDecideRereview_OpensComposerThenLaunches(t *testing.T) {
 	t.Run("launches with typed notes", func(t *testing.T) {
 		var gotNotes string
-		restore := stubRereviewReviewFunc(func(ctx context.Context, rec review.Record, inlineNotes string) (string, bool, error) {
+		restore := stubRereviewReviewFunc(func(ctx context.Context, rec review.Record, inlineNotes string) (string, string, error) {
 			gotNotes = inlineNotes
-			return "REQUEST_CHANGES", false, nil
+			return "REQUEST_CHANGES", "", nil
 		})
 		defer restore()
 
@@ -747,8 +747,8 @@ func TestDecideRereview_OpensComposerThenLaunches(t *testing.T) {
 	})
 
 	t.Run("completion message lands in the activity log", func(t *testing.T) {
-		restore := stubRereviewReviewFunc(func(ctx context.Context, rec review.Record, inlineNotes string) (string, bool, error) {
-			return "APPROVE", false, nil
+		restore := stubRereviewReviewFunc(func(ctx context.Context, rec review.Record, inlineNotes string) (string, string, error) {
+			return "APPROVE", "", nil
 		})
 		defer restore()
 
@@ -911,7 +911,7 @@ func stubPostReviewFunc(fn func(ctx context.Context, rec review.Record) (int, er
 
 // stubRereviewReviewFunc substitutes the package-level rereviewReviewFunc
 // seam (decideactions.go) with fn for the duration of a test.
-func stubRereviewReviewFunc(fn func(ctx context.Context, rec review.Record, inlineNotes string) (string, bool, error)) func() {
+func stubRereviewReviewFunc(fn func(ctx context.Context, rec review.Record, inlineNotes string) (string, string, error)) func() {
 	original := rereviewReviewFunc
 	rereviewReviewFunc = fn
 	return func() { rereviewReviewFunc = original }
@@ -919,3 +919,27 @@ func stubRereviewReviewFunc(fn func(ctx context.Context, rec review.Record, inli
 
 // contains is already defined in commands_review_test.go (same package);
 // reused here rather than redeclared.
+
+// TestDecideRereview_PartialLensesShowsWarning checks a rereview that came
+// back without some lenses is reported as a warning, not a clean rereview.
+func TestDecideRereview_PartialLensesShowsWarning(t *testing.T) {
+	restore := stubRereviewReviewFunc(func(context.Context, review.Record, string) (string, string, error) {
+		return "COMMENT", "lenses failed: language", nil
+	})
+	defer restore()
+
+	m := newDecideRoutingTestModel()
+	rec := review.Record{Repo: "owner/repo", PR: 63, SpoolPath: "/tmp/does-not-matter.md"}
+	addReviewsTabWithRecord(m, rec)
+
+	m, cmd := m.launchDecideRereview(rec, "")
+	msg := drainBatchForType[decideRereviewCompleteMsg](t, cmd)
+	if msg.warning != "lenses failed: language" {
+		t.Fatalf("warning = %q, want it carried on the complete msg", msg.warning)
+	}
+	updated, _ := m.Update(msg)
+	got := updated.(model)
+	if !anyLineContains(got.activityLines, "with missing lenses (lenses failed: language)") {
+		t.Errorf("expected a missing-lenses activity line, got: %v", got.activityLines)
+	}
+}

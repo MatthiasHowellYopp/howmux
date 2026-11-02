@@ -88,6 +88,7 @@ type decideReviseErrorMsg struct {
 type decideRereviewCompleteMsg struct {
 	rec        review.Record
 	newVerdict string
+	warning    string // non-empty when some lenses failed (see review.RereviewReview)
 }
 
 type decideRereviewErrorMsg struct {
@@ -292,14 +293,12 @@ func (m model) launchDecideRereview(rec review.Record, inlineNotes string) (mode
 		ctx, cancel := context.WithTimeout(context.Background(), decideRereviewTimeout)
 		defer cancel()
 		finish := recordHumanDecisionFunc(rec, "rereview")
-		// The degradedToRevise return is always false now (rereview fetches
-		// a fresh diff and never falls back to revise), so it is ignored.
-		newVerdict, _, err := rereviewReviewFunc(ctx, rec, inlineNotes)
+		newVerdict, warning, err := rereviewReviewFunc(ctx, rec, inlineNotes)
 		finish(err)
 		if err != nil {
 			return decideRereviewErrorMsg{rec: rec, err: err}
 		}
-		return decideRereviewCompleteMsg{rec: rec, newVerdict: newVerdict}
+		return decideRereviewCompleteMsg{rec: rec, newVerdict: newVerdict, warning: warning}
 	}
 }
 

@@ -649,6 +649,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clearDecideInFlight(msg.rec)
 		// RereviewReview succeeded: pr_review.py re-ran against a fresh diff
 		// and rewrote the spool in place (it never degrades to revise).
+		if msg.warning != "" {
+			// Partial success: pr_review.py ran without some lenses. Say so
+			// rather than reporting a clean rereview.
+			m = m.appendActivity(m.styles.Warning.Render(fmt.Sprintf(
+				"Rereviewed review for %s#%d with missing lenses (%s) — new verdict: %s, back in pending/.", msg.rec.Repo, msg.rec.PR, msg.warning, msg.newVerdict)))
+			return m, nil
+		}
 		m = m.appendActivity(m.styles.Success.Render(fmt.Sprintf(
 			"Rereviewed review for %s#%d — new verdict: %s, back in pending/.", msg.rec.Repo, msg.rec.PR, msg.newVerdict)))
 		return m, nil

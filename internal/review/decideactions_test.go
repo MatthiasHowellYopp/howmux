@@ -1755,6 +1755,8 @@ type fakeRereviewRun struct {
 	diffContent string // content of --diff-file at pr_review.py time
 	diffPath    string
 	toolCalled  bool
+	calls       []string // seam call order: "sha", "diff", "tool"
+	stderr      string   // written to the tool's stderr on success (set before the call)
 }
 
 // withFakeRereviewSeams fakes fetchDiffFunc, prHeadSHAFunc, runReviewToolFunc
@@ -1772,6 +1774,7 @@ func withFakeRereviewSeams(t *testing.T, headSHA, newVerdict, printPath string, 
 
 	run := &fakeRereviewRun{}
 	fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+		run.calls = append(run.calls, "diff")
 		if fetchErr != nil {
 			return fetchErr
 		}
@@ -1779,9 +1782,16 @@ func withFakeRereviewSeams(t *testing.T, headSHA, newVerdict, printPath string, 
 		run.diffPath = outputFile
 		return os.WriteFile(outputFile, []byte("diff --git a/fresh.go b/fresh.go\n"), 0o644)
 	}
-	prHeadSHAFunc = func(repo string, pr int) (string, error) { return headSHA, nil }
+	prHeadSHAFunc = func(repo string, pr int) (string, error) {
+		run.calls = append(run.calls, "sha")
+		return headSHA, nil
+	}
 	runReviewToolFunc = func(ctx context.Context, argv []string, stderr io.Writer) ([]string, error) {
+		run.calls = append(run.calls, "tool")
 		run.toolCalled = true
+		if run.stderr != "" {
+			fmt.Fprint(stderr, run.stderr)
+		}
 		run.argv = append([]string{}, argv...)
 		if toolErr != nil {
 			fmt.Fprintln(stderr, "Traceback: boom")
@@ -1803,10 +1813,14 @@ func withFakeRereviewSeams(t *testing.T, headSHA, newVerdict, printPath string, 
 	return run
 }
 
-// argValue returns the value following flag in argv, or "".
+// argValue returns flag's value in argv, from either "flag value" or
+// "flag=value" form, or "".
 func argValue(argv []string, flag string) string {
-	for i := 0; i+1 < len(argv); i++ {
-		if argv[i] == flag {
+	for i, a := range argv {
+		if v, ok := strings.CutPrefix(a, flag+"="); ok {
+			return v
+		}
+		if a == flag && i+1 < len(argv) {
 			return argv[i+1]
 		}
 	}
@@ -1815,7 +1829,7 @@ func argValue(argv []string, flag string) string {
 
 func hasArg(argv []string, flag string) bool {
 	for _, a := range argv {
-		if a == flag {
+		if a == flag || strings.HasPrefix(a, flag+"=") {
 			return true
 		}
 	}
@@ -1868,12 +1882,12 @@ func TestRereviewReview_RunsPrReviewWithSpoolFields(t *testing.T) {
 			spoolPath := writeFakeSpoolFile(t, base, fm, "# Review\n\nVERDICT: COMMENT\n")
 			run := withFakeRereviewSeams(t, "head123", "REQUEST_CHANGES", "", nil, nil)
 
-			verdict, degraded, err := RereviewReview(context.Background(), recordForSpool("owner/repo", 23, spoolPath), tc.inlineNotes)
+			verdict, warning, err := RereviewReview(context.Background(), recordForSpool("owner/repo", 23, spoolPath), tc.inlineNotes)
 			if err != nil {
 				t.Fatalf("RereviewReview() error: %v", err)
 			}
-			if degraded {
-				t.Error("degradedToRevise = true, want always false")
+			if warning != "" {
+				t.Errorf("warning = %q, want none for a clean run", warning)
 			}
 			if verdict != "REQUEST_CHANGES" {
 				t.Errorf("verdict = %q, want REQUEST_CHANGES", verdict)
@@ -1967,12 +1981,9 @@ func TestRereviewReview_DiffFetchFailure_ReturnsError(t *testing.T) {
 	before, _ := os.ReadFile(spoolPath)
 	run := withFakeRereviewSeams(t, "sha", "APPROVE", "", fmt.Errorf("gh pr diff failed"), nil)
 
-	_, degraded, err := RereviewReview(context.Background(), recordForSpool("owner/repo", 31, spoolPath), "")
+	_, _, err := RereviewReview(context.Background(), recordForSpool("owner/repo", 31, spoolPath), "")
 	if err == nil || !strings.Contains(err.Error(), "fetch diff") {
 		t.Fatalf("err = %v, want a fetch-diff error", err)
-	}
-	if degraded {
-		t.Error("degradedToRevise = true, want false (no silent degrade)")
 	}
 	if run.toolCalled {
 		t.Error("pr_review.py ran despite the diff fetch failure")
@@ -2091,4 +2102,82 @@ func withScopeConfig(t *testing.T, cfg *AutoPostConfig) {
 	prev := reviewScopeConfig.Load()
 	reviewScopeConfig.Store(cfg)
 	t.Cleanup(func() { reviewScopeConfig.Store(prev) })
+}
+
+// TestRereviewReview_ResolvesHeadBeforeDiff pins the safe ordering: the head
+// SHA is read before the diff, so a push in between stamps an older SHA (the
+// gate sees it as stale) rather than one the review never saw.
+func TestRereviewReview_ResolvesHeadBeforeDiff(t *testing.T) {
+	base := t.TempDir()
+	spoolPath := writeFakeSpoolFile(t, base, map[string]string{
+		"repo": "owner/repo", "pr": "40", "verdict": "COMMENT", "language": "go",
+	}, "# Review\n\nVERDICT: COMMENT\n")
+	run := withFakeRereviewSeams(t, "sha", "COMMENT", "", nil, nil)
+
+	if _, _, err := RereviewReview(context.Background(), recordForSpool("owner/repo", 40, spoolPath), ""); err != nil {
+		t.Fatalf("RereviewReview() error: %v", err)
+	}
+	if got := strings.Join(run.calls, ","); got != "sha,diff,tool" {
+		t.Errorf("seam call order = %s, want sha,diff,tool", got)
+	}
+}
+
+// TestRereviewReview_NotesStartingWithDash checks notes are passed as one
+// "--notes=<v>" argv entry, so argparse can't mistake "-1 ..." for an option.
+func TestRereviewReview_NotesStartingWithDash(t *testing.T) {
+	base := t.TempDir()
+	spoolPath := writeFakeSpoolFile(t, base, map[string]string{
+		"repo": "owner/repo", "pr": "41", "verdict": "COMMENT", "language": "go",
+	}, "# Review\n\nVERDICT: COMMENT\n")
+	run := withFakeRereviewSeams(t, "sha", "COMMENT", "", nil, nil)
+
+	if _, _, err := RereviewReview(context.Background(), recordForSpool("owner/repo", 41, spoolPath), "-1 on the nit"); err != nil {
+		t.Fatalf("RereviewReview() error: %v", err)
+	}
+	found := false
+	for _, a := range run.argv {
+		if a == "--notes" {
+			t.Errorf("--notes passed as a separate argv entry: %v", run.argv)
+		}
+		if a == "--notes=-1 on the nit" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("want a single --notes=-1 on the nit entry, got %v", run.argv)
+	}
+}
+
+// TestRereviewReview_DegradedLensesWarn checks a partial-lens run (exit 0 plus
+// pr_review.py's degraded marker on stderr) comes back as a warning, not as a
+// clean rereview.
+func TestRereviewReview_DegradedLensesWarn(t *testing.T) {
+	base := t.TempDir()
+	spoolPath := writeFakeSpoolFile(t, base, map[string]string{
+		"repo": "owner/repo", "pr": "42", "verdict": "COMMENT", "language": "go",
+	}, "# Review\n\nVERDICT: COMMENT\n")
+	run := withFakeRereviewSeams(t, "sha", "COMMENT", "", nil, nil)
+	run.stderr = "→ [2/3] Running 4 review lenses …\n  ! lenses with errors (degraded, not fatal): language, testing\n"
+
+	_, warning, err := RereviewReview(context.Background(), recordForSpool("owner/repo", 42, spoolPath), "")
+	if err != nil {
+		t.Fatalf("RereviewReview() error: %v", err)
+	}
+	if warning != "lenses failed: language, testing" {
+		t.Errorf("warning = %q, want %q", warning, "lenses failed: language, testing")
+	}
+}
+
+func TestParseFindingLine_Range(t *testing.T) {
+	f, ok := parseFindingLine("- foo.go:8-10 - warning - spans a block -> fix it")
+	if !ok || f.file != "foo.go" || f.line != 8 || f.endLine != 10 {
+		t.Fatalf("got %+v ok=%v, want foo.go 8..10", f, ok)
+	}
+	if f.severity != "warning" || f.issue != "spans a block" || f.fix != "fix it" {
+		t.Errorf("groups shifted: %+v", f)
+	}
+	f, ok = parseFindingLine("- foo.go:8 - nit - single")
+	if !ok || f.endLine != 0 || f.severity != "nit" || f.issue != "single" {
+		t.Errorf("single line: %+v ok=%v", f, ok)
+	}
 }

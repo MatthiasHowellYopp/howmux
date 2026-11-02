@@ -269,12 +269,13 @@ var lookPathForDecideActionsFunc = exec.LookPath
 // The severity "- … -" middle is optional AND constrained to recognized
 // severity keywords (critical/high/medium/low/warning/nit/info/minor/major),
 // so a hyphenated ordinary word in the issue text ("single-digit idiom", #78)
-// is not mis-parsed as a severity. parseFindingLine (below) normalizes group
-// 3 to a bare keyword and splits group 4 on the arrow; buildReviewPayload and
+// is not mis-parsed as a severity. Group 3 is the optional range end
+// ("foo.go:8-10"). parseFindingLine (below) normalizes group 4 to a bare
+// keyword and splits group 5 on the arrow; buildReviewPayload and
 // countFindings both go through it rather than indexing the groups directly.
 var findingLineRe = regexp.MustCompile(
 	`(?mi)^\s*(?:[-*+]\s+|\d+[.)]\s+)?` + // optional list marker
-		"[`*]*" + `(\S+?):(\d+)(?:-\d+)?` + "[`*]*" + // file:line[-range], opt ` or * wrappers
+		"[`*]*" + `(\S+?):(\d+)(?:-(\d+))?` + "[`*]*" + // file:line[-range], opt ` or * wrappers
 		`\s*[-—]\s*` + // first separator
 		// optional "severity -" middle, severity constrained to real keywords
 		`(?:(\**(?:critical|high|medium|low|warning|warn|nit|info|minor|major)` +
@@ -292,6 +293,7 @@ var findingLineRe = regexp.MustCompile(
 type finding struct {
 	file     string
 	line     int
+	endLine  int // last line of a "file:a-b" range finding; 0 for a single line
 	severity string
 	issue    string
 	fix      string
@@ -316,14 +318,21 @@ func parseFindingLine(line string) (finding, bool) {
 	// Normalize severity: strip bold stars and any parenthetical/compound
 	// qualifier down to the leading keyword, lowercased. Empty when the line
 	// carried no recognized severity middle.
-	sev := strings.ToLower(strings.Trim(strings.TrimSpace(m[3]), "*"))
+	end := 0
+	if m[3] != "" {
+		if e, err := strconv.Atoi(m[3]); err == nil && e >= n {
+			end = e
+		}
+	}
+
+	sev := strings.ToLower(strings.Trim(strings.TrimSpace(m[4]), "*"))
 	if i := strings.IndexAny(sev, "/ ("); i >= 0 {
 		sev = sev[:i]
 	}
 
 	// Split the remaining text on the first "->" or "→". No arrow → the whole
 	// remainder is the issue and there is no explicit suggested fix.
-	rest := strings.TrimSpace(m[4])
+	rest := strings.TrimSpace(m[5])
 	issue, fix := rest, ""
 	if idx := strings.Index(rest, "->"); idx >= 0 {
 		issue, fix = strings.TrimSpace(rest[:idx]), strings.TrimSpace(rest[idx+2:])
@@ -331,7 +340,7 @@ func parseFindingLine(line string) (finding, bool) {
 		issue, fix = strings.TrimSpace(rest[:idx]), strings.TrimSpace(rest[idx+len("→"):])
 	}
 
-	return finding{file: m[1], line: n, severity: sev, issue: issue, fix: fix}, true
+	return finding{file: m[1], line: n, endLine: end, severity: sev, issue: issue, fix: fix}, true
 }
 
 // countFindings counts finding lines in a review body — lines matching
@@ -1014,8 +1023,8 @@ func ReviseReview(ctx context.Context, rec Record, inlineNotes string) (newVerdi
 // issues or earlier PR reviews.
 //
 // Steps: resolve the spool (not found / already in done/ are errors), read
-// its language: and valkey: front-matter, fetch the current diff to a temp
-// file (removed afterwards), resolve the PR's current head SHA, run
+// its language: and valkey: front-matter, resolve the PR's current head
+// SHA, fetch the current diff to a temp file (removed afterwards), run
 // pr_review.py with --spool-file pointing at the resolved pending/ path,
 // check the path it prints is that same file, then stamp reviewed_sha /
 // generated via WriteReviewedMetadata and return the rewritten spool's
@@ -1026,47 +1035,52 @@ func ReviseReview(ctx context.Context, rec Record, inlineNotes string) (newVerdi
 // persisted decision_notes: front-matter value is used; when both are blank
 // --notes is omitted. Notes are never persisted by this function.
 //
-// degradedToRevise is always false. It is kept in the signature for the TUI
-// seam; rereview no longer falls back to a revise because it always fetches
-// a fresh diff, and a diff fetch failure is returned as an error.
-func RereviewReview(ctx context.Context, rec Record, inlineNotes string) (newVerdict string, degradedToRevise bool, err error) {
+// warning is non-empty when the rereview succeeded but some lenses failed
+// (pr_review.py exits 0 and prints degradedLensMarker in that case), so the
+// caller can tell the user the result is missing those lenses. A diff fetch
+// failure is returned as an error; rereview never falls back to a revise.
+func RereviewReview(ctx context.Context, rec Record, inlineNotes string) (newVerdict string, warning string, err error) {
 	resolved, found, inDoneDir := resolveSpoolPath(rec.SpoolPath)
 	if !found {
-		return "", false, fmt.Errorf("no spool file for %s#%d: %s", rec.Repo, rec.PR, rec.SpoolPath)
+		return "", "", fmt.Errorf("no spool file for %s#%d: %s", rec.Repo, rec.PR, rec.SpoolPath)
 	}
 	if inDoneDir {
-		return "", false, fmt.Errorf("review already finalized (archived to done/); cannot rereview: %s", resolved)
+		return "", "", fmt.Errorf("review already finalized (archived to done/); cannot rereview: %s", resolved)
 	}
 
 	data, readErr := os.ReadFile(resolved)
 	if readErr != nil {
-		return "", false, fmt.Errorf("failed to read spool file for %s#%d: %w", rec.Repo, rec.PR, readErr)
+		return "", "", fmt.Errorf("failed to read spool file for %s#%d: %w", rec.Repo, rec.PR, readErr)
 	}
 	fields := ParseSpoolFrontMatter(data)
 
 	owner, name, ok := strings.Cut(rec.Repo, "/")
 	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
-		return "", false, fmt.Errorf("invalid repo format: %s (expected owner/name)", rec.Repo)
+		return "", "", fmt.Errorf("invalid repo format: %s (expected owner/name)", rec.Repo)
 	}
 
 	diffFile, err := os.CreateTemp("", fmt.Sprintf("rereview-%d-*.diff", rec.PR))
 	if err != nil {
-		return "", false, fmt.Errorf("rereview: create temp diff file: %w", err)
+		return "", "", fmt.Errorf("rereview: create temp diff file: %w", err)
 	}
 	diffPath := diffFile.Name()
 	diffFile.Close()
 	defer os.Remove(diffPath)
 
-	if err := fetchDiffFunc(ctx, owner, name, rec.PR, diffPath); err != nil {
-		return "", false, fmt.Errorf("rereview: fetch diff for %s#%d: %w", rec.Repo, rec.PR, err)
-	}
-
+	// Resolve the head SHA BEFORE fetching the diff (as RunReview does). If a
+	// push lands between the two calls, the stamped reviewed_sha is older than
+	// the diff and the gate treats the review as stale, which is the safe
+	// direction. The other order would stamp a commit the review never saw.
 	headSHA, err := prHeadSHAFunc(rec.Repo, rec.PR)
 	if err != nil {
-		return "", false, fmt.Errorf("rereview: resolve head SHA for %s#%d: %w", rec.Repo, rec.PR, err)
+		return "", "", fmt.Errorf("rereview: resolve head SHA for %s#%d: %w", rec.Repo, rec.PR, err)
 	}
 	if headSHA == "" {
-		return "", false, fmt.Errorf("rereview: empty head SHA for %s#%d", rec.Repo, rec.PR)
+		return "", "", fmt.Errorf("rereview: empty head SHA for %s#%d", rec.Repo, rec.PR)
+	}
+
+	if err := fetchDiffFunc(ctx, owner, name, rec.PR, diffPath); err != nil {
+		return "", "", fmt.Errorf("rereview: fetch diff for %s#%d: %w", rec.Repo, rec.PR, err)
 	}
 
 	language := strings.TrimSpace(fields["language"])
@@ -1090,7 +1104,9 @@ func RereviewReview(ctx context.Context, rec Record, inlineNotes string) (newVer
 		notes = CurrentDecisionNotes(resolved, "")
 	}
 	if strings.TrimSpace(notes) != "" {
-		argv = append(argv, "--notes", notes)
+		// "--notes=<v>" rather than two argv entries: argparse would read a
+		// value starting with "-" (e.g. "-1 on the nit") as an option.
+		argv = append(argv, "--notes="+notes)
 	}
 
 	logging.Debug("rereview: invoking pr_review.py", "repo", rec.Repo, "pr", rec.PR, "argv", strings.Join(argv, " "))
@@ -1101,25 +1117,25 @@ func RereviewReview(ctx context.Context, rec Record, inlineNotes string) (newVer
 	stdoutLines, err := runReviewToolFunc(ctx, argv, &stderrBuf)
 	if err != nil {
 		if tail := lastLines(stderrBuf.String(), 5); tail != "" {
-			return "", false, fmt.Errorf("rereview: pr_review.py failed for %s#%d: %w: %s", rec.Repo, rec.PR, err, tail)
+			return "", "", fmt.Errorf("rereview: pr_review.py failed for %s#%d: %w: %s", rec.Repo, rec.PR, err, tail)
 		}
-		return "", false, fmt.Errorf("rereview: pr_review.py failed for %s#%d: %w", rec.Repo, rec.PR, err)
+		return "", "", fmt.Errorf("rereview: pr_review.py failed for %s#%d: %w", rec.Repo, rec.PR, err)
 	}
 	if len(stdoutLines) == 0 {
-		return "", false, fmt.Errorf("rereview: pr_review.py produced no output for %s#%d (expected spool path)", rec.Repo, rec.PR)
+		return "", "", fmt.Errorf("rereview: pr_review.py produced no output for %s#%d (expected spool path)", rec.Repo, rec.PR)
 	}
 	got := stdoutLines[len(stdoutLines)-1]
 	if filepath.Clean(got) != filepath.Clean(resolved) {
-		return "", false, fmt.Errorf("rereview: pr_review.py wrote %q, expected the existing spool file %q", got, resolved)
+		return "", "", fmt.Errorf("rereview: pr_review.py wrote %q, expected the existing spool file %q", got, resolved)
 	}
 
 	if err := WriteReviewedMetadata(resolved, headSHA, timeNow()); err != nil {
-		return "", false, fmt.Errorf("rereview: stamp reviewed metadata into %s: %w", resolved, err)
+		return "", "", fmt.Errorf("rereview: stamp reviewed metadata into %s: %w", resolved, err)
 	}
 
 	body, info := ReadSpoolBody(resolved, "")
 	if !info.Found {
-		return "", false, fmt.Errorf("rereview: cannot read rewritten spool file %s", resolved)
+		return "", "", fmt.Errorf("rereview: cannot read rewritten spool file %s", resolved)
 	}
 	verdict := strings.ToUpper(strings.TrimSpace(info.Verdict))
 	if verdict == "" {
@@ -1131,10 +1147,26 @@ func RereviewReview(ctx context.Context, rec Record, inlineNotes string) (newVer
 	// holds regardless.
 	if strings.TrimSpace(info.Decision) != "" {
 		if err := RewriteSpoolEntry(resolved, body, verdict, true); err != nil {
-			return "", false, fmt.Errorf("rereview: clear decision in %s: %w", resolved, err)
+			return "", "", fmt.Errorf("rereview: clear decision in %s: %w", resolved, err)
 		}
 	}
-	return verdict, false, nil
+	return verdict, degradedLensWarning(stderrBuf.String()), nil
+}
+
+// degradedLensMarker is the stderr line prefix pr_review.py prints when some
+// (not all) lenses failed. It still exits 0 in that case, so the caller must
+// look for it to tell the user the rereview ran without those lenses.
+const degradedLensMarker = "lenses with errors (degraded, not fatal):"
+
+// degradedLensWarning returns a short warning naming the failed lenses when
+// pr_review.py's stderr carries degradedLensMarker, or "" otherwise.
+func degradedLensWarning(stderr string) string {
+	for _, line := range strings.Split(stderr, "\n") {
+		if _, after, ok := strings.Cut(line, degradedLensMarker); ok {
+			return "lenses failed: " + strings.TrimSpace(after)
+		}
+	}
+	return ""
 }
 
 // lastLines returns the last n non-empty lines of text joined with " | ",

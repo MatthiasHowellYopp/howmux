@@ -45,8 +45,12 @@ type PriorReview struct {
 // PriorThread is one inline review thread. Line is nil for file-level or
 // otherwise unanchored threads.
 type PriorThread struct {
-	Path       string               `json:"path"`
-	Line       *int                 `json:"line"`
+	Path string `json:"path"`
+	Line *int   `json:"line"`
+	// StartLine is the first line of a multi-line comment (nil for a
+	// single-line one, and in snapshots written before it was recorded).
+	// Line is then the last line of the span.
+	StartLine  *int                 `json:"start_line"`
 	IsResolved bool                 `json:"is_resolved"`
 	IsOutdated bool                 `json:"is_outdated"`
 	Comments   []PriorThreadComment `json:"comments"`
@@ -89,13 +93,19 @@ type LoadedPriorFeedback struct {
 }
 
 // loadPriorFeedback loads the prior-feedback file named by the spool
-// front-matter fields. It returns nil when the key is absent or blank, and a
-// LoadedPriorFeedback with Err set when the file can't be read or parsed (the
-// guardrail fails closed on that).
+// front-matter fields. It returns nil only when the key is absent (a spool
+// written before prior feedback existed). A key that is present but blank
+// means pr_review.py ran the newer pipeline but the snapshot was never
+// written, so it returns a LoadedPriorFeedback with Err set, as it does when
+// the file can't be read or parsed; the guardrail fails closed on all three.
 func loadPriorFeedback(fm map[string]string) *LoadedPriorFeedback {
-	path := strings.TrimSpace(fm[priorFeedbackKey])
-	if path == "" {
+	value, present := fm[priorFeedbackKey]
+	if !present {
 		return nil
+	}
+	path := strings.TrimSpace(value)
+	if path == "" {
+		return &LoadedPriorFeedback{Err: fmt.Errorf("prior_feedback is blank: the prior-feedback snapshot was not written")}
 	}
 	lp := &LoadedPriorFeedback{Path: path}
 	raw, err := os.ReadFile(path)

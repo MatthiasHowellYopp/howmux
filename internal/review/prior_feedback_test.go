@@ -104,8 +104,10 @@ func TestLoadPriorFeedback(t *testing.T) {
 	if got := loadPriorFeedback(map[string]string{}); got != nil {
 		t.Errorf("absent key: got %+v, want nil", got)
 	}
-	if got := loadPriorFeedback(map[string]string{"prior_feedback": "  "}); got != nil {
-		t.Errorf("blank key: got %+v, want nil", got)
+	// Present but blank: the newer pipeline ran but never wrote a snapshot.
+	// That must fail closed, not look like an old spool.
+	if got := loadPriorFeedback(map[string]string{"prior_feedback": "  "}); got == nil || got.Err == nil {
+		t.Errorf("blank key: got %+v, want a LoadedPriorFeedback with Err set", got)
 	}
 
 	lp := loadPriorFeedback(map[string]string{"prior_feedback": good})
