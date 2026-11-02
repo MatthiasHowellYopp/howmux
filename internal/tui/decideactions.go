@@ -116,6 +116,17 @@ type decideDiscardErrorMsg struct {
 // the exact "post"/"revise"/"rereview"/"discard" vocabulary before
 // reaching here).
 func (m model) dispatchDecideAction(rec review.Record, decision string) (model, tea.Cmd) {
+	// Refuse a second decision while one is still running on this review.
+	// Without this, e.g. pressing d during a multi-minute rereview archives
+	// the spool file out from under it, and the rereview then fails at its
+	// final rewrite step after doing all the work.
+	if rt := m.findReviewsTab(); rt != nil {
+		if running, ok := rt.InFlightAction(rec); ok {
+			m = m.appendActivity(m.styles.Warning.Render(fmt.Sprintf(
+				"%s already running for %s#%d — wait for it to finish before deciding again", running, rec.Repo, rec.PR)))
+			return m, nil
+		}
+	}
 	switch decision {
 	case "post":
 		return m.startDecidePost(rec)
@@ -259,6 +270,7 @@ func launchDecidePostCmd(rec review.Record, _ string) tea.Cmd {
 // case ReviseReview falls back to the persisted decision_notes). They are
 // passed straight to the seam and never persisted to the spool.
 func (m model) launchDecideRevise(rec review.Record, inlineNotes string) (model, tea.Cmd) {
+	m.markDecideInFlight(rec, "revise")
 	m = m.appendActivity(m.styles.Activity.Render(fmt.Sprintf("Revising review for %s#%d...", rec.Repo, rec.PR)))
 	return m, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), decideReviseTimeout)
@@ -279,7 +291,8 @@ func (m model) launchDecideRevise(rec review.Record, inlineNotes string) (model,
 // multi-line instructions the user typed into the in-app composer (empty if
 // none), threaded to the seam identically to launchDecideRevise.
 func (m model) launchDecideRereview(rec review.Record, inlineNotes string) (model, tea.Cmd) {
-	m = m.appendActivity(m.styles.Activity.Render(fmt.Sprintf("Re-reviewing %s#%d...", rec.Repo, rec.PR)))
+	m.markDecideInFlight(rec, "rereview")
+	m = m.appendActivity(m.styles.Activity.Render(fmt.Sprintf("Re-reviewing %s#%d (this can take several minutes)...", rec.Repo, rec.PR)))
 	return m, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), decideRereviewTimeout)
 		defer cancel()
@@ -299,6 +312,7 @@ func (m model) launchDecideRereview(rec review.Record, inlineNotes string) (mode
 // still returns a tea.Cmd (rather than a direct (model, nil)) for
 // structural uniformity with the other three decide actions.
 func (m model) launchDecideDiscard(rec review.Record) (model, tea.Cmd) {
+	m.markDecideInFlight(rec, "discard")
 	return m, func() tea.Msg {
 		finish := recordHumanDecisionFunc(rec, "discard")
 		err := discardReviewFunc(rec)
@@ -307,6 +321,25 @@ func (m model) launchDecideDiscard(rec review.Record) (model, tea.Cmd) {
 			return decideDiscardErrorMsg{rec: rec, err: err}
 		}
 		return decideDiscardCompleteMsg{rec: rec}
+	}
+}
+
+// --- in-flight tracking ------------------------------------------------------
+
+// markDecideInFlight flags rec as having a running decide action on the
+// Reviews tab (shown in its DECISION STATE column, and used by
+// dispatchDecideAction to refuse overlapping decisions).
+func (m model) markDecideInFlight(rec review.Record, action string) {
+	if rt := m.findReviewsTab(); rt != nil {
+		rt.MarkInFlight(rec, action)
+	}
+}
+
+// clearDecideInFlight drops rec's in-flight flag; every decide terminal
+// message (complete or error) calls it.
+func (m model) clearDecideInFlight(rec review.Record) {
+	if rt := m.findReviewsTab(); rt != nil {
+		rt.ClearInFlight(rec)
 	}
 }
 
