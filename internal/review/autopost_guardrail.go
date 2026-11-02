@@ -76,6 +76,8 @@ var secretPathMarkers = []*regexp.Regexp{
 //     no diff was available, in which case the anchor check is SKIPPED-as-fail
 //     (fail-closed: we cannot prove findings anchor without a diff)
 //   - maxFindings: the finding-count cap (check #6)
+//   - prior:       the spool's prior feedback as loaded by the caller; nil when
+//     the spool has no prior_feedback key (check #7)
 //
 // The checks, in order (all deterministic):
 //  1. verdict_parseable  — parseVerdict(body) != "UNKNOWN"
@@ -84,7 +86,9 @@ var secretPathMarkers = []*regexp.Regexp{
 //  4. event_legal          — record and body verdicts agree and are a known event
 //  5. no_secrets           — body contains no machine paths / key-shaped tokens
 //  6. finding_count         — finding count within [0, maxFindings]
-func evaluateAutoPostGuardrail(verdict, body, headSHA, reviewedSHA string, commentable map[string]map[int]bool, maxFindings int, language string) gateResult {
+//  7. not_already_raised    — no finding sits on an open (unresolved, not
+//     outdated) prior review thread
+func evaluateAutoPostGuardrail(verdict, body, headSHA, reviewedSHA string, commentable map[string]map[int]bool, maxFindings int, language string, prior *LoadedPriorFeedback) gateResult {
 	var checks []gateCheck
 
 	// 0. A generic (non-specialist) review is never auto-posted. It covers a
@@ -185,6 +189,9 @@ func evaluateAutoPostGuardrail(verdict, body, headSHA, reviewedSHA string, comme
 		detail: fmt.Sprintf("%d findings (cap %d)", count, maxFindings),
 	})
 
+	// 7. Not already raised.
+	checks = append(checks, checkNotAlreadyRaised(body, prior))
+
 	clean := true
 	for _, c := range checks {
 		if !c.passed {
@@ -193,4 +200,54 @@ func evaluateAutoPostGuardrail(verdict, body, headSHA, reviewedSHA string, comme
 		}
 	}
 	return gateResult{clean: clean, checks: checks}
+}
+
+// checkNotAlreadyRaised fails when a finding lands on the same file:line as
+// an open prior review thread (is_resolved=false and is_outdated=false):
+// that point is already in front of the author, and posting it again is
+// noise. The consolidator marks a finding that deliberately re-raises a
+// RESOLVED thread with " (re-raised: <ref>)"; that marker never exempts a
+// match on an open thread, and matches on resolved threads pass this check
+// with or without it (judging a re-raise is the auditor's job). Outdated threads are ignored (their line no longer maps to the
+// current code), as are threads with no line.
+//
+// prior == nil (no prior_feedback key, an older spool) passes. A key whose
+// file couldn't be read or parsed fails closed.
+func checkNotAlreadyRaised(body string, prior *LoadedPriorFeedback) gateCheck {
+	const name = "not_already_raised"
+	if prior == nil {
+		return gateCheck{name: name, passed: true}
+	}
+	if prior.Err != nil || prior.Data == nil {
+		detail := "prior feedback unavailable"
+		if prior.Err != nil {
+			detail = prior.Err.Error()
+		}
+		return gateCheck{name: name, passed: false, detail: detail}
+	}
+
+	open := map[string]map[int]bool{}
+	for _, th := range prior.Data.Threads {
+		if th.Line == nil || th.IsResolved || th.IsOutdated {
+			continue
+		}
+		if open[th.Path] == nil {
+			open[th.Path] = map[int]bool{}
+		}
+		open[th.Path][*th.Line] = true
+	}
+
+	var hits []string
+	for _, f := range splitReview(body).findings {
+		// open holds only unresolved threads, so the re-raised marker is
+		// deliberately not consulted.
+		if open[f.file][f.line] {
+			hits = append(hits, fmt.Sprintf("%s:%d", f.file, f.line))
+		}
+	}
+	if len(hits) > 0 {
+		return gateCheck{name: name, passed: false,
+			detail: "findings repeat open prior review threads: " + strings.Join(hits, ", ")}
+	}
+	return gateCheck{name: name, passed: true}
 }

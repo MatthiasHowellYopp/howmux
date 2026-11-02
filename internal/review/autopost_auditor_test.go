@@ -75,7 +75,7 @@ func TestCallReviewAuditor_Verdicts(t *testing.T) {
 			withKiroCLIPresent(t)
 			withFakeKiroOneshot(t, map[string]string{reviewAuditorAgent: tc.response}, nil)
 
-			got := callReviewAuditor(context.Background(), "owner/repo", 1, "COMMENT", "body", "diff", "")
+			got := callReviewAuditor(context.Background(), "owner/repo", 1, "COMMENT", "body", "diff", "", nil)
 			if got.verdict != tc.want {
 				t.Errorf("verdict = %q, want %q", got.verdict, tc.want)
 			}
@@ -118,7 +118,7 @@ func TestCallReviewAuditor_FailClosed_MissingAgent(t *testing.T) {
 	// test if invoked by returning a POST_OK we must NOT see.
 	withFakeKiroOneshot(t, map[string]string{reviewAuditorAgent: "VERDICT: POST_OK"}, nil)
 
-	got := callReviewAuditor(context.Background(), "owner/repo", 1, "COMMENT", "body", "diff", "")
+	got := callReviewAuditor(context.Background(), "owner/repo", 1, "COMMENT", "body", "diff", "", nil)
 	if got.verdict != auditorNeedsHuman {
 		t.Errorf("verdict = %q, want NEEDS_HUMAN (fail-closed on missing kiro-cli)", got.verdict)
 	}
@@ -128,7 +128,7 @@ func TestCallReviewAuditor_FailClosed_CallError(t *testing.T) {
 	withKiroCLIPresent(t)
 	withFakeKiroOneshot(t, nil, map[string]error{reviewAuditorAgent: errors.New("kiro exited 1")})
 
-	got := callReviewAuditor(context.Background(), "owner/repo", 1, "COMMENT", "body", "diff", "")
+	got := callReviewAuditor(context.Background(), "owner/repo", 1, "COMMENT", "body", "diff", "", nil)
 	if got.verdict != auditorNeedsHuman {
 		t.Errorf("verdict = %q, want NEEDS_HUMAN (fail-closed on call error)", got.verdict)
 	}
@@ -141,7 +141,7 @@ func TestCallReviewAuditor_FailClosed_Unparseable(t *testing.T) {
 	withKiroCLIPresent(t)
 	withFakeKiroOneshot(t, map[string]string{reviewAuditorAgent: "I think it's fine but I won't say the magic word."}, nil)
 
-	got := callReviewAuditor(context.Background(), "owner/repo", 1, "COMMENT", "body", "diff", "")
+	got := callReviewAuditor(context.Background(), "owner/repo", 1, "COMMENT", "body", "diff", "", nil)
 	if got.verdict != auditorNeedsHuman {
 		t.Errorf("verdict = %q, want NEEDS_HUMAN (fail-closed on unparseable verdict)", got.verdict)
 	}
@@ -158,7 +158,7 @@ func TestGate_AuditorModel_ForwardedAndRecorded(t *testing.T) {
 
 	rec, body, verdict, head, reviewed, diff := gateFixture()
 	cfg := AutoPostConfig{Mode: ModeDryRun, MaxFindings: 25, AuditorModel: "claude-sonnet-5.5"}
-	if _, err := EvaluateAndMaybePost(context.Background(), rec, body, verdict, head, reviewed, diff, cfg); err != nil {
+	if _, err := EvaluateAndMaybePost(context.Background(), rec, body, verdict, head, reviewed, diff, cfg, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(*calls) != 1 || (*calls)[0].agentName != reviewAuditorAgent || (*calls)[0].model != "claude-sonnet-5.5" {
@@ -193,7 +193,7 @@ func TestGate_AuditorModel_UnpinnedIsNull(t *testing.T) {
 	calls := withFakeKiroOneshot(t, map[string]string{reviewAuditorAgent: "VERDICT: POST_OK"}, nil)
 
 	rec, body, verdict, head, reviewed, diff := gateFixture()
-	if _, err := EvaluateAndMaybePost(context.Background(), rec, body, verdict, head, reviewed, diff, AutoPostConfig{Mode: ModeDryRun}); err != nil {
+	if _, err := EvaluateAndMaybePost(context.Background(), rec, body, verdict, head, reviewed, diff, AutoPostConfig{Mode: ModeDryRun}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(*calls) != 1 || (*calls)[0].model != "" {

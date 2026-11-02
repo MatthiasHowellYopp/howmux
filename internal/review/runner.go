@@ -298,13 +298,17 @@ func RunReview(ctx context.Context, rec Record, headSHA string, storeImpl StoreI
 	logging.Debug("fetched PR diff", "file", diffPath)
 
 	// Construct pr_review.py argv
-	// Always use --language auto to let pr_review.py detect both language and valkey
+	// Always use --language auto to let pr_review.py detect both language and valkey.
+	// --issues widens the prior-feedback issue fetch to every open issue when
+	// the auto-post gate may act on this repo without a human (see
+	// SetReviewScopeConfig); otherwise only issues related to the PR.
 	argv := []string{
 		"pr_review.py",
 		"--diff-file", diffPath,
 		"--repo", rec.Repo,
 		"--pr", strconv.Itoa(rec.PR),
 		"--language", "auto",
+		"--issues", issueScopeFor(rec.Repo),
 	}
 
 	logging.Debug("invoking pr_review.py", "argv", strings.Join(argv, " "))

@@ -46,7 +46,7 @@ func TestGate_DryRun_AlwaysPunches(t *testing.T) {
 	rec, body, verdict, head, reviewed, diff := gateFixture()
 	cfg := AutoPostConfig{Mode: ModeDryRun, MaxFindings: 25, OwnRepoOwners: []string{"Bit-Quill"}}
 
-	res, err := EvaluateAndMaybePost(context.Background(), rec, body, verdict, head, reviewed, diff, cfg)
+	res, err := EvaluateAndMaybePost(context.Background(), rec, body, verdict, head, reviewed, diff, cfg, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestGate_OwnRepos_PostsWhenAllowed(t *testing.T) {
 	rec, body, verdict, head, reviewed, diff := gateFixture()
 	cfg := AutoPostConfig{Mode: ModeOwnRepos, MaxFindings: 25, OwnRepoOwners: []string{"Bit-Quill"}}
 
-	res, err := EvaluateAndMaybePost(context.Background(), rec, body, verdict, head, reviewed, diff, cfg)
+	res, err := EvaluateAndMaybePost(context.Background(), rec, body, verdict, head, reviewed, diff, cfg, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestGate_OwnRepos_PostsNonCommentVerdicts(t *testing.T) {
 			body = strings.Replace(body, "VERDICT: COMMENT", "VERDICT: "+v, 1)
 			cfg := AutoPostConfig{Mode: ModeOwnRepos, MaxFindings: 25, OwnRepoOwners: []string{"Bit-Quill"}}
 
-			res, err := EvaluateAndMaybePost(context.Background(), rec, body, v, head, reviewed, diff, cfg)
+			res, err := EvaluateAndMaybePost(context.Background(), rec, body, v, head, reviewed, diff, cfg, nil)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -121,7 +121,7 @@ func TestGate_OwnRepos_PunchesWhenNotAllowed(t *testing.T) {
 	// owner Bit-Quill NOT in the allow-list
 	cfg := AutoPostConfig{Mode: ModeOwnRepos, MaxFindings: 25, OwnRepoOwners: []string{"matthiashowellyopp"}}
 
-	res, err := EvaluateAndMaybePost(context.Background(), rec, body, verdict, head, reviewed, diff, cfg)
+	res, err := EvaluateAndMaybePost(context.Background(), rec, body, verdict, head, reviewed, diff, cfg, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestGate_All_DiscardsOnAuditorDiscard(t *testing.T) {
 	rec, body, verdict, head, reviewed, diff := gateFixture()
 	cfg := AutoPostConfig{Mode: ModeAll, MaxFindings: 25}
 
-	res, err := EvaluateAndMaybePost(context.Background(), rec, body, verdict, head, reviewed, diff, cfg)
+	res, err := EvaluateAndMaybePost(context.Background(), rec, body, verdict, head, reviewed, diff, cfg, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestGate_AuditorNeedsHuman_Punches(t *testing.T) {
 	rec, body, verdict, head, reviewed, diff := gateFixture()
 	cfg := AutoPostConfig{Mode: ModeAll, MaxFindings: 25}
 
-	res, err := EvaluateAndMaybePost(context.Background(), rec, body, verdict, head, reviewed, diff, cfg)
+	res, err := EvaluateAndMaybePost(context.Background(), rec, body, verdict, head, reviewed, diff, cfg, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestGate_PunchOutBypass(t *testing.T) {
 	staleReviewed := "OLDSHA"
 	cfg := AutoPostConfig{Mode: ModeAll, MaxFindings: 25, OwnRepoOwners: []string{"Bit-Quill"}}
 
-	res, err := EvaluateAndMaybePost(context.Background(), rec, body, verdict, head, staleReviewed, diff, cfg)
+	res, err := EvaluateAndMaybePost(context.Background(), rec, body, verdict, head, staleReviewed, diff, cfg, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestGate_GenericReview_PunchesEvenInOwnRepos(t *testing.T) {
 	rec, body, verdict, head, reviewed, diff := gateFixture()
 	cfg := AutoPostConfig{Mode: ModeOwnRepos, MaxFindings: 25, OwnRepoOwners: []string{"Bit-Quill"}, Language: "generic"}
 
-	res, err := EvaluateAndMaybePost(context.Background(), rec, body, verdict, head, reviewed, diff, cfg)
+	res, err := EvaluateAndMaybePost(context.Background(), rec, body, verdict, head, reviewed, diff, cfg, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -1,6 +1,7 @@
 package review
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
@@ -36,6 +37,7 @@ func TestEvaluateAutoPostGuardrail(t *testing.T) {
 		commentable map[string]map[int]bool
 		maxFindings int
 		language    string
+		prior       *LoadedPriorFeedback
 		wantClean   bool
 		wantFail    string // substring of firstFailure() when !wantClean
 	}{
@@ -249,7 +251,7 @@ func TestEvaluateAutoPostGuardrail(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := evaluateAutoPostGuardrail(tt.verdict, tt.body, tt.headSHA, tt.reviewedSHA, tt.commentable, tt.maxFindings, tt.language)
+			got := evaluateAutoPostGuardrail(tt.verdict, tt.body, tt.headSHA, tt.reviewedSHA, tt.commentable, tt.maxFindings, tt.language, tt.prior)
 			if got.clean != tt.wantClean {
 				t.Fatalf("clean = %v, want %v (checks: %+v)", got.clean, tt.wantClean, got.checks)
 			}
@@ -275,4 +277,74 @@ func manyFindings(n int) string {
 	}
 	b.WriteString("\nVERDICT: COMMENT\n")
 	return b.String()
+}
+
+// priorWithThreads builds a loaded prior-feedback fixture holding threads.
+func priorWithThreads(threads ...PriorThread) *LoadedPriorFeedback {
+	return &LoadedPriorFeedback{Path: "/prior.json", Raw: []byte("{}"), Data: &PriorFeedback{Threads: threads}}
+}
+
+func intPtr(n int) *int { return &n }
+
+func TestCheckNotAlreadyRaised(t *testing.T) {
+	const plain = "## Findings\n- internal/foo.go:10 - medium - leaks fd -> close it\n\nVERDICT: COMMENT\n"
+	const reRaised = "## Findings\n- internal/foo.go:10 - medium - leaks fd -> close it (re-raised: thread by alice)\n\nVERDICT: COMMENT\n"
+	thread := func(resolved, outdated bool) PriorThread {
+		return PriorThread{Path: "internal/foo.go", Line: intPtr(10), IsResolved: resolved, IsOutdated: outdated,
+			Comments: []PriorThreadComment{{Author: "alice", Body: "this leaks"}}}
+	}
+
+	tests := []struct {
+		name       string
+		body       string
+		prior      *LoadedPriorFeedback
+		wantPass   bool
+		wantDetail string
+	}{
+		{"absent key passes", plain, nil, true, ""},
+		{"unreadable file fails closed", plain,
+			&LoadedPriorFeedback{Path: "/missing.json", Err: errors.New("read prior feedback /missing.json: no such file")},
+			false, "/missing.json"},
+		{"unresolved match fails", plain, priorWithThreads(thread(false, false)), false, "internal/foo.go:10"},
+		{"outdated thread ignored", plain, priorWithThreads(thread(false, true)), true, ""},
+		{"resolved + re-raised passes", reRaised, priorWithThreads(thread(true, false)), true, ""},
+		{"unresolved + re-raised fails", reRaised, priorWithThreads(thread(false, false)), false, "internal/foo.go:10"},
+		{"different line passes", plain,
+			priorWithThreads(PriorThread{Path: "internal/foo.go", Line: intPtr(11)}), true, ""},
+		{"null line ignored", plain,
+			priorWithThreads(PriorThread{Path: "internal/foo.go", Line: nil}), true, ""},
+		{"thread match in reviewer notes is not a finding", "## Summary\nok\n\n## Reviewer notes\n" +
+			"Already raised (dropped): internal/foo.go:10 - medium - leaks fd -> close it\n\nVERDICT: COMMENT\n",
+			priorWithThreads(thread(false, false)), true, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := checkNotAlreadyRaised(tt.body, tt.prior)
+			if got.name != "not_already_raised" {
+				t.Errorf("name = %q", got.name)
+			}
+			if got.passed != tt.wantPass {
+				t.Fatalf("passed = %v, want %v (detail %q)", got.passed, tt.wantPass, got.detail)
+			}
+			if !strings.Contains(got.detail, tt.wantDetail) {
+				t.Errorf("detail = %q, want it to contain %q", got.detail, tt.wantDetail)
+			}
+		})
+	}
+}
+
+// TestEvaluateAutoPostGuardrail_NotAlreadyRaised checks the new check is
+// wired into the aggregate result.
+func TestEvaluateAutoPostGuardrail_NotAlreadyRaised(t *testing.T) {
+	prior := priorWithThreads(PriorThread{Path: "internal/foo.go", Line: intPtr(10)})
+	got := evaluateAutoPostGuardrail("COMMENT", cleanBody, "abc", "abc", commentableFixture(), 25, "go", prior)
+	if got.clean {
+		t.Fatal("clean = true, want the not_already_raised check to fail")
+	}
+	if ff := got.firstFailure(); !strings.Contains(ff, "not_already_raised") || !strings.Contains(ff, "internal/foo.go:10") {
+		t.Errorf("firstFailure() = %q", ff)
+	}
+	if got := evaluateAutoPostGuardrail("COMMENT", cleanBody, "abc", "abc", commentableFixture(), 25, "go", nil); !got.clean {
+		t.Errorf("nil prior should be clean, got %q", got.firstFailure())
+	}
 }

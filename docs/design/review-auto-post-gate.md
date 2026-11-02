@@ -90,10 +90,16 @@ type gateResult struct {
 // already-loaded review. commentable is the diff-anchoring map
 // PostReview already computes via parseDiffCommentableLines.
 func evaluateAutoPostGuardrail(
-    rec Record, body, verdict, headSHA string,
+    verdict, body, headSHA, reviewedSHA string,
     commentable map[string]map[int]bool,
+    maxFindings int, language string,
+    prior *LoadedPriorFeedback, // nil when the spool has no prior_feedback key
 ) gateResult
 ```
+
+`RunAutoPostGate` does the file I/O: it reads the spool front-matter, loads the
+prior-feedback JSON named by `prior_feedback:` (see below), and passes the
+result in, so the guardrail itself stays pure.
 
 Checks (all deterministic, reusing existing helpers where noted):
 
@@ -106,6 +112,22 @@ Checks (all deterministic, reusing existing helpers where noted):
 | 4 | Verdict consistency | record verdict == body VERDICT: line; APPROVE/REQUEST_CHANGES on the poster's own PR are handled by PostReview's 422 → COMMENT downgrade | punch |
 | 5 | No secrets / machine paths in body | scan body for `/Users/<name>/`, key-like tokens, `.env`-ish patterns | punch |
 | 6 | Finding-count sanity | 0 findings + APPROVE is auto-postable; an unbounded finding count (> configurable cap) punches | punch |
+| 7 | Not already raised (`not_already_raised`) | no finding's `file:line` equals an open prior review thread (`is_resolved=false` and `is_outdated=false`). Outdated threads and threads with no line are ignored. A finding marked ` (re-raised: <ref>)` is allowed only against a resolved thread; a match on an open thread fails regardless. No `prior_feedback:` key (older spools) passes; a key whose file is missing or unparseable fails closed | punch |
+
+### Prior feedback
+
+Before a review runs, `pr_review.py` fetches what has already been said about
+the PR — submitted reviews, inline review threads, the PR conversation, and
+GitHub issues — and writes it to
+`~/PR-Review/prior/pr-review-<owner>-<name>-<pr>.json`, recording the absolute
+path in the spool front-matter as `prior_feedback:`. Reviewers use it to avoid
+re-raising points; the gate uses it for check 7 and passes it to the auditor.
+
+The issue scope is chosen by howmux: `RunReview` and `RereviewReview` pass
+`--issues all` for repos the configured trust mode acts on unsupervised
+(`AutoPostConfig.ActsOn`: every repo in `all`, allow-listed owners in
+`own-repos`), and `--issues related` otherwise (including dry-run), since there
+a human still reads the review before it posts.
 
 A deterministic failure is **not** a review defect per se — it means "a computer
 cannot be sure this is safe to post, so a human must look." That is the correct
@@ -121,8 +143,11 @@ port of `scan_diff`.
 
 Only runs if the deterministic guardrail is clean.
 
-- **Go side** builds the prompt (review body + the PR diff + the parsed
-  findings), calls `kiroOneshotFunc(ctx, "review-auditor", prompt)`, and parses
+- **Go side** builds the prompt (the full review body, including its
+  `## Reviewer notes` section with the "Already raised (dropped)" list, the PR
+  diff, and the prior-feedback JSON when the spool has one — between
+  `--- BEGIN PRIOR FEEDBACK ---` / `--- END PRIOR FEEDBACK ---` markers, capped
+  at 40,000 bytes with a `…[truncated]` note), calls `kiroOneshotFunc(ctx, "review-auditor", prompt)`, and parses
   the agent's final verdict line. Verdict vocabulary:
   - `POST_OK` — findings are real, correctly located, severity-appropriate, not
     nitpicks dressed as blockers → **auto-post**.
@@ -374,7 +399,8 @@ audit re-verifying them:
 - the review is against the current head SHA (not stale);
 - the review event is legal to post (self-own-PR legality handled);
 - no obvious secrets/machine paths are in the body;
-- the finding count is within sane bounds.
+- the finding count is within sane bounds;
+- no finding sits on an open (unresolved, not outdated) prior review thread.
 
 Your job is the **judgment** a deterministic check cannot make: are the findings
 *real, correctly characterized, and appropriately severe* — or is this review
@@ -389,7 +415,13 @@ something we'd want posted unsupervised?
 - the **consolidated review markdown body**, whose findings are lines of the
   form `file:line — severity — issue → suggested fix` (severity and the `→ fix`
   may be absent on some lines), usually ending in a `VERDICT:` line
+  — including its `## Reviewer notes` section, which may list points the
+  reviewers dropped as already raised, with citations
 - the **PR diff** (the same unified diff the review was generated against)
+- when available, the **prior feedback** JSON (`reviews`, `threads`,
+  `conversation`, `issues`, plus any fetch `errors`) between
+  `--- BEGIN PRIOR FEEDBACK ---` / `--- END PRIOR FEEDBACK ---` markers,
+  possibly ending in `…[truncated]`; absent for older spools
 
 You judge the review **against the diff**: the diff is ground truth, the review
 is the claim under audit.

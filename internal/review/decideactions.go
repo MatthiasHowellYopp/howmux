@@ -12,11 +12,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/matthiashowellyopp/howmux/internal/github"
 	"github.com/matthiashowellyopp/howmux/internal/kirocli"
@@ -26,8 +25,8 @@ import (
 // --- subprocess seams (Task 2) ---------------------------------------------
 
 // kiroOneshotFunc is the subprocess-execution seam every agentic step in
-// this package (humanize, revise, rereview's lens fan-out + consolidation,
-// the auto-post auditor) calls through. It is package-level so tests can
+// this package (humanize, revise, the auto-post auditor) calls through. It
+// is package-level so tests can
 // substitute a fake and assert on (agentName, prompt) without ever shelling
 // out to a real kiro-cli. Mirrors ai-resources/workflows/kiro_oneshot.py's
 // kiro_oneshot_meta() contract: same argv shape (stream-json transport),
@@ -933,79 +932,6 @@ func postOneFileComment(ctx context.Context, rec Record, c fileComment) error {
 
 // --- revise / rereview (Task 4) --------------------------------------------
 
-// crossCuttingLenses mirrors pr_review.py's CROSS_CUTTING_LENSES: the
-// lens-name -> agent-name pairs run against every rereview regardless of
-// language.
-var crossCuttingLenses = map[string]string{
-	"security":    "review-security-agent",
-	"performance": "review-performance-agent",
-	"testing":     "review-testing-agent",
-}
-
-// languageReviewers mirrors pr_review.py's _LANG_REVIEWER table.
-var languageReviewers = map[string]string{
-	"python": "python-reviewer",
-	"go":     "go-reviewer",
-	"node":   "node-reviewer",
-	"java":   "java-reviewer",
-	"astro":  "astro-reviewer",
-	"infra":  "infra-reviewer",
-	"docs":   "docs-reviewer",
-	// generic is pr_review.py's fallback for a language with no dedicated
-	// reviewer. resolveLanguageReviewer never selects it from an unknown
-	// language (that falls back to python, matching pr_review_finalize.py),
-	// but a spool explicitly recorded as language: generic resolves here.
-	"generic": "generic-reviewer",
-}
-
-// languagesWithoutCrossCutting mirrors pr_review.py's _LANG_CROSS_CUTTING for
-// the languages that run no cross-cutting lenses: a docs-only diff has no code
-// for the security/performance/testing lenses to review.
-var languagesWithoutCrossCutting = map[string]bool{"docs": true}
-
-// rereviewLenses returns the lens names (sorted, "language" first by
-// alphabetical order as in pr_review.py) and their profiles for a rereview of
-// a review recorded with the given language.
-func rereviewLenses(language, languageReviewer string) ([]string, map[string]string) {
-	profiles := map[string]string{"language": languageReviewer}
-	if !languagesWithoutCrossCutting[strings.ToLower(strings.TrimSpace(language))] {
-		for name, profile := range crossCuttingLenses {
-			profiles[name] = profile
-		}
-	}
-	names := make([]string, 0, len(profiles))
-	for name := range profiles {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names, profiles
-}
-
-// valkeyReviewers mirrors pr_review.py's _VALKEY_REVIEWER table: languages
-// with a Valkey-specific reviewer variant.
-var valkeyReviewers = map[string]string{
-	"python": "valkey-python-reviewer",
-	"go":     "valkey-go-reviewer",
-}
-
-// resolveLanguageReviewer mirrors pr_review.py's resolve_language_reviewer.
-// language and valkey come from the spool front-matter, which pr_review.py
-// writes with the lens the original review used. An unknown or missing
-// language (older spools have none) falls back to python-reviewer, matching
-// pr_review_finalize.py's --language default.
-func resolveLanguageReviewer(language string, valkey bool) string {
-	language = strings.ToLower(strings.TrimSpace(language))
-	if valkey {
-		if reviewer, ok := valkeyReviewers[language]; ok {
-			return reviewer
-		}
-	}
-	if reviewer, ok := languageReviewers[language]; ok {
-		return reviewer
-	}
-	return languageReviewers["python"]
-}
-
 // buildRevisePrompt constructs the exact prompt do_revise uses in the
 // Python reference (pr_review_finalize.py), substituting the literal
 // "(no notes provided)" placeholder when notes is blank.
@@ -1078,51 +1004,31 @@ func ReviseReview(ctx context.Context, rec Record, inlineNotes string) (newVerdi
 	return newVerdict, nil
 }
 
-// lensResult holds one lens's raw kiro-cli output (or its error, encoded
-// as an "ERROR: ..." string, mirroring pr_review.py's run_lens error
-// encoding) alongside the lens name and agent profile used, for
-// consolidation.
-type lensResult struct {
-	lensName string
-	profile  string
-	output   string
-	err      error
-}
-
 // RereviewReview implements the "rereview" decide action for a single
-// review: a full multi-lens fan-out against the original diff, followed
-// by consolidation. If the spool file's diff_file front-matter field is
-// empty or no longer exists on disk, this degrades to the exact same
-// behavior as ReviseReview (same prompt template, same rewrite, same
-// "back to pending/, decision cleared" outcome) — mirroring the Python
-// reference's documented degrade path — and reports
-// degradedToRevise=true.
+// review: a full re-run of pr_review.py against a FRESH copy of the PR diff,
+// rewriting the existing pending/ spool file in place. Running the same tool
+// the watcher uses (rather than a Go re-implementation of its lens fan-out)
+// means a rereview gets everything a first review gets — the language lens
+// recorded in the spool, the cross-cutting lenses, and the prior-feedback
+// pre-fetch that keeps reviewers from re-raising points already made in
+// issues or earlier PR reviews.
 //
-// Notes resolution mirrors ReviseReview: inlineNotes (typed into the
-// in-app multi-line composer at decide time) take precedence when
-// non-blank and are threaded through to both the lens-fan-out orientation
-// context and — on the degrade path — ReviseReview; they are never
-// persisted to the spool front-matter. When inlineNotes is blank, the
-// persisted decision_notes: front-matter field is used instead.
+// Steps: resolve the spool (not found / already in done/ are errors), read
+// its language: and valkey: front-matter, fetch the current diff to a temp
+// file (removed afterwards), resolve the PR's current head SHA, run
+// pr_review.py with --spool-file pointing at the resolved pending/ path,
+// check the path it prints is that same file, then stamp reviewed_sha /
+// generated via WriteReviewedMetadata and return the rewritten spool's
+// verdict.
 //
-// Known inherited limitation (not new to this issue): the spool
-// front-matter does not carry a "language" key, so the language lens is
-// always resolved as "python", mirroring pr_review_finalize.py's own
-// --language default. A future issue could plumb the original review's
-// detected language through the spool schema; this function does not
-// attempt to infer it from the diff.
+// Notes resolution mirrors ReviseReview: inlineNotes (typed into the in-app
+// multi-line composer) take precedence when non-blank; otherwise the
+// persisted decision_notes: front-matter value is used; when both are blank
+// --notes is omitted. Notes are never persisted by this function.
 //
-// Concurrency: the four cross-cutting lenses plus the language lens are
-// run concurrently via goroutines, the direct equivalent of the Python
-// reference's ThreadPoolExecutor(max_workers=4).map(...). Each goroutine
-// writes ONLY to its own pre-allocated, disjoint index of a results
-// slice (results[i]) — there is no shared map and no mutex, and the
-// slice is never read until after wg.Wait() returns, by construction
-// making concurrent writes impossible. The one shared handle the
-// goroutines touch is the context.CancelFunc used to short-circuit
-// siblings on first failure, which is safe for concurrent use per the
-// context package's contract. This must remain race-free under
-// `go test -race`; see TestRereviewReview_LensFanOut_NoRaceCondition.
+// degradedToRevise is always false. It is kept in the signature for the TUI
+// seam; rereview no longer falls back to a revise because it always fetches
+// a fresh diff, and a diff fetch failure is returned as an error.
 func RereviewReview(ctx context.Context, rec Record, inlineNotes string) (newVerdict string, degradedToRevise bool, err error) {
 	resolved, found, inDoneDir := resolveSpoolPath(rec.SpoolPath)
 	if !found {
@@ -1137,160 +1043,111 @@ func RereviewReview(ctx context.Context, rec Record, inlineNotes string) (newVer
 		return "", false, fmt.Errorf("failed to read spool file for %s#%d: %w", rec.Repo, rec.PR, readErr)
 	}
 	fields := ParseSpoolFrontMatter(data)
-	diffFile := fields["diff_file"]
 
-	diffExists := false
-	if diffFile != "" {
-		if _, statErr := os.Stat(diffFile); statErr == nil {
-			diffExists = true
-		}
+	owner, name, ok := strings.Cut(rec.Repo, "/")
+	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+		return "", false, fmt.Errorf("invalid repo format: %s (expected owner/name)", rec.Repo)
 	}
 
-	if !diffExists {
-		verdict, reviseErr := ReviseReview(ctx, rec, inlineNotes)
-		return verdict, true, reviseErr
+	diffFile, err := os.CreateTemp("", fmt.Sprintf("rereview-%d-*.diff", rec.PR))
+	if err != nil {
+		return "", false, fmt.Errorf("rereview: create temp diff file: %w", err)
 	}
+	diffPath := diffFile.Name()
+	diffFile.Close()
+	defer os.Remove(diffPath)
+
+	if err := fetchDiffFunc(ctx, owner, name, rec.PR, diffPath); err != nil {
+		return "", false, fmt.Errorf("rereview: fetch diff for %s#%d: %w", rec.Repo, rec.PR, err)
+	}
+
+	headSHA, err := prHeadSHAFunc(rec.Repo, rec.PR)
+	if err != nil {
+		return "", false, fmt.Errorf("rereview: resolve head SHA for %s#%d: %w", rec.Repo, rec.PR, err)
+	}
+	if headSHA == "" {
+		return "", false, fmt.Errorf("rereview: empty head SHA for %s#%d", rec.Repo, rec.PR)
+	}
+
+	language := strings.TrimSpace(fields["language"])
+	if language == "" {
+		language = "auto"
+	}
+	argv := []string{
+		"pr_review.py",
+		"--diff-file", diffPath,
+		"--repo", rec.Repo,
+		"--pr", strconv.Itoa(rec.PR),
+		"--language", language,
+	}
+	if strings.EqualFold(strings.TrimSpace(fields["valkey"]), "true") {
+		argv = append(argv, "--valkey")
+	}
+	argv = append(argv, "--issues", issueScopeFor(rec.Repo), "--spool-file", resolved)
 
 	notes := inlineNotes
 	if strings.TrimSpace(notes) == "" {
 		notes = CurrentDecisionNotes(resolved, "")
 	}
-	if strings.TrimSpace(notes) == "" {
-		notes = "(none)"
-	}
-	context_ := fmt.Sprintf("Re-review requested. Human revision notes to weigh: %s", notes)
-
-	// Re-run the same language lens the original review used.
-	valkey := strings.EqualFold(strings.TrimSpace(fields["valkey"]), "true")
-	language := resolveLanguageReviewer(fields["language"], valkey)
-	lensNames, lensProfiles := rereviewLenses(fields["language"], language)
-
-	// Disjoint pre-allocated slice: goroutine i writes ONLY results[i].
-	// No shared map, no mutex, no read of results until after wg.Wait().
-	//
-	// fanCtx is a cancellable child of ctx: the first lens to fail cancels
-	// it, so the sibling kiro-cli subprocesses (spawned via
-	// exec.CommandContext inside kiroOneshotFunc) are signalled to stop
-	// rather than each running its full agent invocation to completion only
-	// to have the aggregate error check below discard them all. cancel() is
-	// also invoked on the success path via defer, releasing the context's
-	// resources.
-	fanCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	results := make([]lensResult, len(lensNames))
-	var wg sync.WaitGroup
-	for i, lensName := range lensNames {
-		i, lensName := i, lensName
-		profile := lensProfiles[lensName]
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			prompt := buildLensPrompt(lensName, diffFile, context_)
-			res, callErr := kiroOneshotFunc(fanCtx, profile, "", prompt)
-			results[i] = lensResult{lensName: lensName, profile: profile, output: res.Text, err: callErr}
-			if callErr != nil {
-				// Signal siblings to stop; the aggregate check below still
-				// reports the first error in lens order.
-				cancel()
-			}
-		}()
-	}
-	wg.Wait()
-
-	for _, r := range results {
-		if r.err != nil {
-			return "", false, fmt.Errorf("rereview lens %q (%s) failed for %s#%d: %w", r.lensName, r.profile, rec.Repo, rec.PR, r.err)
-		}
+	if strings.TrimSpace(notes) != "" {
+		argv = append(argv, "--notes", notes)
 	}
 
-	consolidatePrompt := buildConsolidatePrompt(diffFile, results)
-	res, err := kiroOneshotFunc(ctx, "review-consolidator", "", consolidatePrompt)
+	logging.Debug("rereview: invoking pr_review.py", "repo", rec.Repo, "pr", rec.PR, "argv", strings.Join(argv, " "))
+
+	// Keep stderr for the error message; pr_review.py's progress output has
+	// no live destination on the decide path.
+	var stderrBuf strings.Builder
+	stdoutLines, err := runReviewToolFunc(ctx, argv, &stderrBuf)
 	if err != nil {
-		return "", false, fmt.Errorf("rereview consolidation failed for %s#%d: %w", rec.Repo, rec.PR, err)
+		if tail := lastLines(stderrBuf.String(), 5); tail != "" {
+			return "", false, fmt.Errorf("rereview: pr_review.py failed for %s#%d: %w: %s", rec.Repo, rec.PR, err, tail)
+		}
+		return "", false, fmt.Errorf("rereview: pr_review.py failed for %s#%d: %w", rec.Repo, rec.PR, err)
+	}
+	if len(stdoutLines) == 0 {
+		return "", false, fmt.Errorf("rereview: pr_review.py produced no output for %s#%d (expected spool path)", rec.Repo, rec.PR)
+	}
+	got := stdoutLines[len(stdoutLines)-1]
+	if filepath.Clean(got) != filepath.Clean(resolved) {
+		return "", false, fmt.Errorf("rereview: pr_review.py wrote %q, expected the existing spool file %q", got, resolved)
 	}
 
-	newBody := extractReviewBody(res.Text)
-	newVerdict = parseVerdict(newBody)
-
-	if err := RewriteSpoolEntry(resolved, newBody, newVerdict, true); err != nil {
-		return "", false, fmt.Errorf("rereview: kiro-cli succeeded but rewrite failed for %s#%d: %w", rec.Repo, rec.PR, err)
+	if err := WriteReviewedMetadata(resolved, headSHA, timeNow()); err != nil {
+		return "", false, fmt.Errorf("rereview: stamp reviewed metadata into %s: %w", resolved, err)
 	}
 
-	return newVerdict, false, nil
-}
-
-// buildLensPrompt constructs the per-lens review prompt, mirroring
-// pr_review.py's run_lens prompt shape (diff path + lens name +
-// orientation/context).
-func buildLensPrompt(lensName string, diffFile string, context string) string {
-	return fmt.Sprintf(`Review the unified diff at %s through the %q lens.
-
-Orientation from the context pass:
-%s
-
-Rules:
-- Review ONLY the changed lines shown in the diff.
-- Every finding must cite file and line, and describe a REAL problem
-  (not a style preference). Verify each line number against the diff.
-- If you find nothing substantive for your lens, say so explicitly.
-- This is READ-ONLY: return your findings inline. Do NOT write any files.
-
-Return findings as a markdown list. For each: `+"`file:line - severity - issue -> suggested fix`"+`.`, diffFile, lensName, context)
-}
-
-// buildConsolidatePrompt constructs the consolidation prompt from the
-// collected lens results, mirroring pr_review.py's run_consolidate prompt
-// shape (a digest of every lens's raw output, sorted by lens name for
-// determinism).
-func buildConsolidatePrompt(diffFile string, results []lensResult) string {
-	sorted := make([]lensResult, len(results))
-	copy(sorted, results)
-	for i := 0; i < len(sorted); i++ {
-		for j := i + 1; j < len(sorted); j++ {
-			if sorted[j].lensName < sorted[i].lensName {
-				sorted[i], sorted[j] = sorted[j], sorted[i]
-			}
+	body, info := ReadSpoolBody(resolved, "")
+	if !info.Found {
+		return "", false, fmt.Errorf("rereview: cannot read rewritten spool file %s", resolved)
+	}
+	verdict := strings.ToUpper(strings.TrimSpace(info.Verdict))
+	if verdict == "" {
+		verdict = parseVerdict(body)
+	}
+	// A rereview lands back in pending/ with the decision cleared. pr_review.py
+	// writes fresh front-matter, but if it ever carries decision: rereview over,
+	// the review would look already-decided; clear it here so the contract
+	// holds regardless.
+	if strings.TrimSpace(info.Decision) != "" {
+		if err := RewriteSpoolEntry(resolved, body, verdict, true); err != nil {
+			return "", false, fmt.Errorf("rereview: clear decision in %s: %w", resolved, err)
 		}
 	}
+	return verdict, false, nil
+}
 
-	var digest strings.Builder
-	for i, r := range sorted {
-		if i > 0 {
-			digest.WriteString("\n\n")
+// lastLines returns the last n non-empty lines of text joined with " | ",
+// for compact error messages.
+func lastLines(text string, n int) string {
+	var lines []string
+	for _, l := range strings.Split(text, "\n") {
+		if t := strings.TrimSpace(l); t != "" {
+			lines = append(lines, t)
 		}
-		digest.WriteString(fmt.Sprintf("### Lens: %s (profile: %s)\n%s", r.lensName, r.profile, r.output))
 	}
-
-	return fmt.Sprintf(`You are consolidating a multi-lens code review of the diff at %s.
-
-Below are the raw findings from each review lens. Your job:
-1. Merge duplicate findings across lenses (same file:line, same issue).
-2. Drop nitpicks: keep a finding only if it has functional, security, or
-   correctness impact (Medium+ severity, or any security finding).
-3. For each surviving finding, confirm it against the diff - discard any that
-   don't match the actual changed lines.
-4. Produce a single ordered list (most severe first).
-
-Then give an overall verdict: APPROVE, COMMENT, or REQUEST_CHANGES.
-
-Raw lens findings:
-%s
-
-Produce a markdown review document as the deliverable, in this shape:
-
-# Consolidated Review
-## Summary
-<1-3 sentences: what the change does and the overall assessment. This is the
-only prose posted to the PR, so no verdict rationale and nothing about what
-you cleared, dropped or chose not to flag.>
-## Findings
-<surviving findings most-severe first, one per line as
-`+"`file:line - severity - issue -> fix`"+`; omit the section if none>
-## Reviewer notes
-<optional, never posted: verdict rationale, verified non-issues, dropped
-findings and why. Do not write finding-shaped lines here.>
-
-End with a final line exactly:
-`+"`VERDICT: <APPROVE|COMMENT|REQUEST_CHANGES>`", diffFile, digest.String())
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, " | ")
 }
