@@ -603,6 +603,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case decidePostCompleteMsg:
+		m.clearDecideInFlight(msg.rec)
 		// PostReview succeeded: the review was posted and archived to
 		// done/. See dispatchDecideAction/launchDecidePostCmd
 		// (decideactions.go) for the launch side.
@@ -611,6 +612,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case decidePostErrorMsg:
+		m.clearDecideInFlight(msg.rec)
 		// PostReview failed (gh error, payload build error, etc.). The
 		// crash-recovery contract already applies: decision: post was
 		// written to front-matter BEFORE the failing step, so the file is
@@ -622,6 +624,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case decideReviseCompleteMsg:
+		m.clearDecideInFlight(msg.rec)
 		// ReviseReview succeeded: the file is back in pending/ with a
 		// fresh body/verdict and decision cleared.
 		m = m.appendActivity(m.styles.Success.Render(fmt.Sprintf(
@@ -629,6 +632,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case decideReviseErrorMsg:
+		m.clearDecideInFlight(msg.rec)
 		// ReviseReview failed. No decision was ever written for revise
 		// (unlike post/discard), so the file is exactly as it was
 		// pre-decide — retrying `decide revise` is safe.
@@ -637,6 +641,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case decideRereviewCompleteMsg:
+		m.clearDecideInFlight(msg.rec)
 		// RereviewReview succeeded — either via the full lens fan-out, or
 		// degraded to the revise path if diff_file was missing/gone.
 		verb := "Rereviewed"
@@ -648,6 +653,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case decideRereviewErrorMsg:
+		m.clearDecideInFlight(msg.rec)
 		// RereviewReview failed (a lens call errored, or consolidation
 		// failed). Same "decision NOT recorded" contract as revise.
 		m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf(
@@ -655,12 +661,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case decideDiscardCompleteMsg:
+		m.clearDecideInFlight(msg.rec)
 		// DiscardReview succeeded: the file was archived to done/.
 		m = m.appendActivity(m.styles.Success.Render(fmt.Sprintf(
 			"Discarded review for %s#%d — archived to done/.", msg.rec.Repo, msg.rec.PR)))
 		return m, nil
 
 	case decideDiscardErrorMsg:
+		m.clearDecideInFlight(msg.rec)
 		m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf(
 			"Failed to discard review for %s#%d: %v", msg.rec.Repo, msg.rec.PR, msg.err)))
 		return m, nil
@@ -1123,6 +1131,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.decidePostConfirmState = decidePostConfirmIdle
 				rec := m.decidePostPending
 				verdict := m.decidePostVerdict
+				// Re-check here: other keys pass through while this gate
+				// waits, so a rereview may have launched since it opened.
+				if m, refused := m.refuseIfDecideInFlight(rec); refused {
+					return m, nil
+				}
+				m.markDecideInFlight(rec, "post")
 				m = m.appendActivity(m.styles.Activity.Render(
 					fmt.Sprintf("Posting review for %s#%d...", rec.Repo, rec.PR)))
 				return m, launchDecidePostCmd(rec, verdict)
@@ -1270,6 +1284,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.reviseComposeActive = false
 				if m.footerManager != nil {
 					m.footerManager.SetTransientMessage("")
+				}
+				// Re-check here: an action (e.g. a post confirmed while
+				// this composer was open) may have launched since it opened.
+				if m, refused := m.refuseIfDecideInFlight(target); refused {
+					return m, nil
 				}
 				if action == "rereview" {
 					return m.launchDecideRereview(target, notes)

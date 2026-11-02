@@ -346,6 +346,12 @@ var bodyEditCommandFunc = exec.Command
 // case arm in tui.go), so a crashed or misbehaving editor can never
 // corrupt the real spool file, only the disposable temp file.
 func (m model) handleBodyEditLaunch(rec review.Record) (model, tea.Cmd) {
+	// A revise/rereview rewrites the body when it finishes; saving an edit
+	// of the pre-run body afterwards would silently replace the new review.
+	if m, refused := m.refuseIfDecideInFlight(rec); refused {
+		return m, nil
+	}
+
 	editor := strings.TrimSpace(os.Getenv("EDITOR"))
 	if editor == "" {
 		m = m.appendActivity(m.styles.Error.Render("$EDITOR is not set — cannot edit review body"))

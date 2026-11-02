@@ -71,6 +71,53 @@ type ReviewsTab struct {
 	pendingCountAt time.Time
 	pendingCounted bool
 	nowFunc        func() time.Time
+
+	// inFlight maps a row key ("<repo>#<pr>") to the decide action
+	// ("post"/"revise"/"rereview"/"discard") currently running against it.
+	// The spool file's own state does not change until the action finishes
+	// (a rereview can take minutes), so without this the DECISION STATE
+	// column keeps saying "pending" and gives no sign that work is under
+	// way. It is also the guard that stops a second decision being launched
+	// on the same review mid-run. Only touched from the bubbletea Update/View
+	// goroutine, so it needs no locking.
+	inFlight map[string]string
+}
+
+// MarkInFlight records that a decide action is running for rec, so the
+// DECISION STATE column shows it and further decisions on rec are refused.
+func (rt *ReviewsTab) MarkInFlight(rec review.Record, action string) {
+	if rt.inFlight == nil {
+		rt.inFlight = make(map[string]string)
+	}
+	rt.inFlight[recordKey(rec)] = action
+}
+
+// ClearInFlight drops rec's in-flight marker once its action has finished
+// (successfully or not).
+func (rt *ReviewsTab) ClearInFlight(rec review.Record) {
+	delete(rt.inFlight, recordKey(rec))
+}
+
+// InFlightAction reports the decide action currently running for rec, if any.
+func (rt *ReviewsTab) InFlightAction(rec review.Record) (string, bool) {
+	action, ok := rt.inFlight[recordKey(rec)]
+	return action, ok
+}
+
+// inFlightLabel is the DECISION STATE text shown while action runs.
+func inFlightLabel(action string) string {
+	switch action {
+	case "post":
+		return "posting..."
+	case "revise":
+		return "revising..."
+	case "rereview":
+		return "rereviewing..."
+	case "discard":
+		return "discarding..."
+	default:
+		return action + "..."
+	}
 }
 
 // recordKey is the stable identity of a row: "<repo>#<pr>".
@@ -379,6 +426,9 @@ func (rt *ReviewsTab) resolveSpoolInfo(sorted []review.Record) []review.SpoolInf
 	infos := make([]review.SpoolInfo, len(sorted))
 	for i, rec := range sorted {
 		infos[i] = spoolInfoForFunc(rec.SpoolPath, homeDir)
+		if action, ok := rt.InFlightAction(rec); ok {
+			infos[i].DecisionState = inFlightLabel(action)
+		}
 	}
 	return infos
 }
