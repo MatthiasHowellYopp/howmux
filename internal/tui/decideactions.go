@@ -120,12 +120,8 @@ func (m model) dispatchDecideAction(rec review.Record, decision string) (model, 
 	// Without this, e.g. pressing d during a multi-minute rereview archives
 	// the spool file out from under it, and the rereview then fails at its
 	// final rewrite step after doing all the work.
-	if rt := m.findReviewsTab(); rt != nil {
-		if running, ok := rt.InFlightAction(rec); ok {
-			m = m.appendActivity(m.styles.Warning.Render(fmt.Sprintf(
-				"%s already running for %s#%d — wait for it to finish before deciding again", running, rec.Repo, rec.PR)))
-			return m, nil
-		}
+	if m, refused := m.refuseIfDecideInFlight(rec); refused {
+		return m, nil
 	}
 	switch decision {
 	case "post":
@@ -325,6 +321,26 @@ func (m model) launchDecideDiscard(rec review.Record) (model, tea.Cmd) {
 }
 
 // --- in-flight tracking ------------------------------------------------------
+
+// refuseIfDecideInFlight reports whether rec already has a decide action
+// running and, if so, appends the "already running" warning. Every path that
+// writes to a spool file must call it right before launching, not only when a
+// gate or composer opens: the post confirm gate lets other keys through while
+// it waits, so p then R can open the composer under it, and both could
+// otherwise launch against the same spool.
+func (m model) refuseIfDecideInFlight(rec review.Record) (model, bool) {
+	rt := m.findReviewsTab()
+	if rt == nil {
+		return m, false
+	}
+	running, ok := rt.InFlightAction(rec)
+	if !ok {
+		return m, false
+	}
+	m = m.appendActivity(m.styles.Warning.Render(fmt.Sprintf(
+		"%s already running for %s#%d — wait for it to finish before deciding again", running, rec.Repo, rec.PR)))
+	return m, true
+}
 
 // markDecideInFlight flags rec as having a running decide action on the
 // Reviews tab (shown in its DECISION STATE column, and used by

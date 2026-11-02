@@ -1131,6 +1131,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.decidePostConfirmState = decidePostConfirmIdle
 				rec := m.decidePostPending
 				verdict := m.decidePostVerdict
+				// Re-check here: other keys pass through while this gate
+				// waits, so a rereview may have launched since it opened.
+				if m, refused := m.refuseIfDecideInFlight(rec); refused {
+					return m, nil
+				}
 				m.markDecideInFlight(rec, "post")
 				m = m.appendActivity(m.styles.Activity.Render(
 					fmt.Sprintf("Posting review for %s#%d...", rec.Repo, rec.PR)))
@@ -1279,6 +1284,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.reviseComposeActive = false
 				if m.footerManager != nil {
 					m.footerManager.SetTransientMessage("")
+				}
+				// Re-check here: an action (e.g. a post confirmed while
+				// this composer was open) may have launched since it opened.
+				if m, refused := m.refuseIfDecideInFlight(target); refused {
+					return m, nil
 				}
 				if action == "rereview" {
 					return m.launchDecideRereview(target, notes)
