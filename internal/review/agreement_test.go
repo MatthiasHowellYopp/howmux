@@ -266,7 +266,7 @@ func TestAgreement_EndToEnd(t *testing.T) {
 	rec.SpoolPath = spool
 
 	cfg := AutoPostConfig{Mode: ModeDryRun, MaxFindings: 25}
-	if _, err := EvaluateAndMaybePost(context.Background(), rec, body, verdict, head, reviewed, diff, cfg); err != nil {
+	if _, err := EvaluateAndMaybePost(context.Background(), rec, body, verdict, head, reviewed, diff, cfg, nil); err != nil {
 		t.Fatal(err)
 	}
 	BeginHumanDecision(rec, "post").Finish(nil)
@@ -293,7 +293,7 @@ func TestAgreement_GenericReviewPunchReason(t *testing.T) {
 
 	rec, body, verdict, head, reviewed, diff := gateFixture()
 	cfg := AutoPostConfig{Mode: ModeDryRun, MaxFindings: 25, Language: "generic"}
-	if _, err := EvaluateAndMaybePost(context.Background(), rec, body, verdict, head, reviewed, diff, cfg); err != nil {
+	if _, err := EvaluateAndMaybePost(context.Background(), rec, body, verdict, head, reviewed, diff, cfg, nil); err != nil {
 		t.Fatal(err)
 	}
 

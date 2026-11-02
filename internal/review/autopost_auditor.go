@@ -18,10 +18,12 @@
 package review
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // auditorVerdict is the adversarial auditor's decision over a review.
@@ -87,13 +89,39 @@ func parseAuditorVerdict(answer string) (auditorVerdict, bool) {
 	return auditorVerdict(strings.ToUpper(strings.TrimSpace(last[1]))), true
 }
 
+// maxPriorFeedbackPromptBytes caps the prior-feedback JSON embedded in the
+// auditor prompt, so a PR with a long history can't crowd out the review and
+// the diff.
+const maxPriorFeedbackPromptBytes = 40000
+
+// priorFeedbackTruncatedNote is appended when the prior-feedback JSON is cut
+// at maxPriorFeedbackPromptBytes.
+const priorFeedbackTruncatedNote = "\n…[truncated]"
+
 // buildAuditorPrompt composes the prompt sent to the review-auditor agent. It
 // supplies the inputs the agent contract specifies: repo, pr, the review's own
-// verdict, the consolidated review body, and the PR diff (ground truth). The
-// decision rubric and output contract live in the agent persona (ai-resources),
-// so this prompt only supplies data and restates the output contract tersely as
-// a guard against a drifting persona.
-func buildAuditorPrompt(repo string, pr int, verdict, body, diff string) string {
+// verdict, the consolidated review body (including its Reviewer notes, so the
+// auditor can check the "Already raised (dropped)" citations), the PR diff
+// (ground truth), and — when the spool has one — the prior-feedback JSON
+// (earlier reviews, threads, conversation, issues), capped at
+// maxPriorFeedbackPromptBytes. The decision rubric and output contract live in
+// the agent persona (ai-resources), so this prompt only supplies data and
+// restates the output contract tersely as a guard against a drifting persona.
+func buildAuditorPrompt(repo string, pr int, verdict, body, diff string, priorJSON []byte) string {
+	priorBlock := ""
+	if len(bytes.TrimSpace(priorJSON)) > 0 {
+		pj := priorJSON
+		note := ""
+		if len(pj) > maxPriorFeedbackPromptBytes {
+			pj = truncateUTF8(pj, maxPriorFeedbackPromptBytes)
+			note = priorFeedbackTruncatedNote
+		}
+		priorBlock = fmt.Sprintf(`
+
+--- BEGIN PRIOR FEEDBACK ---
+%s%s
+--- END PRIOR FEEDBACK ---`, pj, note)
+	}
 	return fmt.Sprintf(`You are auditing an already-generated PR review that may be posted
 automatically, without a human. Judge whether it is safe to post unsupervised.
 
@@ -107,10 +135,22 @@ review verdict: %s
 
 --- BEGIN PR DIFF (ground truth) ---
 %s
---- END PR DIFF ---
+--- END PR DIFF ---%s
 
 Decide per your review-auditor rubric. End with a single final line exactly:
-VERDICT: <POST_OK|NEEDS_HUMAN|DISCARD>`, repo, pr, verdict, body, diff)
+VERDICT: <POST_OK|NEEDS_HUMAN|DISCARD>`, repo, pr, verdict, body, diff, priorBlock)
+}
+
+// truncateUTF8 cuts b to at most n bytes without splitting a UTF-8 rune.
+func truncateUTF8(b []byte, n int) []byte {
+	if len(b) <= n {
+		return b
+	}
+	cut := n
+	for cut > 0 && !utf8.RuneStart(b[cut]) {
+		cut--
+	}
+	return b[:cut]
 }
 
 // auditorResult carries the parsed verdict plus the OneshotResult metadata of
@@ -127,13 +167,14 @@ type auditorResult struct {
 // callReviewAuditor runs the adversarial auditor over a review and returns its
 // verdict (fail-closed to NEEDS_HUMAN) plus the call metadata. It does NOT
 // decide what to do with the verdict — that is the gate's job
-// (autopost_gate.go). It performs no spool or GitHub I/O.
+// (autopost_gate.go). It performs no spool or GitHub I/O. priorJSON is the
+// prior-feedback file's raw bytes (nil/empty when the spool has none).
 //
 // Fail-closed cases, all → NEEDS_HUMAN:
 //   - kiro-cli not on PATH (agent not runnable)
 //   - kiroOneshotMeta error (non-zero exit / empty output)
 //   - the answer has no well-formed VERDICT: line
-func callReviewAuditor(ctx context.Context, repo string, pr int, verdict, body, diff, model string) auditorResult {
+func callReviewAuditor(ctx context.Context, repo string, pr int, verdict, body, diff, model string, priorJSON []byte) auditorResult {
 	// Preflight: the agent runs via kiro-cli. If kiro-cli isn't resolvable,
 	// the auditor cannot run — fail closed without attempting the call.
 	if _, err := lookPathForDecideActionsFunc("kiro-cli"); err != nil {
@@ -144,7 +185,7 @@ func callReviewAuditor(ctx context.Context, repo string, pr int, verdict, body, 
 		}
 	}
 
-	prompt := buildAuditorPrompt(repo, pr, verdict, body, diff)
+	prompt := buildAuditorPrompt(repo, pr, verdict, body, diff, priorJSON)
 	meta, err := kiroOneshotMeta(ctx, reviewAuditorAgent, model, prompt)
 	if err != nil {
 		return auditorResult{

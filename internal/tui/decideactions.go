@@ -29,8 +29,8 @@ import (
 // process forever — restoring the cancellability the deleted finalize.go
 // had via finalizeCancel. Package-level vars (not consts) so tests can
 // shrink them if they ever exercise the timeout path. The rereview budget
-// is the largest because RereviewReview fans out up to five kiro-cli
-// agent invocations plus a consolidation pass under one context.
+// is the largest because RereviewReview runs a full pr_review.py pass
+// (prior-feedback fetch, every lens, and consolidation) under one context.
 var (
 	decidePostTimeout     = 2 * time.Minute
 	decideReviseTimeout   = 5 * time.Minute
@@ -86,9 +86,9 @@ type decideReviseErrorMsg struct {
 }
 
 type decideRereviewCompleteMsg struct {
-	rec              review.Record
-	newVerdict       string
-	degradedToRevise bool
+	rec        review.Record
+	newVerdict string
+	warning    string // non-empty when some lenses failed (see review.RereviewReview)
 }
 
 type decideRereviewErrorMsg struct {
@@ -282,8 +282,8 @@ func (m model) launchDecideRevise(rec review.Record, inlineNotes string) (model,
 }
 
 // launchDecideRereview builds the tea.Cmd for the "rereview" action: an
-// immediate multi-lens fan-out (or a degrade to revise behavior, if the
-// diff file is unavailable) via review.RereviewReview. inlineNotes are the
+// immediate full pr_review.py re-run against a fresh diff via
+// review.RereviewReview. inlineNotes are the
 // multi-line instructions the user typed into the in-app composer (empty if
 // none), threaded to the seam identically to launchDecideRevise.
 func (m model) launchDecideRereview(rec review.Record, inlineNotes string) (model, tea.Cmd) {
@@ -293,12 +293,12 @@ func (m model) launchDecideRereview(rec review.Record, inlineNotes string) (mode
 		ctx, cancel := context.WithTimeout(context.Background(), decideRereviewTimeout)
 		defer cancel()
 		finish := recordHumanDecisionFunc(rec, "rereview")
-		newVerdict, degraded, err := rereviewReviewFunc(ctx, rec, inlineNotes)
+		newVerdict, warning, err := rereviewReviewFunc(ctx, rec, inlineNotes)
 		finish(err)
 		if err != nil {
 			return decideRereviewErrorMsg{rec: rec, err: err}
 		}
-		return decideRereviewCompleteMsg{rec: rec, newVerdict: newVerdict, degradedToRevise: degraded}
+		return decideRereviewCompleteMsg{rec: rec, newVerdict: newVerdict, warning: warning}
 	}
 }
 

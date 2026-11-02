@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"github.com/matthiashowellyopp/howmux/internal/logging"
 )
@@ -48,6 +49,43 @@ type AutoPostConfig struct {
 	OwnRepoOwners []string     // owners allowed to auto-post in own-repos mode (owner part of owner/repo)
 	AuditorModel  string       // kiro-cli --model for the review-auditor; "" = kiro-cli's default
 	Language      string       // the review's language lens (spool "language:"); "generic" is forced to a human
+}
+
+// ActsOn reports whether the trust mode lets the gate take a real action
+// (post/discard) on repo without a human: always in ModeAll, only for
+// allow-listed owners in ModeOwnRepos, never in dry-run (or an empty Mode).
+func (c AutoPostConfig) ActsOn(repo string) bool {
+	switch c.Mode {
+	case ModeAll:
+		return true
+	case ModeOwnRepos:
+		return ownerAllowed(repo, c.OwnRepoOwners)
+	default:
+		return false
+	}
+}
+
+// reviewScopeConfig is the auto-post config RunReview consults to choose the
+// prior-feedback issue scope it asks pr_review.py for. It is package-level
+// (rather than a RunReview parameter) because RunReview's signature is shared
+// by several seams; nil (never set) means "related" scope.
+var reviewScopeConfig atomic.Pointer[AutoPostConfig]
+
+// SetReviewScopeConfig records the auto-post config RunReview uses to choose
+// the issue scope for prior-feedback fetching: repos the gate ActsOn get
+// `--issues all` (no human will catch a re-raised point), every other repo
+// gets `--issues related`. Safe for concurrent use.
+func SetReviewScopeConfig(cfg AutoPostConfig) {
+	reviewScopeConfig.Store(&cfg)
+}
+
+// issueScopeFor returns the pr_review.py --issues value for repo, based on
+// the config set via SetReviewScopeConfig.
+func issueScopeFor(repo string) string {
+	if cfg := reviewScopeConfig.Load(); cfg != nil && cfg.ActsOn(repo) {
+		return "all"
+	}
+	return "related"
 }
 
 // autoPostOutcome is the gate's final decision for one review.
@@ -89,11 +127,13 @@ var discardReviewFunc = DiscardReview
 //   - reviewedSHA: the spool's recorded reviewed_sha
 //   - diff:        the PR diff text (for anchoring + the auditor's ground truth)
 //   - cfg:         the trust config
+//   - prior:       the spool's prior feedback (nil when the spool has no
+//     prior_feedback key); feeds the not_already_raised check and the auditor
 //
 // It never returns an error for a "punch" — punching is a normal outcome, not a
 // failure. It returns an error only if a real post/discard action it attempted
 // failed.
-func EvaluateAndMaybePost(ctx context.Context, rec Record, body, verdict, headSHA, reviewedSHA, diff string, cfg AutoPostConfig) (GateResult, error) {
+func EvaluateAndMaybePost(ctx context.Context, rec Record, body, verdict, headSHA, reviewedSHA, diff string, cfg AutoPostConfig, prior *LoadedPriorFeedback) (GateResult, error) {
 	audit := NewAuditLog(newRunID(), rec.Repo, rec.PR)
 
 	// Step 0: record the inputs, so the agreement report can tie this run to
@@ -107,7 +147,7 @@ func EvaluateAndMaybePost(ctx context.Context, rec Record, body, verdict, headSH
 
 	// Step 1: deterministic guardrail.
 	commentable := parseDiffCommentableLines(diff)
-	g := evaluateAutoPostGuardrail(verdict, body, headSHA, reviewedSHA, commentable, cfg.MaxFindings, cfg.Language)
+	g := evaluateAutoPostGuardrail(verdict, body, headSHA, reviewedSHA, commentable, cfg.MaxFindings, cfg.Language, prior)
 	if !g.clean {
 		reason := "guardrail failed: " + g.firstFailure()
 		recordAudit(audit, auditStep{step: "guardrail", status: "fail", detail: reason})
@@ -117,7 +157,14 @@ func EvaluateAndMaybePost(ctx context.Context, rec Record, body, verdict, headSH
 	recordAudit(audit, auditStep{step: "guardrail", status: "pass", detail: "all deterministic checks clean"})
 
 	// Step 2: adversarial auditor.
-	ar := callReviewAuditor(ctx, rec.Repo, rec.PR, verdict, body, diff, cfg.AuditorModel)
+	// body is the FULL spool body, Reviewer notes included: the auditor needs
+	// the "Already raised (dropped)" list to check the reviewers' citations.
+	// PostReview strips the notes when posting (planReview), not here.
+	var priorJSON []byte
+	if prior != nil {
+		priorJSON = prior.Raw
+	}
+	ar := callReviewAuditor(ctx, rec.Repo, rec.PR, verdict, body, diff, cfg.AuditorModel, priorJSON)
 	auditorStatus := "pass"
 	if ar.meta.Status == "error" {
 		auditorStatus = "error"
@@ -151,8 +198,13 @@ func EvaluateAndMaybePost(ctx context.Context, rec Record, body, verdict, headSH
 		recordAudit(audit, auditStep{step: "outcome", status: "pass", detail: string(outcomePunted) + " (auditor NEEDS_HUMAN)"})
 		return GateResult{Outcome: outcomePunted, WouldHaveDone: outcomePunted, Reason: "auditor: " + ar.reason}, nil
 	}
-	if cfg.Mode == ModeOwnRepos && !ownerAllowed(rec.Repo, cfg.OwnRepoOwners) {
+	if !cfg.ActsOn(rec.Repo) {
+		// Dry-run was handled above, so this is own-repos with a repo outside
+		// the allow-list — or an unrecognized mode, which fails closed.
 		reason := "own-repos mode: " + repoOwner(rec.Repo) + " not in allow-list; punching"
+		if cfg.Mode != ModeOwnRepos {
+			reason = fmt.Sprintf("unrecognized auto-post mode %q; punching", cfg.Mode)
+		}
 		recordAudit(audit, auditStep{step: "outcome", status: "pass", detail: reason})
 		return GateResult{Outcome: outcomePunted, WouldHaveDone: would, Reason: reason}, nil
 	}
@@ -245,9 +297,18 @@ func RunAutoPostGate(ctx context.Context, rec Record, headSHA string, store Stor
 
 	// reviewed_sha from the spool front-matter (RunReview stamps it). Fall back
 	// to the record's LastReviewedSHA if the front-matter lacks it.
+	//
+	// prior_feedback (pr_review.py's prior-feedback snapshot) is loaded here so
+	// the guardrail stays pure. If the spool can't be re-read, the key's
+	// presence is unknown: treat that as an unreadable prior-feedback file
+	// (fail closed) rather than as an older spool without one.
 	reviewedSHA := updated.LastReviewedSHA
-	if data, readErr := os.ReadFile(updated.SpoolPath); readErr == nil {
+	var prior *LoadedPriorFeedback
+	if data, readErr := os.ReadFile(updated.SpoolPath); readErr != nil {
+		prior = &LoadedPriorFeedback{Err: fmt.Errorf("re-read spool front-matter: %w", readErr)}
+	} else {
 		fm := ParseSpoolFrontMatter(data)
+		prior = loadPriorFeedback(fm)
 		if fm["reviewed_sha"] != "" {
 			reviewedSHA = fm["reviewed_sha"]
 		}
@@ -278,5 +339,5 @@ func RunAutoPostGate(ctx context.Context, rec Record, headSHA string, store Stor
 		return GateResult{}, fmt.Errorf("auto-post gate: read diff: %w", err)
 	}
 
-	return EvaluateAndMaybePost(ctx, updated, body, info.Verdict, headSHA, reviewedSHA, string(diffData), cfg)
+	return EvaluateAndMaybePost(ctx, updated, body, info.Verdict, headSHA, reviewedSHA, string(diffData), cfg, prior)
 }

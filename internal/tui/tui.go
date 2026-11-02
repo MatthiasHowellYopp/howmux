@@ -357,12 +357,17 @@ func newModel(w *watcher.Watcher, m *agent.Manager, cfg *config.Config, logFile 
 	// (config owns YAML decoding; review owns the gate logic and has no
 	// dependency on config), so map across the boundary here. Unset/zero
 	// config leaves the gate in its safe default (dry-run).
-	reviewWatcher.SetAutoPostConfig(review.AutoPostConfig{
+	autoPostCfg := review.AutoPostConfig{
 		Mode:          review.AutoPostMode(cfg.Review.AutoPost.Mode),
 		MaxFindings:   cfg.Review.AutoPost.MaxFindings,
 		OwnRepoOwners: cfg.Review.AutoPost.OwnRepoOwners,
 		AuditorModel:  cfg.Review.AutoPost.AuditorModel,
-	})
+	}
+	reviewWatcher.SetAutoPostConfig(autoPostCfg)
+	// The same config picks the prior-feedback issue scope for every review
+	// (watcher-driven, manual, and rereview): repos the gate can act on
+	// unsupervised get every open issue, others only related ones.
+	review.SetReviewScopeConfig(autoPostCfg)
 	reviewWatcher.SetDiscoverRequested(cfg.Review.DiscoverRequested)
 	footerManager.SetReviewWatcher(reviewWatcher) // NEW — wires footer to the review watcher built above
 
@@ -642,20 +647,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case decideRereviewCompleteMsg:
 		m.clearDecideInFlight(msg.rec)
-		// RereviewReview succeeded — either via the full lens fan-out, or
-		// degraded to the revise path if diff_file was missing/gone.
-		verb := "Rereviewed"
-		if msg.degradedToRevise {
-			verb = "Rereviewed (degraded to revise — diff file unavailable)"
+		// RereviewReview succeeded: pr_review.py re-ran against a fresh diff
+		// and rewrote the spool in place (it never degrades to revise).
+		if msg.warning != "" {
+			// Partial success: pr_review.py ran without some lenses. Say so
+			// rather than reporting a clean rereview.
+			m = m.appendActivity(m.styles.Warning.Render(fmt.Sprintf(
+				"Rereviewed review for %s#%d with missing lenses (%s) — new verdict: %s, back in pending/.", msg.rec.Repo, msg.rec.PR, msg.warning, msg.newVerdict)))
+			return m, nil
 		}
 		m = m.appendActivity(m.styles.Success.Render(fmt.Sprintf(
-			"%s review for %s#%d — new verdict: %s, back in pending/.", verb, msg.rec.Repo, msg.rec.PR, msg.newVerdict)))
+			"Rereviewed review for %s#%d — new verdict: %s, back in pending/.", msg.rec.Repo, msg.rec.PR, msg.newVerdict)))
 		return m, nil
 
 	case decideRereviewErrorMsg:
 		m.clearDecideInFlight(msg.rec)
-		// RereviewReview failed (a lens call errored, or consolidation
-		// failed). Same "decision NOT recorded" contract as revise.
+		// RereviewReview failed (diff fetch, head SHA lookup, or the
+		// pr_review.py run). Same "decision NOT recorded" contract as revise.
 		m = m.appendActivity(m.styles.Error.Render(fmt.Sprintf(
 			"Failed to rereview review for %s#%d: %v (decision NOT recorded — retry with decide rereview)", msg.rec.Repo, msg.rec.PR, msg.err)))
 		return m, nil

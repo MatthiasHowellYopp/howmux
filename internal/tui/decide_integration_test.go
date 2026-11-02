@@ -707,14 +707,13 @@ func TestDecideRevise_OpensComposerThenLaunches(t *testing.T) {
 }
 
 // TestDecideRereview_OpensComposerThenLaunches mirrors
-// TestDecideRevise_OpensComposerThenLaunches for the "rereview" action,
-// including a degraded-to-revise sub-case on the launched seam.
+// TestDecideRevise_OpensComposerThenLaunches for the "rereview" action.
 func TestDecideRereview_OpensComposerThenLaunches(t *testing.T) {
-	t.Run("full lens fan-out", func(t *testing.T) {
+	t.Run("launches with typed notes", func(t *testing.T) {
 		var gotNotes string
-		restore := stubRereviewReviewFunc(func(ctx context.Context, rec review.Record, inlineNotes string) (string, bool, error) {
+		restore := stubRereviewReviewFunc(func(ctx context.Context, rec review.Record, inlineNotes string) (string, string, error) {
 			gotNotes = inlineNotes
-			return "REQUEST_CHANGES", false, nil
+			return "REQUEST_CHANGES", "", nil
 		})
 		defer restore()
 
@@ -739,7 +738,7 @@ func TestDecideRereview_OpensComposerThenLaunches(t *testing.T) {
 		}
 
 		msg := drainBatchForType[decideRereviewCompleteMsg](t, cmd)
-		if msg.rec.PR != 62 || msg.newVerdict != "REQUEST_CHANGES" || msg.degradedToRevise {
+		if msg.rec.PR != 62 || msg.newVerdict != "REQUEST_CHANGES" {
 			t.Errorf("unexpected decideRereviewCompleteMsg: %+v", msg)
 		}
 		if gotNotes != "focus on concurrency" {
@@ -747,9 +746,9 @@ func TestDecideRereview_OpensComposerThenLaunches(t *testing.T) {
 		}
 	})
 
-	t.Run("degraded to revise when diff file is gone", func(t *testing.T) {
-		restore := stubRereviewReviewFunc(func(ctx context.Context, rec review.Record, inlineNotes string) (string, bool, error) {
-			return "APPROVE", true, nil
+	t.Run("completion message lands in the activity log", func(t *testing.T) {
+		restore := stubRereviewReviewFunc(func(ctx context.Context, rec review.Record, inlineNotes string) (string, string, error) {
+			return "APPROVE", "", nil
 		})
 		defer restore()
 
@@ -767,10 +766,6 @@ func TestDecideRereview_OpensComposerThenLaunches(t *testing.T) {
 		}
 
 		msg := drainBatchForType[decideRereviewCompleteMsg](t, cmd)
-		if !msg.degradedToRevise {
-			t.Fatalf("expected degradedToRevise=true, got %+v", msg)
-		}
-
 		final, finalCmd := submittedModel.Update(msg)
 		if finalCmd != nil {
 			t.Errorf("expected nil cmd from decideRereviewCompleteMsg handling, got %v", finalCmd)
@@ -779,8 +774,8 @@ func TestDecideRereview_OpensComposerThenLaunches(t *testing.T) {
 		if !ok {
 			t.Fatalf("Update did not return a model")
 		}
-		if !anyLineContains(finalModel.activityLines, "degraded to revise") {
-			t.Errorf("expected the activity line to mention the degrade, got: %v", finalModel.activityLines)
+		if !anyLineContains(finalModel.activityLines, "new verdict: APPROVE") {
+			t.Errorf("expected the activity line to report the new verdict, got: %v", finalModel.activityLines)
 		}
 	})
 }
@@ -916,7 +911,7 @@ func stubPostReviewFunc(fn func(ctx context.Context, rec review.Record) (int, er
 
 // stubRereviewReviewFunc substitutes the package-level rereviewReviewFunc
 // seam (decideactions.go) with fn for the duration of a test.
-func stubRereviewReviewFunc(fn func(ctx context.Context, rec review.Record, inlineNotes string) (string, bool, error)) func() {
+func stubRereviewReviewFunc(fn func(ctx context.Context, rec review.Record, inlineNotes string) (string, string, error)) func() {
 	original := rereviewReviewFunc
 	rereviewReviewFunc = fn
 	return func() { rereviewReviewFunc = original }
@@ -924,3 +919,27 @@ func stubRereviewReviewFunc(fn func(ctx context.Context, rec review.Record, inli
 
 // contains is already defined in commands_review_test.go (same package);
 // reused here rather than redeclared.
+
+// TestDecideRereview_PartialLensesShowsWarning checks a rereview that came
+// back without some lenses is reported as a warning, not a clean rereview.
+func TestDecideRereview_PartialLensesShowsWarning(t *testing.T) {
+	restore := stubRereviewReviewFunc(func(context.Context, review.Record, string) (string, string, error) {
+		return "COMMENT", "lenses failed: language", nil
+	})
+	defer restore()
+
+	m := newDecideRoutingTestModel()
+	rec := review.Record{Repo: "owner/repo", PR: 63, SpoolPath: "/tmp/does-not-matter.md"}
+	addReviewsTabWithRecord(m, rec)
+
+	m, cmd := m.launchDecideRereview(rec, "")
+	msg := drainBatchForType[decideRereviewCompleteMsg](t, cmd)
+	if msg.warning != "lenses failed: language" {
+		t.Fatalf("warning = %q, want it carried on the complete msg", msg.warning)
+	}
+	updated, _ := m.Update(msg)
+	got := updated.(model)
+	if !anyLineContains(got.activityLines, "with missing lenses (lenses failed: language)") {
+		t.Errorf("expected a missing-lenses activity line, got: %v", got.activityLines)
+	}
+}

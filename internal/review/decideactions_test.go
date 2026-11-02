@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -1748,346 +1748,436 @@ func TestReviseReview_KiroCallFails_ReturnsError_SpoolUnchanged(t *testing.T) {
 
 // --- Task 4: RereviewReview ---------------------------------------------------
 
-func TestRereviewReview_DiffFileMissing_DegradesToRevise(t *testing.T) {
-	base := t.TempDir()
-	spoolPath := writeFakeSpoolFile(t, base, map[string]string{
-		"repo": "owner/repo", "pr": "21", "verdict": "COMMENT", "decision": "rereview",
-		"diff_file": filepath.Join(base, "nonexistent.diff"),
-	}, "# Review\n\nfindings\nVERDICT: COMMENT\n")
-	rec := recordForSpool("owner/repo", 21, spoolPath)
-
-	calls := withFakeKiroOneshot(t, map[string]string{
-		"review-consolidator": "# Revised\nVERDICT: APPROVE",
-	}, nil)
-
-	verdict, degraded, err := RereviewReview(context.Background(), rec, "")
-	if err != nil {
-		t.Fatalf("RereviewReview() unexpected error: %v", err)
-	}
-	if !degraded {
-		t.Error("degradedToRevise = false, want true when diff_file is missing")
-	}
-	if verdict != "APPROVE" {
-		t.Errorf("verdict = %q, want %q", verdict, "APPROVE")
-	}
-
-	if len(*calls) != 1 {
-		t.Fatalf("expected exactly one kiroOneshotFunc call, got %d", len(*calls))
-	}
-	if (*calls)[0].agentName != "review-consolidator" {
-		t.Errorf("agentName = %q, want %q (should call the consolidator directly, not a lens agent)", (*calls)[0].agentName, "review-consolidator")
-	}
+// fakeRereviewRun captures what RereviewReview handed to the seams.
+type fakeRereviewRun struct {
+	argv        []string
+	diffFetched bool
+	diffContent string // content of --diff-file at pr_review.py time
+	diffPath    string
+	toolCalled  bool
+	calls       []string // seam call order: "sha", "diff", "tool"
+	stderr      string   // written to the tool's stderr on success (set before the call)
 }
 
-func TestRereviewReview_DiffFileEmpty_DegradesToRevise(t *testing.T) {
-	base := t.TempDir()
-	spoolPath := writeFakeSpoolFile(t, base, map[string]string{
-		"repo": "owner/repo", "pr": "22", "verdict": "COMMENT", "decision": "rereview",
-		"diff_file": "",
-	}, "# Review\n\nfindings\nVERDICT: COMMENT\n")
-	rec := recordForSpool("owner/repo", 22, spoolPath)
+// withFakeRereviewSeams fakes fetchDiffFunc, prHeadSHAFunc, runReviewToolFunc
+// and timeNow for RereviewReview. The fake pr_review.py rewrites the
+// --spool-file in place with newVerdict (decision cleared) and prints the
+// path it wrote — or printPath when non-empty. fetchErr / toolErr make the
+// corresponding seam fail. Restores every seam on cleanup.
+func withFakeRereviewSeams(t *testing.T, headSHA, newVerdict, printPath string, fetchErr, toolErr error) *fakeRereviewRun {
+	t.Helper()
+	origFetch, origSHA, origTool, origNow := fetchDiffFunc, prHeadSHAFunc, runReviewToolFunc, timeNow
+	t.Cleanup(func() {
+		fetchDiffFunc, prHeadSHAFunc, runReviewToolFunc, timeNow = origFetch, origSHA, origTool, origNow
+	})
+	timeNow = func() time.Time { return time.Date(2025, 3, 4, 5, 6, 7, 0, time.UTC) }
 
-	withFakeKiroOneshot(t, map[string]string{
-		"review-consolidator": "# Revised\nVERDICT: APPROVE",
-	}, nil)
-
-	_, degraded, err := RereviewReview(context.Background(), rec, "")
-	if err != nil {
-		t.Fatalf("RereviewReview() unexpected error: %v", err)
+	run := &fakeRereviewRun{}
+	fetchDiffFunc = func(ctx context.Context, owner, repo string, pr int, outputFile string) error {
+		run.calls = append(run.calls, "diff")
+		if fetchErr != nil {
+			return fetchErr
+		}
+		run.diffFetched = true
+		run.diffPath = outputFile
+		return os.WriteFile(outputFile, []byte("diff --git a/fresh.go b/fresh.go\n"), 0o644)
 	}
-	if !degraded {
-		t.Error("degradedToRevise = false, want true when diff_file is empty")
+	prHeadSHAFunc = func(repo string, pr int) (string, error) {
+		run.calls = append(run.calls, "sha")
+		return headSHA, nil
 	}
+	runReviewToolFunc = func(ctx context.Context, argv []string, stderr io.Writer) ([]string, error) {
+		run.calls = append(run.calls, "tool")
+		run.toolCalled = true
+		if run.stderr != "" {
+			fmt.Fprint(stderr, run.stderr)
+		}
+		run.argv = append([]string{}, argv...)
+		if toolErr != nil {
+			fmt.Fprintln(stderr, "Traceback: boom")
+			return nil, toolErr
+		}
+		if d := argValue(argv, "--diff-file"); d != "" {
+			b, _ := os.ReadFile(d)
+			run.diffContent = string(b)
+		}
+		spool := argValue(argv, "--spool-file")
+		if err := RewriteSpoolEntry(spool, "# Re-reviewed\n\nVERDICT: "+newVerdict+"\n", newVerdict, true); err != nil {
+			return nil, err
+		}
+		if printPath != "" {
+			return []string{printPath}, nil
+		}
+		return []string{spool}, nil
+	}
+	return run
 }
 
-func TestRereviewReview_DiffFileExists_FansOutToAllLenses(t *testing.T) {
-	base := t.TempDir()
-	diffPath := filepath.Join(base, "pr.diff")
-	if err := os.WriteFile(diffPath, []byte("diff --git a/foo.py b/foo.py\n"), 0o644); err != nil {
-		t.Fatalf("write diff fixture: %v", err)
-	}
-	spoolPath := writeFakeSpoolFile(t, base, map[string]string{
-		"repo": "owner/repo", "pr": "23", "verdict": "COMMENT", "decision": "rereview",
-		"diff_file": diffPath,
-	}, "# Review\n\nfindings\nVERDICT: COMMENT\n")
-	rec := recordForSpool("owner/repo", 23, spoolPath)
-
-	calls := withFakeKiroOneshot(t, map[string]string{
-		"python-reviewer":          "language lens output",
-		"review-security-agent":    "security lens output",
-		"review-performance-agent": "performance lens output",
-		"review-testing-agent":     "testing lens output",
-		"review-consolidator":      "# Consolidated\nVERDICT: REQUEST_CHANGES",
-	}, nil)
-
-	verdict, degraded, err := RereviewReview(context.Background(), rec, "")
-	if err != nil {
-		t.Fatalf("RereviewReview() unexpected error: %v", err)
-	}
-	if degraded {
-		t.Error("degradedToRevise = true, want false when diff_file exists")
-	}
-	if verdict != "REQUEST_CHANGES" {
-		t.Errorf("verdict = %q, want %q", verdict, "REQUEST_CHANGES")
-	}
-
-	// One call per lens (4) plus one consolidation call = 5.
-	if len(*calls) != 5 {
-		t.Fatalf("expected 5 kiroOneshotFunc calls (4 lenses + consolidate), got %d: %+v", len(*calls), *calls)
-	}
-	agentsCalled := map[string]int{}
-	for _, c := range *calls {
-		agentsCalled[c.agentName]++
-	}
-	for _, want := range []string{"python-reviewer", "review-security-agent", "review-performance-agent", "review-testing-agent", "review-consolidator"} {
-		if agentsCalled[want] != 1 {
-			t.Errorf("agent %q called %d times, want exactly 1", want, agentsCalled[want])
+// argValue returns flag's value in argv, from either "flag value" or
+// "flag=value" form, or "".
+func argValue(argv []string, flag string) string {
+	for i, a := range argv {
+		if v, ok := strings.CutPrefix(a, flag+"="); ok {
+			return v
+		}
+		if a == flag && i+1 < len(argv) {
+			return argv[i+1]
 		}
 	}
+	return ""
 }
 
-// TestRereviewReview_UsesSpoolLanguageLens checks that rereview runs the
-// language lens the original review recorded (language:/valkey: in the spool
-// front-matter), not a hardcoded python-reviewer.
-func TestRereviewReview_UsesSpoolLanguageLens(t *testing.T) {
+func hasArg(argv []string, flag string) bool {
+	for _, a := range argv {
+		if a == flag || strings.HasPrefix(a, flag+"=") {
+			return true
+		}
+	}
+	return false
+}
+
+func TestRereviewReview_RunsPrReviewWithSpoolFields(t *testing.T) {
 	cases := []struct {
-		name, language, valkey, want string
+		name         string
+		fm           map[string]string
+		inlineNotes  string
+		scope        *AutoPostConfig
+		wantLanguage string
+		wantValkey   bool
+		wantNotes    string // "" means --notes must be absent
+		wantIssues   string
 	}{
-		{"infra", "infra", "false", "infra-reviewer"},
-		{"go valkey", "go", "true", "valkey-go-reviewer"},
-		{"valkey without variant", "infra", "true", "infra-reviewer"},
-		{"java", "java", "", "java-reviewer"},
-		{"docs", "docs", "", "docs-reviewer"},
-		{"generic", "generic", "", "generic-reviewer"},
-		{"legacy spool", "", "", "python-reviewer"},
-		{"unknown language", "cobol", "", "python-reviewer"},
+		{
+			name:         "language and valkey from front-matter, inline notes win",
+			fm:           map[string]string{"language": "go", "valkey": "true", "decision_notes": "persisted"},
+			inlineNotes:  "line one\nline two",
+			wantLanguage: "go", wantValkey: true, wantNotes: "line one\nline two", wantIssues: "related",
+		},
+		{
+			name:         "persisted notes used when inline blank",
+			fm:           map[string]string{"language": "python", "valkey": "false", "decision_notes": "persisted note"},
+			inlineNotes:  "   ",
+			wantLanguage: "python", wantNotes: "persisted note", wantIssues: "related",
+		},
+		{
+			name:         "legacy spool: auto language, no valkey, no notes",
+			fm:           map[string]string{},
+			wantLanguage: "auto", wantIssues: "related",
+		},
+		{
+			name:         "gate acts on repo: all issues",
+			fm:           map[string]string{"language": "docs"},
+			scope:        &AutoPostConfig{Mode: ModeOwnRepos, OwnRepoOwners: []string{"OWNER"}},
+			wantLanguage: "docs", wantIssues: "all",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			withScopeConfig(t, tc.scope)
 			base := t.TempDir()
-			diffPath := filepath.Join(base, "pr.diff")
-			if err := os.WriteFile(diffPath, []byte("diff --git a/x b/x\n"), 0o644); err != nil {
-				t.Fatal(err)
+			fm := map[string]string{"repo": "owner/repo", "pr": "23", "verdict": "COMMENT", "decision": "rereview"}
+			for k, v := range tc.fm {
+				fm[k] = v
 			}
-			fields := map[string]string{
-				"repo": "owner/repo", "pr": "23", "verdict": "COMMENT", "decision": "rereview",
-				"diff_file": diffPath,
-			}
-			if tc.language != "" {
-				fields["language"] = tc.language
-			}
-			if tc.valkey != "" {
-				fields["valkey"] = tc.valkey
-			}
-			spoolPath := writeFakeSpoolFile(t, base, fields, "# Review\n\nVERDICT: COMMENT\n")
-			calls := withFakeKiroOneshot(t, map[string]string{
-				"review-consolidator": "# Consolidated\nVERDICT: COMMENT",
-			}, nil)
+			spoolPath := writeFakeSpoolFile(t, base, fm, "# Review\n\nVERDICT: COMMENT\n")
+			run := withFakeRereviewSeams(t, "head123", "REQUEST_CHANGES", "", nil, nil)
 
-			if _, _, err := RereviewReview(context.Background(), recordForSpool("owner/repo", 23, spoolPath), ""); err != nil {
+			verdict, warning, err := RereviewReview(context.Background(), recordForSpool("owner/repo", 23, spoolPath), tc.inlineNotes)
+			if err != nil {
 				t.Fatalf("RereviewReview() error: %v", err)
 			}
-			got := map[string]bool{}
-			for _, c := range *calls {
-				got[c.agentName] = true
+			if warning != "" {
+				t.Errorf("warning = %q, want none for a clean run", warning)
 			}
-			if !got[tc.want] {
-				t.Errorf("language lens %q not called; calls: %+v", tc.want, *calls)
+			if verdict != "REQUEST_CHANGES" {
+				t.Errorf("verdict = %q, want REQUEST_CHANGES", verdict)
 			}
-			for _, r := range languageReviewers {
-				if r != tc.want && got[r] {
-					t.Errorf("unexpected language lens %q called (want only %q)", r, tc.want)
+
+			argv := run.argv
+			if len(argv) == 0 || argv[0] != "pr_review.py" {
+				t.Fatalf("argv[0] = %v, want pr_review.py", argv)
+			}
+			if got := argValue(argv, "--repo"); got != "owner/repo" {
+				t.Errorf("--repo = %q", got)
+			}
+			if got := argValue(argv, "--pr"); got != "23" {
+				t.Errorf("--pr = %q", got)
+			}
+			if got := argValue(argv, "--language"); got != tc.wantLanguage {
+				t.Errorf("--language = %q, want %q", got, tc.wantLanguage)
+			}
+			if got := hasArg(argv, "--valkey"); got != tc.wantValkey {
+				t.Errorf("--valkey present = %v, want %v", got, tc.wantValkey)
+			}
+			if got := argValue(argv, "--issues"); got != tc.wantIssues {
+				t.Errorf("--issues = %q, want %q", got, tc.wantIssues)
+			}
+			if got := argValue(argv, "--spool-file"); got != spoolPath {
+				t.Errorf("--spool-file = %q, want %q", got, spoolPath)
+			}
+			if tc.wantNotes == "" {
+				if hasArg(argv, "--notes") {
+					t.Errorf("--notes present, want omitted: %v", argv)
 				}
+			} else if got := argValue(argv, "--notes"); got != tc.wantNotes {
+				t.Errorf("--notes = %q, want %q", got, tc.wantNotes)
 			}
 		})
 	}
 }
 
-// TestRereviewReview_DocsRunsOnlyLanguageLens checks that a docs rereview
-// skips the cross-cutting lenses, as pr_review.py does.
-func TestRereviewReview_DocsRunsOnlyLanguageLens(t *testing.T) {
+func TestRereviewReview_FetchesFreshDiffAndStampsHead(t *testing.T) {
+	withScopeConfig(t, nil)
 	base := t.TempDir()
-	diffPath := filepath.Join(base, "pr.diff")
-	if err := os.WriteFile(diffPath, []byte("diff --git a/README.md b/README.md\n"), 0o644); err != nil {
+	stale := filepath.Join(base, "stale.diff")
+	if err := os.WriteFile(stale, []byte("stale"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	spoolPath := writeFakeSpoolFile(t, base, map[string]string{
-		"repo": "owner/repo", "pr": "9", "verdict": "COMMENT", "decision": "rereview",
-		"diff_file": diffPath, "language": "docs",
+		"repo": "owner/repo", "pr": "30", "verdict": "COMMENT", "decision": "rereview",
+		"diff_file": stale, "reviewed_sha": "oldsha",
 	}, "# Review\n\nVERDICT: COMMENT\n")
-	calls := withFakeKiroOneshot(t, map[string]string{"review-consolidator": "# C\nVERDICT: COMMENT"}, nil)
+	run := withFakeRereviewSeams(t, "freshsha", "APPROVE", "", nil, nil)
 
-	if _, _, err := RereviewReview(context.Background(), recordForSpool("owner/repo", 9, spoolPath), ""); err != nil {
+	if _, _, err := RereviewReview(context.Background(), recordForSpool("owner/repo", 30, spoolPath), ""); err != nil {
 		t.Fatalf("RereviewReview() error: %v", err)
 	}
-	var agents []string
-	for _, c := range *calls {
-		agents = append(agents, c.agentName)
+	if !run.diffFetched {
+		t.Fatal("fetchDiffFunc not called; rereview must fetch a fresh diff")
 	}
-	sort.Strings(agents)
-	if want := []string{"docs-reviewer", "review-consolidator"}; strings.Join(agents, ",") != strings.Join(want, ",") {
-		t.Errorf("agents called = %v, want %v", agents, want)
+	if got := argValue(run.argv, "--diff-file"); got != run.diffPath || got == stale {
+		t.Errorf("--diff-file = %q, want the freshly fetched temp %q", got, run.diffPath)
+	}
+	if !strings.Contains(run.diffContent, "fresh.go") {
+		t.Errorf("pr_review.py saw diff %q, want the fresh diff", run.diffContent)
+	}
+	if _, err := os.Stat(run.diffPath); !os.IsNotExist(err) {
+		t.Errorf("temp diff %s not removed after rereview (stat err %v)", run.diffPath, err)
+	}
+
+	data, err := os.ReadFile(spoolPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fm := ParseSpoolFrontMatter(data)
+	if fm["reviewed_sha"] != "freshsha" {
+		t.Errorf("reviewed_sha = %q, want freshsha", fm["reviewed_sha"])
+	}
+	if fm["generated"] != "2025-03-04T05:06:07Z" {
+		t.Errorf("generated = %q, want the timeNow stamp", fm["generated"])
+	}
+	if fm["verdict"] != "APPROVE" {
+		t.Errorf("verdict = %q, want APPROVE", fm["verdict"])
 	}
 }
 
-func TestRereviewLenses(t *testing.T) {
-	names, profiles := rereviewLenses("go", "go-reviewer")
-	if strings.Join(names, ",") != "language,performance,security,testing" || profiles["language"] != "go-reviewer" {
-		t.Errorf("go lenses = %v %v", names, profiles)
-	}
-	names, _ = rereviewLenses(" Docs ", "docs-reviewer")
-	if strings.Join(names, ",") != "language" {
-		t.Errorf("docs lenses = %v, want [language]", names)
-	}
-}
-
-func TestRereviewReview_LensCallFails_PropagatesError(t *testing.T) {
+func TestRereviewReview_DiffFetchFailure_ReturnsError(t *testing.T) {
+	withScopeConfig(t, nil)
 	base := t.TempDir()
-	diffPath := filepath.Join(base, "pr.diff")
-	if err := os.WriteFile(diffPath, []byte("diff --git a/foo.py b/foo.py\n"), 0o644); err != nil {
-		t.Fatalf("write diff fixture: %v", err)
-	}
-	original := "# Original\n\nfindings\nVERDICT: COMMENT\n"
+	original := "# Original\n\nVERDICT: COMMENT\n"
 	spoolPath := writeFakeSpoolFile(t, base, map[string]string{
-		"repo": "owner/repo", "pr": "24", "verdict": "COMMENT", "decision": "rereview",
-		"diff_file": diffPath,
+		"repo": "owner/repo", "pr": "31", "verdict": "COMMENT", "decision": "rereview",
 	}, original)
-	rec := recordForSpool("owner/repo", 24, spoolPath)
+	before, _ := os.ReadFile(spoolPath)
+	run := withFakeRereviewSeams(t, "sha", "APPROVE", "", fmt.Errorf("gh pr diff failed"), nil)
 
-	beforeData, err := os.ReadFile(spoolPath)
-	if err != nil {
-		t.Fatalf("read fixture: %v", err)
+	_, _, err := RereviewReview(context.Background(), recordForSpool("owner/repo", 31, spoolPath), "")
+	if err == nil || !strings.Contains(err.Error(), "fetch diff") {
+		t.Fatalf("err = %v, want a fetch-diff error", err)
 	}
-
-	withFakeKiroOneshot(t, map[string]string{
-		"python-reviewer":          "ok",
-		"review-performance-agent": "ok",
-		"review-testing-agent":     "ok",
-	}, map[string]error{
-		"review-security-agent": fmt.Errorf("kiro-cli exited 1 for security lens"),
-	})
-
-	_, _, callErr := RereviewReview(context.Background(), rec, "")
-	if callErr == nil {
-		t.Fatal("RereviewReview() error = nil, want non-nil error when a lens call fails")
+	if run.toolCalled {
+		t.Error("pr_review.py ran despite the diff fetch failure")
 	}
-
-	afterData, readErr := os.ReadFile(spoolPath)
-	if readErr != nil {
-		t.Fatalf("re-read spool file: %v", readErr)
-	}
-	if string(afterData) != string(beforeData) {
-		t.Errorf("spool file was modified despite a lens failure.\nbefore: %q\nafter:  %q", beforeData, afterData)
+	after, _ := os.ReadFile(spoolPath)
+	if string(after) != string(before) {
+		t.Error("spool modified despite diff fetch failure")
 	}
 }
 
-// TestRereviewReview_LensCallFails_CancelsSiblings verifies that when one
-// lens fails, the shared fan-out context is cancelled so the sibling lens
-// calls observe ctx.Done() rather than each running to completion. This
-// guards the first-failure short-circuit added for PR #111's review: a
-// stuck or slow sibling must not keep running after a peer has already
-// failed the whole rereview.
-func TestRereviewReview_LensCallFails_CancelsSiblings(t *testing.T) {
+func TestRereviewReview_ToolFailure_ReturnsErrorWithStderr(t *testing.T) {
+	withScopeConfig(t, nil)
 	base := t.TempDir()
-	diffPath := filepath.Join(base, "pr.diff")
-	if err := os.WriteFile(diffPath, []byte("diff --git a/foo.py b/foo.py\n"), 0o644); err != nil {
-		t.Fatalf("write diff fixture: %v", err)
-	}
 	spoolPath := writeFakeSpoolFile(t, base, map[string]string{
-		"repo": "owner/repo", "pr": "25", "verdict": "COMMENT", "decision": "rereview",
-		"diff_file": diffPath,
-	}, "# Original\n\nfindings\nVERDICT: COMMENT\n")
-	rec := recordForSpool("owner/repo", 25, spoolPath)
+		"repo": "owner/repo", "pr": "32", "verdict": "COMMENT", "decision": "rereview",
+	}, "# Original\n\nVERDICT: COMMENT\n")
+	withFakeRereviewSeams(t, "sha", "APPROVE", "", nil, fmt.Errorf("command failed (exit 1)"))
 
-	orig := kiroOneshotFunc
-	t.Cleanup(func() { kiroOneshotFunc = orig })
-
-	var mu sync.Mutex
-	siblingObservedCancel := false
-
-	kiroOneshotFunc = func(ctx context.Context, agentName, _ string, prompt string) (kirocli.Result, error) {
-		// One lens fails immediately, triggering the shared cancel().
-		if agentName == "review-security-agent" {
-			return kirocli.Result{}, fmt.Errorf("kiro-cli exited 1 for security lens")
-		}
-		// Siblings block until either the context is cancelled (expected)
-		// or a generous safety timeout elapses (would indicate the cancel
-		// did NOT propagate). The consolidator never runs because a lens
-		// fails, so this branch only ever sees lens agents.
-		select {
-		case <-ctx.Done():
-			mu.Lock()
-			siblingObservedCancel = true
-			mu.Unlock()
-			return kirocli.Result{}, ctx.Err()
-		case <-time.After(5 * time.Second):
-			return kirocli.Result{Text: "sibling ran to completion without cancellation"}, nil
-		}
-	}
-
-	_, _, callErr := RereviewReview(context.Background(), rec, "")
-	if callErr == nil {
-		t.Fatal("RereviewReview() error = nil, want non-nil when a lens fails")
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-	if !siblingObservedCancel {
-		t.Error("sibling lens calls did not observe context cancellation after a peer lens failed; first-failure short-circuit is not propagating")
+	_, _, err := RereviewReview(context.Background(), recordForSpool("owner/repo", 32, spoolPath), "")
+	if err == nil || !strings.Contains(err.Error(), "Traceback: boom") {
+		t.Fatalf("err = %v, want pr_review.py failure including stderr tail", err)
 	}
 }
 
-// --- Task 4 / concurrency: race-condition-free lens fan-out -----------------
-
-// TestRereviewReview_LensFanOut_NoRaceCondition exercises RereviewReview's
-// concurrent lens fan-out with a fake kiroOneshotFunc that sleeps a small
-// random duration per call (maximizing the chance of exposing any
-// accidental shared-state write if the disjoint-slice-index pattern is not
-// followed correctly). Must be run with `go test -race`.
-func TestRereviewReview_LensFanOut_NoRaceCondition(t *testing.T) {
+func TestRereviewReview_UnexpectedSpoolPath_ReturnsError(t *testing.T) {
+	withScopeConfig(t, nil)
 	base := t.TempDir()
-	diffPath := filepath.Join(base, "pr.diff")
-	if err := os.WriteFile(diffPath, []byte("diff --git a/foo.py b/foo.py\n"), 0o644); err != nil {
-		t.Fatalf("write diff fixture: %v", err)
-	}
 	spoolPath := writeFakeSpoolFile(t, base, map[string]string{
-		"repo": "owner/repo", "pr": "25", "verdict": "COMMENT", "decision": "rereview",
-		"diff_file": diffPath,
-	}, "# Review\n\nfindings\nVERDICT: COMMENT\n")
-	rec := recordForSpool("owner/repo", 25, spoolPath)
+		"repo": "owner/repo", "pr": "33", "verdict": "COMMENT", "decision": "rereview",
+	}, "# Original\n\nVERDICT: COMMENT\n")
+	withFakeRereviewSeams(t, "sha", "APPROVE", filepath.Join(base, "pending", "other.md"), nil, nil)
 
-	orig := kiroOneshotFunc
-	defer func() { kiroOneshotFunc = orig }()
+	_, _, err := RereviewReview(context.Background(), recordForSpool("owner/repo", 33, spoolPath), "")
+	if err == nil || !strings.Contains(err.Error(), "expected the existing spool file") {
+		t.Fatalf("err = %v, want a spool-path mismatch error", err)
+	}
+	data, _ := os.ReadFile(spoolPath)
+	if ParseSpoolFrontMatter(data)["reviewed_sha"] != "" {
+		t.Error("reviewed_sha stamped despite the spool-path mismatch")
+	}
+}
 
-	var counter int64
-	var mu sync.Mutex
-	kiroOneshotFunc = func(ctx context.Context, agentName, _ string, prompt string) (kirocli.Result, error) {
-		// Small jittered sleep to widen the window in which a shared-state
-		// race (if present) would manifest.
-		sleepFor := time.Duration(1+(len(agentName)%3)) * time.Millisecond
-		time.Sleep(sleepFor)
+func TestRereviewReview_AlreadyInDone_ReturnsError(t *testing.T) {
+	withScopeConfig(t, nil)
+	base := t.TempDir()
+	pendingPath := writeFakeSpoolFile(t, base, map[string]string{
+		"repo": "owner/repo", "pr": "34", "verdict": "COMMENT", "decision": "post",
+	}, "# Original\n\nVERDICT: COMMENT\n")
+	if err := archiveToDone(pendingPath); err != nil {
+		t.Fatalf("archive fixture: %v", err)
+	}
+	run := withFakeRereviewSeams(t, "sha", "APPROVE", "", nil, nil)
 
-		mu.Lock()
-		counter++
-		mu.Unlock()
+	_, _, err := RereviewReview(context.Background(), recordForSpool("owner/repo", 34, pendingPath), "")
+	if err == nil || !strings.Contains(err.Error(), "already finalized") {
+		t.Fatalf("err = %v, want already-finalized error", err)
+	}
+	if run.diffFetched || run.toolCalled {
+		t.Error("seams invoked for a done/ spool")
+	}
+}
 
-		if agentName == "review-consolidator" {
-			return kirocli.Result{Text: "# Consolidated\nVERDICT: APPROVE"}, nil
+func TestRereviewReview_SpoolNotFound_ReturnsError(t *testing.T) {
+	withScopeConfig(t, nil)
+	run := withFakeRereviewSeams(t, "sha", "APPROVE", "", nil, nil)
+	_, _, err := RereviewReview(context.Background(), recordForSpool("owner/repo", 35, filepath.Join(t.TempDir(), "pending", "missing.md")), "")
+	if err == nil || !strings.Contains(err.Error(), "no spool file") {
+		t.Fatalf("err = %v, want no-spool error", err)
+	}
+	if run.diffFetched || run.toolCalled {
+		t.Error("seams invoked for a missing spool")
+	}
+}
+
+func TestRereviewReview_ClearsLeftoverDecision(t *testing.T) {
+	withScopeConfig(t, nil)
+	base := t.TempDir()
+	spoolPath := writeFakeSpoolFile(t, base, map[string]string{
+		"repo": "owner/repo", "pr": "36", "verdict": "COMMENT", "decision": "rereview",
+		"prior_feedback": "/tmp/prior.json",
+	}, "# Original\n\nVERDICT: COMMENT\n")
+	withFakeRereviewSeams(t, "sha", "APPROVE", "", nil, nil)
+	// A pr_review.py that rewrites the body/verdict but keeps decision: set.
+	runReviewToolFunc = func(ctx context.Context, argv []string, _ io.Writer) ([]string, error) {
+		spool := argValue(argv, "--spool-file")
+		if err := RewriteSpoolEntry(spool, "# New\n\nVERDICT: APPROVE\n", "APPROVE", false); err != nil {
+			return nil, err
 		}
-		return kirocli.Result{Text: fmt.Sprintf("output from %s", agentName)}, nil
+		return []string{spool}, nil
 	}
 
-	verdict, degraded, err := RereviewReview(context.Background(), rec, "")
+	verdict, _, err := RereviewReview(context.Background(), recordForSpool("owner/repo", 36, spoolPath), "")
 	if err != nil {
-		t.Fatalf("RereviewReview() unexpected error: %v", err)
-	}
-	if degraded {
-		t.Error("degradedToRevise = true, want false")
+		t.Fatalf("RereviewReview() error: %v", err)
 	}
 	if verdict != "APPROVE" {
-		t.Errorf("verdict = %q, want %q", verdict, "APPROVE")
+		t.Errorf("verdict = %q, want APPROVE", verdict)
 	}
-	if counter != 5 {
-		t.Errorf("counter = %d, want 5 (4 lenses + 1 consolidation)", counter)
+	data, _ := os.ReadFile(spoolPath)
+	fm := ParseSpoolFrontMatter(data)
+	if fm["decision"] != "" {
+		t.Errorf("decision = %q, want cleared", fm["decision"])
+	}
+	if fm["prior_feedback"] != "/tmp/prior.json" || fm["reviewed_sha"] != "sha" {
+		t.Errorf("front-matter not preserved: %v", fm)
+	}
+	if !strings.Contains(string(data), "# New") {
+		t.Error("rewritten body lost")
+	}
+}
+
+// withScopeConfig sets the package review-scope config for one test (nil
+// clears it) and restores the previous value on cleanup.
+func withScopeConfig(t *testing.T, cfg *AutoPostConfig) {
+	t.Helper()
+	prev := reviewScopeConfig.Load()
+	reviewScopeConfig.Store(cfg)
+	t.Cleanup(func() { reviewScopeConfig.Store(prev) })
+}
+
+// TestRereviewReview_ResolvesHeadBeforeDiff pins the safe ordering: the head
+// SHA is read before the diff, so a push in between stamps an older SHA (the
+// gate sees it as stale) rather than one the review never saw.
+func TestRereviewReview_ResolvesHeadBeforeDiff(t *testing.T) {
+	base := t.TempDir()
+	spoolPath := writeFakeSpoolFile(t, base, map[string]string{
+		"repo": "owner/repo", "pr": "40", "verdict": "COMMENT", "language": "go",
+	}, "# Review\n\nVERDICT: COMMENT\n")
+	run := withFakeRereviewSeams(t, "sha", "COMMENT", "", nil, nil)
+
+	if _, _, err := RereviewReview(context.Background(), recordForSpool("owner/repo", 40, spoolPath), ""); err != nil {
+		t.Fatalf("RereviewReview() error: %v", err)
+	}
+	if got := strings.Join(run.calls, ","); got != "sha,diff,tool" {
+		t.Errorf("seam call order = %s, want sha,diff,tool", got)
+	}
+}
+
+// TestRereviewReview_NotesStartingWithDash checks notes are passed as one
+// "--notes=<v>" argv entry, so argparse can't mistake "-1 ..." for an option.
+func TestRereviewReview_NotesStartingWithDash(t *testing.T) {
+	base := t.TempDir()
+	spoolPath := writeFakeSpoolFile(t, base, map[string]string{
+		"repo": "owner/repo", "pr": "41", "verdict": "COMMENT", "language": "go",
+	}, "# Review\n\nVERDICT: COMMENT\n")
+	run := withFakeRereviewSeams(t, "sha", "COMMENT", "", nil, nil)
+
+	if _, _, err := RereviewReview(context.Background(), recordForSpool("owner/repo", 41, spoolPath), "-1 on the nit"); err != nil {
+		t.Fatalf("RereviewReview() error: %v", err)
+	}
+	found := false
+	for _, a := range run.argv {
+		if a == "--notes" {
+			t.Errorf("--notes passed as a separate argv entry: %v", run.argv)
+		}
+		if a == "--notes=-1 on the nit" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("want a single --notes=-1 on the nit entry, got %v", run.argv)
+	}
+}
+
+// TestRereviewReview_DegradedLensesWarn checks a partial-lens run (exit 0 plus
+// pr_review.py's degraded marker on stderr) comes back as a warning, not as a
+// clean rereview.
+func TestRereviewReview_DegradedLensesWarn(t *testing.T) {
+	base := t.TempDir()
+	spoolPath := writeFakeSpoolFile(t, base, map[string]string{
+		"repo": "owner/repo", "pr": "42", "verdict": "COMMENT", "language": "go",
+	}, "# Review\n\nVERDICT: COMMENT\n")
+	run := withFakeRereviewSeams(t, "sha", "COMMENT", "", nil, nil)
+	run.stderr = "→ [2/3] Running 4 review lenses …\n  ! lenses with errors (degraded, not fatal): language, testing\n"
+
+	_, warning, err := RereviewReview(context.Background(), recordForSpool("owner/repo", 42, spoolPath), "")
+	if err != nil {
+		t.Fatalf("RereviewReview() error: %v", err)
+	}
+	if warning != "lenses failed: language, testing" {
+		t.Errorf("warning = %q, want %q", warning, "lenses failed: language, testing")
+	}
+}
+
+func TestParseFindingLine_Range(t *testing.T) {
+	f, ok := parseFindingLine("- foo.go:8-10 - warning - spans a block -> fix it")
+	if !ok || f.file != "foo.go" || f.line != 8 || f.endLine != 10 {
+		t.Fatalf("got %+v ok=%v, want foo.go 8..10", f, ok)
+	}
+	if f.severity != "warning" || f.issue != "spans a block" || f.fix != "fix it" {
+		t.Errorf("groups shifted: %+v", f)
+	}
+	f, ok = parseFindingLine("- foo.go:8 - nit - single")
+	if !ok || f.endLine != 0 || f.severity != "nit" || f.issue != "single" {
+		t.Errorf("single line: %+v ok=%v", f, ok)
 	}
 }

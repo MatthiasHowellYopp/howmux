@@ -41,7 +41,7 @@ type OneshotResult struct {
 // kiroOneshotMeta calls the existing kiroOneshotFunc seam and wraps it with
 // wall-clock timing and a pass/error status, returning a OneshotResult. It
 // does NOT change the seam itself, so every existing text-only caller
-// (humanizeReviewBody, ReviseReview, the rereview lens fan-out) and the test
+// (humanizeReviewBody, ReviseReview) and the test
 // fake that substitutes kiroOneshotFunc keep working unchanged.
 //
 // model is passed to kiro-cli as --model (through kiroOneshotFunc) and

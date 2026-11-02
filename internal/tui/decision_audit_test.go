@@ -77,9 +77,9 @@ func TestDecideActions_RecordHumanDecision(t *testing.T) {
 		beforeAction("revise")
 		return "", errs["revise"]
 	}
-	rereviewReviewFunc = func(context.Context, review.Record, string) (string, bool, error) {
+	rereviewReviewFunc = func(context.Context, review.Record, string) (string, string, error) {
 		beforeAction("rereview")
-		return "", false, errs["rereview"]
+		return "", "", errs["rereview"]
 	}
 	discardReviewFunc = func(review.Record) error {
 		beforeAction("discard")
