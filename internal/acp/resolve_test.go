@@ -46,6 +46,11 @@ func TestValidateAgentResolvable(t *testing.T) {
 		{"agent in both locations", "both", false},
 		{"unknown agent (would silently fall back)", "nonexistent", true},
 		{"empty agent", "", true},
+		{"parent traversal", "../local-only", true},
+		{"nested path", "sub/both", true},
+		{"backslash path", `sub\both`, true},
+		{"dot", ".", true},
+		{"dot-dot", "..", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -90,5 +95,62 @@ func TestValidateAgentResolvable_NoHomeDirFallsBackToWorkspace(t *testing.T) {
 	}
 	if err := ValidateAgentResolvable(cwd, "nonexistent"); err == nil {
 		t.Error("unknown agent should still fail without a home dir")
+	}
+}
+
+// A traversal name must not resolve even when it points at a real .json file
+// outside both agent directories.
+func TestValidateAgentResolvable_TraversalDoesNotReachOtherFiles(t *testing.T) {
+	root := t.TempDir()
+	cwd := filepath.Join(root, "repo")
+	writeAgent(t, root, "outside") // root/outside.json
+	stubGlobalAgentsDir(t, filepath.Join(root, "global"), nil)
+
+	// From <cwd>/.kiro/agents, ../../../outside lands on root/outside.json.
+	if err := ValidateAgentResolvable(cwd, "../../../outside"); err == nil {
+		t.Error("traversal name resolved to a file outside the agent dirs")
+	}
+}
+
+// An unreadable workspace agents dir must not hide an agent that exists in the
+// global dir; and when nothing resolves, the stat error is the one reported.
+func TestValidateAgentResolvable_WorkspaceStatErrorFallsThroughToGlobal(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	cwd := t.TempDir()
+	global := t.TempDir()
+	wsAgents := filepath.Join(cwd, ".kiro", "agents")
+	writeAgent(t, wsAgents, "blocked")
+	writeAgent(t, global, "global-only")
+	if err := os.Chmod(wsAgents, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(wsAgents, 0o755) })
+	stubGlobalAgentsDir(t, global, nil)
+
+	if err := ValidateAgentResolvable(cwd, "global-only"); err != nil {
+		t.Errorf("global agent should resolve despite an unreadable workspace dir: %v", err)
+	}
+
+	err := ValidateAgentResolvable(cwd, "blocked")
+	if err == nil {
+		t.Fatal("agent only in the unreadable dir should not resolve")
+	}
+	if !errors.Is(err, os.ErrPermission) {
+		t.Errorf("want the permission error wrapped, got %v", err)
+	}
+}
+
+// Exercises the real globalAgentsDirFunc (no stub) so the ~/.kiro/agents
+// subpath kiro-cli uses is actually pinned by a test.
+func TestValidateAgentResolvable_RealHomeDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
+	writeAgent(t, filepath.Join(home, ".kiro", "agents"), "from-home")
+
+	if err := ValidateAgentResolvable(t.TempDir(), "from-home"); err != nil {
+		t.Errorf("agent in $HOME/.kiro/agents should resolve: %v", err)
 	}
 }

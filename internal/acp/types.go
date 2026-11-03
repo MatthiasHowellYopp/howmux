@@ -329,18 +329,31 @@ func ValidateAgentResolvable(cwd, agent string) error {
 	if agent == "" {
 		return ErrMissingConfigAgent
 	}
+	// An agent name is a plain file stem. Anything with a path separator or a
+	// dot-segment could make filepath.Join land on an unrelated .json file,
+	// passing this check for a name kiro-cli would never resolve.
+	if agent == "." || agent == ".." || strings.ContainsAny(agent, `/\`) || agent != filepath.Base(agent) {
+		return fmt.Errorf("agent %q could not be resolved: not a valid agent name", agent)
+	}
 	candidates := []string{filepath.Join(cwd, ".kiro", "agents", agent+".json")}
 	if globalDir, err := globalAgentsDirFunc(); err == nil && globalDir != "" {
 		candidates = append(candidates, filepath.Join(globalDir, agent+".json"))
 	}
+	// A stat error other than NotExist on one location (e.g. an unreadable
+	// workspace .kiro) must not hide a config that exists in another, so keep
+	// the first such error and only report it if no location resolves.
+	var statErr error
 	for _, agentFile := range candidates {
 		_, err := os.Stat(agentFile)
 		if err == nil {
 			return nil
 		}
-		if !os.IsNotExist(err) {
-			return fmt.Errorf("agent %q could not be resolved: %w", agent, err)
+		if !os.IsNotExist(err) && statErr == nil {
+			statErr = err
 		}
+	}
+	if statErr != nil {
+		return fmt.Errorf("agent %q could not be resolved: %w", agent, statErr)
 	}
 	return fmt.Errorf("agent %q could not be resolved: no config at %s (kiro-cli would silently fall back to a default client)", agent, strings.Join(candidates, " or "))
 }
