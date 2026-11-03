@@ -44,6 +44,10 @@ The preflight check runs first and fails if required kiro assets are missing.`,
 		if err != nil {
 			return err
 		}
+		modelNotice, err := validateReviewModel(cmd.Context(), cfg)
+		if err != nil {
+			return err
+		}
 
 		manager := agent.NewManager(cfg)
 		w := watcher.New(cfg, manager)
@@ -57,7 +61,7 @@ The preflight check runs first and fails if required kiro assets are missing.`,
 			initialCommand = fmt.Sprintf("review %s", args[0])
 		}
 
-		return tui.Run(w, manager, cfg, initialCommand, notice)
+		return tui.Run(w, manager, cfg, initialCommand, notice, modelNotice)
 	},
 }
 
