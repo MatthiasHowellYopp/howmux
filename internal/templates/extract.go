@@ -27,11 +27,13 @@ func Extract(srcDir, destDir string, force bool) error {
 		}
 
 		relSlash := filepath.ToSlash(relPath)
+		// Template dirs are stored without their leading dot (go:embed skips
+		// dot-dirs by default); restore it on extraction.
 		switch {
 		case relSlash == "kiro" || strings.HasPrefix(relSlash, "kiro/"):
 			relSlash = ".kiro" + strings.TrimPrefix(relSlash, "kiro")
-		case relSlash == "kiro-krew" || strings.HasPrefix(relSlash, "kiro-krew/"):
-			relSlash = ".howmux" + strings.TrimPrefix(relSlash, "kiro-krew")
+		case relSlash == "howmux" || strings.HasPrefix(relSlash, "howmux/"):
+			relSlash = ".howmux" + strings.TrimPrefix(relSlash, "howmux")
 		}
 
 		destPath := filepath.Join(destDir, filepath.FromSlash(relSlash))
