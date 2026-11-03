@@ -82,7 +82,8 @@ howmux init
 This creates:
 - `.howmux/config.yaml` — watcher configuration
 - `.howmux/scripts/` — worktree management scripts
-- `.kiro/agents/` — agent configurations (krew-lead, architect, builder, validator, documenter)
+
+It doesn't install agents. howmux's agents load from `~/.kiro/agents` (see [Agent Configuration](#agent-configuration)), and `howmux init` warns if any are missing.
 
 ### 2. Configure
 
@@ -334,48 +335,26 @@ After exhausting retries, the issue is labeled `<label>-failed`.
 
 ## Agent Configuration
 
-Agent configs live in `.kiro/agents/`. Each agent has a JSON config and a prompt markdown file.
+howmux doesn't ship its agents. The pipeline agents (`planner`, `krew-lead`, `architect`, `builder`, `validator`, `documenter`) and their skills (`planner-conventions`, `builder-conventions`, `validator-conventions`, `discover-qa-tools`) live in the ai-resources repo and load from `~/.kiro`, so one copy serves every repo you run howmux in.
 
-**krew-lead.json** (orchestrator):
-```json
-{
-  "name": "krew-lead",
-  "tools": ["read", "shell", "subagent", "todo_list"],
-  "toolsSettings": {
-    "subagent": {
-      "trustedAgents": ["architect", "builder", "validator", "documenter"]
-    }
-  },
-  "model": "claude-sonnet-4"
-}
+kiro-cli resolves an agent from the working directory's `.kiro/agents/` first, then from `~/.kiro/agents/`. howmux's pre-flight check accepts either.
+
+Setup:
+
+```bash
+ln -s ~/path/to/ai-resources/agents ~/.kiro/agents
+cd ~/path/to/ai-resources
+scripts/generate-agents.sh          # renders agents/<name>.json from agents/src/
+scripts/generate-skills.sh --link   # renders skills/ and links them into ~/.kiro/skills
 ```
 
-**builder.json** (worker):
-```json
-{
-  "name": "builder",
-  "description": "Focused engineering agent that executes ONE task at a time.",
-  "prompt": "file://./builder-prompt.md",
-  "tools": ["read", "write", "shell"],
-  "allowedTools": ["read", "write", "shell"],
-  "model": "claude-sonnet-4"
-}
-```
+To change an agent, edit its source in ai-resources (`agents/src/<name>.json`, `prompts/<name>.md`, or `prompts/<skill>.md` plus `skills.yaml`), regenerate, and commit there. The change applies everywhere once the ai-resources main checkout has it.
 
-**validator.json** (read-only verifier):
-```json
-{
-  "name": "validator",
-  "description": "Read-only validation agent that verifies task completion.",
-  "prompt": "file://./validator-prompt.md",
-  "tools": ["read", "shell"],
-  "allowedTools": ["read", "shell"],
-  "toolsSettings": {
-    "shell": { "autoAllowReadonly": true }
-  },
-  "model": "claude-sonnet-4"
-}
-```
+A repo can override one agent by committing its own `.kiro/agents/<name>.json`. kiro-cli prefers the workspace copy (with a warning), but the override won't pick up later fixes to the shared agent.
+
+### Per-repo conventions: `AGENTS.md`
+
+The agents are repo-neutral. Put rules that belong to one repo in an `AGENTS.md` at that repo's root: build and test commands, files that must be mirrored to another path, files generated from a source of truth (and the check that verifies them), and anything else a builder or validator must not miss. The planner reads it while scoping an issue, the architect names every mirrored or generated counterpart in its spec, and the builder applies the sync and generation rules before finishing. See this repo's [`AGENTS.md`](AGENTS.md).
 
 ### kiro-cli agent engine (ACP)
 
@@ -388,7 +367,7 @@ The krew-lead pipeline, the planning tab, and evals talk to `kiro-cli` over ACP.
 - `v3` starts `kiro-cli acp --agent-engine v3` and picks the agent for each session through the session's `mode` option, because the v3 engine rejects `--agent`. If the agent isn't in the session's mode list, howmux fails with an error. It does not fall back to the default agent.
 - `v2` starts `kiro-cli acp --agent-engine v2 --agent <name>`. It's kept as an opt-out until kiro-cli removes the v2 engine.
 
-The v3 engine only lists agents written in the universal config format (or the v3-only format). The agents and templates howmux ships are already in the universal format. If you add or edit an agent, run `kiro-cli agent upgrade .kiro/agents` and check the `permissions` it generates. Any other value for the variable is rejected.
+The v3 engine only lists agents written in the universal config format (or the v3-only format). The ai-resources agents are generated in the v3-only format. If you add a repo-local override in `.kiro/agents`, write it in the v3 format too. Any other value for the variable is rejected.
 
 ## GitHub Integration
 

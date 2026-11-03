@@ -194,7 +194,7 @@ AGENT=architect task eval:baseline
 # Edit .howmux/evals/cases/architect/complex-decomposition.yaml
 
 # 3. Modify architect prompt
-# Edit .kiro/agents/architect-prompt.md
+# Edit prompts/architect.md in ai-resources, then run scripts/generate-agents.sh there
 
 # 4. Verify improvement (deltas vs baseline; non-zero exit on regression)
 AGENT=architect task eval:baseline
