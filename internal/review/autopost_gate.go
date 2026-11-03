@@ -135,6 +135,7 @@ var discardReviewFunc = DiscardReview
 // failed.
 func EvaluateAndMaybePost(ctx context.Context, rec Record, body, verdict, headSHA, reviewedSHA, diff string, cfg AutoPostConfig, prior *LoadedPriorFeedback) (GateResult, error) {
 	audit := NewAuditLog(newRunID(), rec.Repo, rec.PR)
+	audit.TraceID = SpoolTraceID(rec.SpoolPath)
 
 	// Step 0: record the inputs, so the agreement report can tie this run to
 	// the exact review generation (reviewed_sha) a human later decided on.

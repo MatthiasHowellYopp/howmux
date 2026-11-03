@@ -448,6 +448,23 @@ func buildSpoolInfo(data []byte, inDoneDir bool) SpoolInfo {
 	}
 }
 
+// SpoolTraceID returns the spool's trace_id: front-matter value (the run_id of
+// the pr_review run that wrote it), looking in pending/ then done/. Returns ""
+// when the spool can't be found or read, or predates trace_id. Audit callers
+// use it to join their records to the review cycle; "" just leaves the record
+// unjoined.
+func SpoolTraceID(spoolPath string) string {
+	path, found, _ := resolveSpoolPath(spoolPath)
+	if !found {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(ParseSpoolFrontMatter(data)["trace_id"])
+}
+
 // derivePendingToDone swaps the last "pending" path segment for "done" in
 // spoolPath, returning "" if no "pending" segment is present to swap. This
 // mirrors the external finalize pipeline's move from ~/PR-Review/pending/

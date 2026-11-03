@@ -58,6 +58,7 @@ func auditDir() (string, error) {
 // steps (or when kiro-cli didn't report them); tokens / cost are always null.
 type auditRecord struct {
 	RunID           string   `json:"run_id"`
+	TraceID         *string  `json:"trace_id"` // the pr_review run_id this cycle started from; null if unknown
 	Pipeline        string   `json:"pipeline"`
 	Repo            string   `json:"repo"`
 	PR              string   `json:"pr"`
@@ -79,7 +80,11 @@ type auditRecord struct {
 // AuditLog is one gate invocation's audit trail. All steps of one run share a
 // RunID and land in the same .jsonl file. Construct with NewAuditLog.
 type AuditLog struct {
-	RunID    string
+	RunID string
+	// TraceID joins this run to the rest of its review cycle: the run_id of
+	// the pr_review run that produced the review, read from the spool's
+	// trace_id: key (see SpoolTraceID). "" when unknown (a legacy spool).
+	TraceID  string
 	Repo     string
 	PR       int
 	pipeline string // "" means auditPipeline (review_auto_post)
@@ -164,8 +169,15 @@ func (a *AuditLog) record(s auditStep) error {
 		}
 	}
 
+	var traceIDPtr *string
+	if a.TraceID != "" {
+		tid := a.TraceID
+		traceIDPtr = &tid
+	}
+
 	rec := auditRecord{
 		RunID:           a.RunID,
+		TraceID:         traceIDPtr,
 		Pipeline:        a.pipelineName(),
 		Repo:            a.Repo,
 		PR:              fmt.Sprintf("%d", a.PR),
