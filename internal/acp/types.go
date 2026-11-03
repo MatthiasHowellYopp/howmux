@@ -316,23 +316,44 @@ func ValidateConnectionConfig(config *ConnectionConfig) error {
 // kiro-cli 2.21.4, and again on 2.33.1 for both engines: v2 with an unknown
 // --agent, and v3 accepting session/set_config_option mode=<unknown>). So
 // detection after the fact is impossible; we instead fail loud up front by
-// checking the same file kiro-cli resolves the agent from
-// (<cwd>/.kiro/agents/<agent>.json). On the v3 engine, selectSessionAgent adds
-// a second, protocol-level check against the agents the session offers. This
-// restores the trustworthiness guarantee from issue #37 in a way that does not
-// depend on kiro-cli's ACP error reporting.
+// checking the same locations kiro-cli resolves agents from: the workspace
+// (<cwd>/.kiro/agents/<agent>.json) and the global agent directory
+// (~/.kiro/agents/<agent>.json). Checking the global directory lets a single
+// shared copy of the agents (e.g. a ~/.kiro/agents symlink into a resources
+// repo) serve every repo howmux runs in, without committing agent configs into
+// each one. On the v3 engine, selectSessionAgent adds a second, protocol-level
+// check against the agents the session offers. This restores the
+// trustworthiness guarantee from issue #37 in a way that does not depend on
+// kiro-cli's ACP error reporting.
 func ValidateAgentResolvable(cwd, agent string) error {
 	if agent == "" {
 		return ErrMissingConfigAgent
 	}
-	agentFile := filepath.Join(cwd, ".kiro", "agents", agent+".json")
-	if _, err := os.Stat(agentFile); err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("agent %q could not be resolved: no config at %s (kiro-cli would silently fall back to a default client)", agent, agentFile)
-		}
-		return fmt.Errorf("agent %q could not be resolved: %w", agent, err)
+	candidates := []string{filepath.Join(cwd, ".kiro", "agents", agent+".json")}
+	if globalDir, err := globalAgentsDirFunc(); err == nil && globalDir != "" {
+		candidates = append(candidates, filepath.Join(globalDir, agent+".json"))
 	}
-	return nil
+	for _, agentFile := range candidates {
+		_, err := os.Stat(agentFile)
+		if err == nil {
+			return nil
+		}
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("agent %q could not be resolved: %w", agent, err)
+		}
+	}
+	return fmt.Errorf("agent %q could not be resolved: no config at %s (kiro-cli would silently fall back to a default client)", agent, strings.Join(candidates, " or "))
+}
+
+// globalAgentsDirFunc returns kiro-cli's global agent directory
+// (~/.kiro/agents). Package var so tests can point it at a temp dir instead of
+// the real home directory.
+var globalAgentsDirFunc = func() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".kiro", "agents"), nil
 }
 
 // ValidateMessageRequest validates a MessageRequest
