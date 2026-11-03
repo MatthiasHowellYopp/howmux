@@ -14,12 +14,15 @@ import (
 
 // Common errors
 var (
-	ErrNotConnected          = errors.New("not connected to ACP server")
-	ErrAlreadyConnected      = errors.New("already connected to ACP server")
-	ErrConnectionFailed      = errors.New("failed to connect to ACP server")
-	ErrInvalidRequest        = errors.New("invalid request")                  // Use for MessageRequest validation
-	ErrInvalidConfig         = errors.New("invalid connection configuration") // Use for ConnectionConfig validation
-	ErrMissingConfigAgent    = errors.New("agent name is required in connection configuration")
+	ErrNotConnected       = errors.New("not connected to ACP server")
+	ErrAlreadyConnected   = errors.New("already connected to ACP server")
+	ErrConnectionFailed   = errors.New("failed to connect to ACP server")
+	ErrInvalidRequest     = errors.New("invalid request")                  // Use for MessageRequest validation
+	ErrInvalidConfig      = errors.New("invalid connection configuration") // Use for ConnectionConfig validation
+	ErrMissingConfigAgent = errors.New("agent name is required in connection configuration")
+	// ErrAgentNotFound is wrapped by ValidateAgentResolvable when no agent
+	// location has a config for the name (as opposed to a stat failure).
+	ErrAgentNotFound         = errors.New("agent config not found")
 	ErrMissingAgent          = errors.New("agent name is required")
 	ErrMissingMessage        = errors.New("message is required")
 	ErrInvalidResponseFormat = errors.New("response format must be 'json' or 'text'")
@@ -355,7 +358,7 @@ func ValidateAgentResolvable(cwd, agent string) error {
 	if statErr != nil {
 		return fmt.Errorf("agent %q could not be resolved: %w", agent, statErr)
 	}
-	return fmt.Errorf("agent %q could not be resolved: no config at %s (kiro-cli would silently fall back to a default client)", agent, strings.Join(candidates, " or "))
+	return fmt.Errorf("agent %q could not be resolved: %w: no config at %s (kiro-cli would silently fall back to a default client)", agent, ErrAgentNotFound, strings.Join(candidates, " or "))
 }
 
 // globalAgentsDirFunc returns kiro-cli's global agent directory

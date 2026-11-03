@@ -154,3 +154,12 @@ func TestValidateAgentResolvable_RealHomeDir(t *testing.T) {
 		t.Errorf("agent in $HOME/.kiro/agents should resolve: %v", err)
 	}
 }
+
+// Callers distinguish "no config anywhere" from other failures via
+// ErrAgentNotFound.
+func TestValidateAgentResolvable_NotFoundSentinel(t *testing.T) {
+	stubGlobalAgentsDir(t, t.TempDir(), nil)
+	if err := ValidateAgentResolvable(t.TempDir(), "missing"); !errors.Is(err, ErrAgentNotFound) {
+		t.Errorf("want ErrAgentNotFound, got %v", err)
+	}
+}
