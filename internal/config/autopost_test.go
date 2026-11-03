@@ -143,3 +143,27 @@ func TestLoad_AutoPostAuditorModelShapeAccepted(t *testing.T) {
 		})
 	}
 }
+
+func TestLoad_ReviewModel(t *testing.T) {
+	cfg, err := loadConfigFrom(t, "repo: test/repo\nreview:\n  model: \"  claude-sonnet-4.6 \"")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.Review.Model; got != "claude-sonnet-4.6" {
+		t.Errorf("Review.Model = %q, want trimmed claude-sonnet-4.6", got)
+	}
+
+	cfg, err = loadConfigFrom(t, "repo: test/repo")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.Review.Model; got != "" {
+		t.Errorf("default Review.Model = %q, want empty (kiro-cli default)", got)
+	}
+
+	for _, v := range []string{`claude sonnet`, `--help`, `"claude;rm"`} {
+		if _, err := loadConfigFrom(t, "repo: test/repo\nreview:\n  model: "+v); err == nil {
+			t.Errorf("expected error for review.model %s, got nil", v)
+		}
+	}
+}

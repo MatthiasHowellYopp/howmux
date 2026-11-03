@@ -364,6 +364,9 @@ func newModel(w *watcher.Watcher, m *agent.Manager, cfg *config.Config, logFile 
 		AuditorModel:  cfg.Review.AutoPost.AuditorModel,
 	}
 	reviewWatcher.SetAutoPostConfig(autoPostCfg)
+	// One pinned model for every agent step, so each step's model is
+	// recorded in the audit trail (kiro-cli's "auto" never names its pick).
+	review.SetReviewModel(cfg.Review.Model)
 	// The same config picks the prior-feedback issue scope for every review
 	// (watcher-driven, manual, and rereview): repos the gate can act on
 	// unsupervised get every open issue, others only related ones.

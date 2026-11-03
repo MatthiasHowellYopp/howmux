@@ -12,6 +12,9 @@ import (
 // checkAuditorModelFunc is a seam over review.CheckAuditorModel for tests.
 var checkAuditorModelFunc = review.CheckAuditorModel
 
+// checkReviewModelFunc is a seam over review.CheckReviewModel for tests.
+var checkReviewModelFunc = review.CheckReviewModel
+
 // validateAuditorModel checks review.auto_post.auditor_model against
 // kiro-cli's model list before the TUI starts. An unknown model is a startup
 // error: otherwise every auditor call fails and nothing ever auto-posts.
@@ -31,6 +34,23 @@ func validateAuditorModel(ctx context.Context, cfg *config.Config) (notice strin
 	}
 	if errors.Is(err, review.ErrModelListUnavailable) {
 		return fmt.Sprintf("PR-review: %v — auto-post may punch every review to you until this is fixed", err), nil
+	}
+	return "", fmt.Errorf("invalid config: %w", err)
+}
+
+// validateReviewModel checks review.model the same way validateAuditorModel
+// checks the auditor's model: an unknown model is a startup error (every
+// review agent call would fail); an unreadable model list is a notice.
+func validateReviewModel(ctx context.Context, cfg *config.Config) (notice string, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	err = checkReviewModelFunc(ctx, cfg.Review.Model)
+	if err == nil {
+		return "", nil
+	}
+	if errors.Is(err, review.ErrModelListUnavailable) {
+		return fmt.Sprintf("PR-review: %v — reviews may fail until this is fixed", err), nil
 	}
 	return "", fmt.Errorf("invalid config: %w", err)
 }
