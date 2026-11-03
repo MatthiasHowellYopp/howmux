@@ -169,7 +169,7 @@ func Load() (*Config, error) {
 	}
 	cfg.Review.Model = strings.TrimSpace(cfg.Review.Model)
 	if m := cfg.Review.Model; m != "" && !modelIDRe.MatchString(m) {
-		return nil, fmt.Errorf("review.model must be a single model id, e.g. claude-sonnet-4.6 (got %q)", cfg.Review.Model)
+		return nil, fmt.Errorf("review.model must be a single model id, e.g. claude-sonnet-5.5 (got %q)", cfg.Review.Model)
 	}
 	cfg.Review.AutoPost.AuditorModel = strings.TrimSpace(cfg.Review.AutoPost.AuditorModel)
 	if m := cfg.Review.AutoPost.AuditorModel; m != "" && !modelIDRe.MatchString(m) {
