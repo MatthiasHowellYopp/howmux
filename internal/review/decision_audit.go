@@ -34,6 +34,7 @@ type HumanDecision struct {
 	decision    string
 	verdict     string
 	reviewedSHA string
+	traceID     string    // the spool's trace_id (the pr_review run it came from)
 	start       time.Time // when the human decided; the record is stamped with it
 }
 
@@ -55,6 +56,7 @@ func BeginHumanDecision(rec Record, decision string) *HumanDecision {
 	fm := ParseSpoolFrontMatter(data)
 	hd.verdict = strings.ToUpper(strings.TrimSpace(fm["verdict"]))
 	hd.reviewedSHA = fm["reviewed_sha"]
+	hd.traceID = normalizeTraceID(fm["trace_id"])
 	if hd.reviewedSHA == "" {
 		hd.reviewedSHA = rec.LastReviewedSHA
 	}
@@ -69,6 +71,7 @@ func (hd *HumanDecision) Finish(actErr error) {
 		return
 	}
 	audit := NewAuditLog(newRunID(), hd.rec.Repo, hd.rec.PR)
+	audit.TraceID = hd.traceID
 	audit.pipeline = decisionPipeline
 	audit.subdir = decisionSubdir
 

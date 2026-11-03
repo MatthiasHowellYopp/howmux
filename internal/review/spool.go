@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -446,6 +447,39 @@ func buildSpoolInfo(data []byte, inDoneDir bool) SpoolInfo {
 		Decision:      decision,
 		DecisionState: ClassifySpoolState(true, inDoneDir, decision),
 	}
+}
+
+// SpoolTraceID returns the spool's trace_id: front-matter value (the run_id of
+// the pr_review run that wrote it), looking in pending/ then done/. Returns ""
+// when the spool can't be found or read, or predates trace_id. Audit callers
+// use it to join their records to the review cycle; "" just leaves the record
+// unjoined.
+func SpoolTraceID(spoolPath string) string {
+	path, found, _ := resolveSpoolPath(spoolPath)
+	if !found {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return normalizeTraceID(ParseSpoolFrontMatter(data)["trace_id"])
+}
+
+// traceIDRe is the accepted shape of a trace_id. pr_review.py writes a
+// 12-hex-character run_id; the wider set leaves room for a format change
+// while still rejecting hand-edited, corrupt or oversized values.
+var traceIDRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+// normalizeTraceID returns the trimmed trace_id, or "" if it isn't a valid
+// one. An invalid value is dropped rather than stored: the audit log is
+// append-only, and a bad id would join unrelated records into one cycle.
+func normalizeTraceID(v string) string {
+	v = strings.TrimSpace(v)
+	if !traceIDRe.MatchString(v) {
+		return ""
+	}
+	return v
 }
 
 // derivePendingToDone swaps the last "pending" path segment for "done" in
