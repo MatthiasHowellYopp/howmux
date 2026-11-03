@@ -56,7 +56,7 @@ func BeginHumanDecision(rec Record, decision string) *HumanDecision {
 	fm := ParseSpoolFrontMatter(data)
 	hd.verdict = strings.ToUpper(strings.TrimSpace(fm["verdict"]))
 	hd.reviewedSHA = fm["reviewed_sha"]
-	hd.traceID = strings.TrimSpace(fm["trace_id"])
+	hd.traceID = normalizeTraceID(fm["trace_id"])
 	if hd.reviewedSHA == "" {
 		hd.reviewedSHA = rec.LastReviewedSHA
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -118,6 +119,93 @@ func TestTraceID_LegacySpoolIsNull(t *testing.T) {
 			t.Errorf("%s/%s: trace_id key missing", r["pipeline"], r["step"])
 		} else if v != nil {
 			t.Errorf("%s/%s: trace_id = %v, want null", r["pipeline"], r["step"], v)
+		}
+	}
+}
+
+// writeDoneSpool writes the spool under <root>/done/ (where finalize moves
+// it) and returns the pending/ path a Record would still carry.
+func writeDoneSpool(t *testing.T, root, name, extraFront string) string {
+	t.Helper()
+	done := filepath.Join(root, "done", name)
+	if err := os.MkdirAll(filepath.Dir(done), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	front := "---\nrepo: Bit-Quill/flowdra\npr: 42\nverdict: COMMENT\ndecision:\nreviewed_sha: abc123\n" + extraFront + "---\n\n# Review\n"
+	if err := os.WriteFile(done, []byte(front), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(root, "pending", name)
+}
+
+// Once finalize has moved the spool to done/, the trace_id is still found
+// from the pending/ path, by SpoolTraceID and by a human decision.
+func TestTraceID_FoundInDoneDir(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("PR_REVIEW_DIR", root)
+	pending := writeDoneSpool(t, root, "pr-review-Bit-Quill-flowdra-42.md", "trace_id: 3f2a9c1d0b7e\n")
+	if _, err := os.Stat(pending); !os.IsNotExist(err) {
+		t.Fatalf("pending/ copy must not exist for this test (stat err %v)", err)
+	}
+
+	if got := SpoolTraceID(pending); got != "3f2a9c1d0b7e" {
+		t.Errorf("SpoolTraceID(pending path, spool in done/) = %q, want 3f2a9c1d0b7e", got)
+	}
+
+	BeginHumanDecision(Record{Repo: "Bit-Quill/flowdra", PR: 42, SpoolPath: pending}, "post").Finish(nil)
+	recs := allAuditRecords(t, root)
+	if len(recs) != 1 {
+		t.Fatalf("want 1 decision record, got %d", len(recs))
+	}
+	if recs[0]["trace_id"] != "3f2a9c1d0b7e" {
+		t.Errorf("decision trace_id = %v, want 3f2a9c1d0b7e", recs[0]["trace_id"])
+	}
+}
+
+func TestNormalizeTraceID(t *testing.T) {
+	for in, want := range map[string]string{
+		"3f2a9c1d0b7e":          "3f2a9c1d0b7e",
+		"  3f2a9c1d0b7e \t":     "3f2a9c1d0b7e",
+		"run_ID-2":              "run_ID-2",
+		"":                      "",
+		"has space":             "",
+		"3f2a;rm -rf":           "",
+		"../../etc":             "",
+		"tráce":                 "",
+		strings.Repeat("a", 64): strings.Repeat("a", 64),
+		strings.Repeat("a", 65): "",
+	} {
+		if got := normalizeTraceID(in); got != want {
+			t.Errorf("normalizeTraceID(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// A malformed trace_id in the spool is recorded as null, not stored as-is,
+// by both the gate and the human decision.
+func TestTraceID_MalformedValueIsNull(t *testing.T) {
+	withFakeActions(t)
+	withKiroCLIPresent(t)
+	withFakeKiroOneshot(t, map[string]string{reviewAuditorAgent: "VERDICT: POST_OK"}, nil)
+	root := t.TempDir()
+	t.Setenv("PR_REVIEW_DIR", root)
+
+	rec, body, verdict, head, reviewed, diff := gateFixture()
+	rec.SpoolPath = writeTraceSpool(t, root, "pr-review-Bit-Quill-flowdra-42.md", "trace_id: not a trace id; DROP\n")
+
+	cfg := AutoPostConfig{Mode: ModeDryRun, MaxFindings: 25}
+	if _, err := EvaluateAndMaybePost(context.Background(), rec, body, verdict, head, reviewed, diff, cfg, nil); err != nil {
+		t.Fatal(err)
+	}
+	BeginHumanDecision(rec, "discard").Finish(nil)
+
+	recs := allAuditRecords(t, root)
+	if len(recs) == 0 {
+		t.Fatal("no audit records written")
+	}
+	for _, r := range recs {
+		if v, present := r["trace_id"]; !present || v != nil {
+			t.Errorf("%s/%s: trace_id = %v (present %v), want explicit null", r["pipeline"], r["step"], v, present)
 		}
 	}
 }
