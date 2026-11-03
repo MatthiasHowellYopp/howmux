@@ -70,6 +70,7 @@ type auditRecord struct {
 	TurnDurationMs  *float64 `json:"turn_duration_ms"`  // kiro-cli stream-json; null if not reported
 	ContextUsagePct *float64 `json:"context_usage_pct"` // kiro-cli stream-json; null if not reported
 	Engine          *string  `json:"engine"`            // "v2" | "v3"; null for deterministic steps
+	CreditRate      *float64 `json:"credit_rate"`       // model's credit rate multiplier; null if not reported
 	DurationMs      int64    `json:"duration_ms"`       // wall-clock, always captured
 	Tokens          *int64   `json:"tokens"`            // ALWAYS null — kiro-cli reports none
 	Cost            *int64   `json:"cost"`              // ALWAYS null — kiro-cli reports none
@@ -153,7 +154,7 @@ func (a *AuditLog) record(s auditStep) error {
 		agentPtr = &s.agent
 	}
 	var modelPtr, enginePtr *string
-	var turnDurationMs, contextUsagePct *float64
+	var turnDurationMs, contextUsagePct, creditRate *float64
 	var durationMs int64
 	if s.meta != nil {
 		durationMs = s.meta.DurationMs
@@ -167,6 +168,7 @@ func (a *AuditLog) record(s auditStep) error {
 			e := s.meta.Engine
 			enginePtr = &e
 		}
+		creditRate = s.meta.CreditRate
 	}
 
 	var traceIDPtr *string
@@ -189,6 +191,7 @@ func (a *AuditLog) record(s auditStep) error {
 		TurnDurationMs:  turnDurationMs,
 		ContextUsagePct: contextUsagePct,
 		Engine:          enginePtr,
+		CreditRate:      creditRate,
 		DurationMs:      durationMs,
 		Tokens:          nil,
 		Cost:            nil,

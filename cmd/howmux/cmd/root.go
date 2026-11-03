@@ -45,6 +45,10 @@ var rootCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		modelNotice, err := validateReviewModel(cmd.Context(), cfg)
+		if err != nil {
+			return err
+		}
 
 		manager := agent.NewManager(cfg)
 		w := watcher.New(cfg, manager)
@@ -52,7 +56,7 @@ var rootCmd = &cobra.Command{
 		defer manager.StopAll()
 		defer w.Stop()
 
-		return tui.Run(w, manager, cfg, "", notice)
+		return tui.Run(w, manager, cfg, "", notice, modelNotice)
 	},
 }
 

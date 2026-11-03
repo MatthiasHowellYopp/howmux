@@ -217,11 +217,13 @@ review:
     auditor_model: claude-sonnet-5.5   # pin the review-auditor's model (default: kiro-cli's)
 ```
 
-`auditor_model` matters for the agreement rate. kiro-cli's stream-json output
-doesn't say which model ran a turn, and an unpinned agent runs on kiro-cli's
-default (`auto`), which can change from run to run. Pinning the model keeps the
-measurement stable and is the only way the audit record's `model` field gets a
-value; unpinned runs record `null` rather than a guess.
+`auditor_model` matters for the agreement rate. An unpinned agent runs on
+kiro-cli's default (`auto`), which can change from run to run, and kiro-cli's
+stream-json reports only `auto`, never the model its router picked. Pinning the
+model keeps the measurement stable and is the only way the audit record's
+`model` field names a real model; unpinned runs record `auto`. If
+`auditor_model` is unset, the auditor uses `review.model`, the model pinned for
+the whole review workflow.
 
 ## Audit trail (feeds Stage 4 Audit Trail + E2E rate)
 
