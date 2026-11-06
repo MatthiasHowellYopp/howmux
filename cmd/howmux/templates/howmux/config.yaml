@@ -16,10 +16,11 @@ enable_copilot_review: true  # Enable AI-powered code review feedback
 # human. Default is dry-run: the gate records what it would do but always leaves
 # the review for a human. See the PR Review Workflow section of the README.
 # review:
+#   model: claude-sonnet-5.5   # one model for every review agent step (the default); match the evals' model
 #   auto_post:
 #     mode: dry-run            # dry-run | own-repos | all
 #     max_findings: 25         # guardrail cap; 0 disables the count check
 #     own_repo_owners:         # owners auto-posted in own-repos mode
 #       - matthiashowellyopp
 #       - Bit-Quill
-#     auditor_model: claude-sonnet-5.5  # optional; default is kiro-cli's (auto)
+#     auditor_model: claude-sonnet-5.5  # optional; default is review.model

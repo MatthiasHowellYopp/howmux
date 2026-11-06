@@ -231,3 +231,53 @@ exit 4
 		t.Errorf("engine log noise should not replace the runError message: %q", err)
 	}
 }
+
+// modelOption is a config_option_update as kiro-cli 3.0 emits it: the model
+// select with its currentValue and each option's credit rateMultiplier.
+func modelOption(sid, current string) m {
+	return m{"type": "sessionUpdate", "data": m{"sessionId": sid, "update": m{
+		"sessionUpdate": "config_option_update",
+		"configOptions": []any{
+			m{"id": "mode", "type": "select", "currentValue": "vibe", "options": []any{}},
+			m{"id": "model", "type": "select", "currentValue": current, "options": []any{
+				m{"value": "auto", "_meta": m{"kiro": m{"rateMultiplier": 1, "rateUnit": "Credit"}}},
+				m{"value": "claude-sonnet-4.6", "_meta": m{"kiro": m{"rateMultiplier": 1.3, "rateUnit": "Credit"}}},
+				m{"value": "claude-no-rate", "_meta": m{"kiro": m{}}},
+			}},
+		}}}}
+}
+
+// TestParseStreamJSON_Model mirrors the model cases in ai-resources
+// workflows/tests/test_oneshot_parse.py. Keep the two in lockstep.
+func TestParseStreamJSON_Model(t *testing.T) {
+	finished := func(sid string) m {
+		return m{"type": "runFinished", "data": m{"sessionId": sid, "finalText": "OK"}}
+	}
+	cases := []struct {
+		name      string
+		stream    string
+		wantModel string
+		wantRate  *float64
+	}{
+		{"model_auto", lines(t, modelOption("s5", "auto"), finished("s5")), "auto", f(1)},
+		{"model_pinned_last_wins", lines(t, modelOption("s6", "auto"), modelOption("s6", "claude-sonnet-4.6"), finished("s6")), "claude-sonnet-4.6", f(1.3)},
+		{"model_without_rate", lines(t, modelOption("s7", "claude-no-rate"), finished("s7")), "claude-no-rate", nil},
+		{"model_absent", lines(t, chunk("s8", "hi"), finished("s8")), "", nil},
+		// A later model without a rate must not inherit the earlier one's.
+		{"model_rate_reset", lines(t, modelOption("s9", "auto"), modelOption("s9", "claude-no-rate"), finished("s9")), "claude-no-rate", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, meta := ParseStreamJSON(tc.stream)
+			if meta.Model != tc.wantModel {
+				t.Errorf("Model = %q, want %q", meta.Model, tc.wantModel)
+			}
+			switch {
+			case tc.wantRate == nil && meta.CreditRate != nil:
+				t.Errorf("CreditRate = %v, want nil", *meta.CreditRate)
+			case tc.wantRate != nil && (meta.CreditRate == nil || *meta.CreditRate != *tc.wantRate):
+				t.Errorf("CreditRate = %v, want %v", meta.CreditRate, *tc.wantRate)
+			}
+		})
+	}
+}

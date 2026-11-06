@@ -189,6 +189,7 @@ Configure it under `review.auto_post` in `.howmux/config.yaml`:
 
 ```yaml
 review:
+  model: claude-sonnet-5.5        # one model for every review agent step
   auto_post:
     mode: dry-run                 # dry-run | own-repos | all
     max_findings: 25              # guardrail cap; 0 disables the count check
@@ -204,7 +205,7 @@ review:
 | `own-repos` | Auto-posts/discards only for PRs whose owner is in `own_repo_owners`; every other repo is left for a human. |
 | `all` | Auto-posts/discards for every repo the gate clears. |
 
-`auditor_model` is passed to `kiro-cli` as `--model` and recorded in the audit trail. Leave it unset to use kiro-cli's default (usually `auto`). Pinning it is recommended while you're measuring agreement: `auto` can pick a different model on each run, and kiro-cli doesn't report which one it used, so unpinned runs record `model` as null. `kiro-cli chat --list-models` shows the available ids.
+`review.model` pins the model for every agent step of the review: `pr_review.py`'s lenses and consolidator (passed as `--model`), the humanizer, the revise consolidator, and the auditor. `auditor_model` overrides it for the auditor only; leave it unset so the whole workflow runs on one model. Set `review.model` to the model the Stage 3 evals measure, `kiro_oneshot.WORKFLOW_MODEL` in ai-resources (currently `claude-sonnet-5.5`; the eval suites pin the same model). An eval only certifies an agent for the model it ran on. If the key is absent it defaults to `claude-sonnet-5.5`, the same model `pr_review.py` falls back to, so every step runs on one model. Setting `model: ""` opts out to kiro-cli's `auto` for howmux's own steps (humanizer, revise, auditor) only. `pr_review.py` still uses `WORKFLOW_MODEL`, which splits the workflow, and `auto`'s router can pick a different model on each run while reporting only `auto`, so the audit trail can't name it. Each audit record also carries the model's `credit_rate` (kiro-cli's rate multiplier, a relative cost rate, not credits consumed). Both models are checked against `kiro-cli chat --list-models` at startup.
 
 An `own_repo_owners` entry is the owner part of `owner/repo` (e.g. `Bit-Quill` for `github.com/Bit-Quill/flowdra`) and covers every repo under that owner.
 

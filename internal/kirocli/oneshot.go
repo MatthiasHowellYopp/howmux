@@ -58,6 +58,16 @@ type Meta struct {
 	SessionID       string
 	Engine          string // runStarted.engine: "v2" | "v3" ("" if absent)
 
+	// Model is the session's model option currentValue (V3
+	// config_option_update): the pinned --model, or "auto" when none was
+	// passed (kiro-cli's router then picks and never names the model). ""
+	// if the stream didn't carry it. The last update wins.
+	Model string
+	// CreditRate is Model's rateMultiplier from the same option (relative
+	// credit cost per unit of usage); nil if not reported. A rate, not
+	// credits consumed: kiro-cli reports no usage totals.
+	CreditRate *float64
+
 	// RunError is the last runError event's "<stage>: <message>" ("" if
 	// none). In stream-json mode both engines report failures (e.g. an
 	// unknown agent) this way on stdout; stderr is empty on v2 and engine
@@ -110,7 +120,40 @@ type eventData struct {
 				UsagePercentage *float64 `json:"usagePercentage"`
 			} `json:"kiro"`
 		} `json:"_meta"`
+		ConfigOptions []configOption `json:"configOptions"`
 	} `json:"update"`
+}
+
+// configOption is one entry of a V3 config_option_update. Only the "model"
+// select is read.
+type configOption struct {
+	ID           string `json:"id"`
+	CurrentValue string `json:"currentValue"`
+	Options      []struct {
+		Value string `json:"value"`
+		Meta  *struct {
+			Kiro *struct {
+				RateMultiplier *float64 `json:"rateMultiplier"`
+			} `json:"kiro"`
+		} `json:"_meta"`
+	} `json:"options"`
+}
+
+// applyModelOption records the model option's current value and its rate.
+func (m *Meta) applyModelOption(opts []configOption) {
+	for _, o := range opts {
+		if o.ID != "model" || o.CurrentValue == "" {
+			continue
+		}
+		m.Model = o.CurrentValue
+		m.CreditRate = nil
+		for _, v := range o.Options {
+			if v.Value == o.CurrentValue && v.Meta != nil && v.Meta.Kiro != nil && v.Meta.Kiro.RateMultiplier != nil {
+				r := *v.Meta.Kiro.RateMultiplier
+				m.CreditRate = &r
+			}
+		}
+	}
 }
 
 // ParseStreamJSON parses `--output-format stream-json` stdout and returns the
@@ -174,6 +217,8 @@ func ParseStreamJSON(stdout string) (string, Meta) {
 					if u.Content != nil && u.Content.Type == "text" {
 						chunks.WriteString(u.Content.Text)
 					}
+				case "config_option_update": // V3
+					meta.applyModelOption(u.ConfigOptions)
 				case "session_info_update": // V3
 					if u.Meta != nil && u.Meta.Kiro != nil {
 						k := u.Meta.Kiro

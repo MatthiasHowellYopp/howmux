@@ -165,7 +165,7 @@ func EvaluateAndMaybePost(ctx context.Context, rec Record, body, verdict, headSH
 	if prior != nil {
 		priorJSON = prior.Raw
 	}
-	ar := callReviewAuditor(ctx, rec.Repo, rec.PR, verdict, body, diff, cfg.AuditorModel, priorJSON)
+	ar := callReviewAuditor(ctx, rec.Repo, rec.PR, verdict, body, diff, auditorModelFor(cfg), priorJSON)
 	auditorStatus := "pass"
 	if ar.meta.Status == "error" {
 		auditorStatus = "error"

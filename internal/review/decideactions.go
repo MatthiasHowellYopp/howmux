@@ -418,7 +418,7 @@ shorter; do not add findings, rationale or caveats.
 %s
 --- END TEXT ---`, body)
 
-	res, err := kiroOneshotFunc(ctx, "humanizer", "", prompt)
+	res, err := kiroOneshotFunc(ctx, "humanizer", ReviewModel(), prompt)
 	if err != nil {
 		logging.Debug("humanizeReviewBody: degraded to original body", "error", err)
 		return body
@@ -998,7 +998,7 @@ func ReviseReview(ctx context.Context, rec Record, inlineNotes string) (newVerdi
 	}
 
 	prompt := buildRevisePrompt(body, notes)
-	res, err := kiroOneshotFunc(ctx, "review-consolidator", "", prompt)
+	res, err := kiroOneshotFunc(ctx, "review-consolidator", ReviewModel(), prompt)
 	if err != nil {
 		return "", fmt.Errorf("revise failed for %s#%d: %w", rec.Repo, rec.PR, err)
 	}
@@ -1094,6 +1094,7 @@ func RereviewReview(ctx context.Context, rec Record, inlineNotes string) (newVer
 		"--pr", strconv.Itoa(rec.PR),
 		"--language", language,
 	}
+	argv = withModelArg(argv, ReviewModel())
 	if strings.EqualFold(strings.TrimSpace(fields["valkey"]), "true") {
 		argv = append(argv, "--valkey")
 	}

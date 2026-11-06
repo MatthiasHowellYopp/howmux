@@ -310,6 +310,7 @@ func RunReview(ctx context.Context, rec Record, headSHA string, storeImpl StoreI
 		"--language", "auto",
 		"--issues", issueScopeFor(rec.Repo),
 	}
+	argv = withModelArg(argv, ReviewModel())
 
 	logging.Debug("invoking pr_review.py", "argv", strings.Join(argv, " "))
 

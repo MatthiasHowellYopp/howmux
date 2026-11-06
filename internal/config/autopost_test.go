@@ -143,3 +143,45 @@ func TestLoad_AutoPostAuditorModelShapeAccepted(t *testing.T) {
 		})
 	}
 }
+
+func TestLoad_ReviewModel(t *testing.T) {
+	cfg, err := loadConfigFrom(t, "repo: test/repo\nreview:\n  model: \"  claude-sonnet-4.6 \"")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.Review.Model; got != "claude-sonnet-4.6" {
+		t.Errorf("Review.Model = %q, want trimmed claude-sonnet-4.6", got)
+	}
+
+	cfg, err = loadConfigFrom(t, "repo: test/repo")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.Review.Model; got != DefaultReviewModel {
+		t.Errorf("default Review.Model = %q, want %q", got, DefaultReviewModel)
+	}
+
+	// A review block without a model key still gets the default.
+	cfg, err = loadConfigFrom(t, "repo: test/repo\nreview:\n  auto_post:\n    mode: dry-run")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.Review.Model; got != DefaultReviewModel {
+		t.Errorf("review block without model: Review.Model = %q, want %q", got, DefaultReviewModel)
+	}
+
+	// An explicit empty model opts out to kiro-cli's default.
+	cfg, err = loadConfigFrom(t, "repo: test/repo\nreview:\n  model: \"\"")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.Review.Model; got != "" {
+		t.Errorf("explicit empty model: Review.Model = %q, want empty", got)
+	}
+
+	for _, v := range []string{`claude sonnet`, `--help`, `"claude;rm"`} {
+		if _, err := loadConfigFrom(t, "repo: test/repo\nreview:\n  model: "+v); err == nil {
+			t.Errorf("expected error for review.model %s, got nil", v)
+		}
+	}
+}

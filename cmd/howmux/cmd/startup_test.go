@@ -64,3 +64,46 @@ func TestValidateAuditorModel(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateReviewModel(t *testing.T) {
+	unknown := errors.New(`review.model "calude-sonnet-4.6" is not a model kiro-cli offers`)
+	unavailable := fmt.Errorf("%w: kiro-cli not found", review.ErrModelListUnavailable)
+
+	cases := map[string]struct {
+		checkErr   error
+		wantErr    bool
+		wantNotice bool
+	}{
+		"valid model":      {checkErr: nil},
+		"unknown model":    {checkErr: unknown, wantErr: true},
+		"list unavailable": {checkErr: unavailable, wantNotice: true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			orig := checkReviewModelFunc
+			var gotModel string
+			checkReviewModelFunc = func(_ context.Context, model string) error {
+				gotModel = model
+				return tc.checkErr
+			}
+			t.Cleanup(func() { checkReviewModelFunc = orig })
+
+			cfg := &config.Config{}
+			cfg.Review.Model = "some-model"
+			notice, err := validateReviewModel(context.Background(), cfg)
+
+			if gotModel != "some-model" {
+				t.Errorf("checked model %q, want the configured one", gotModel)
+			}
+			if tc.wantErr != (err != nil) {
+				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if tc.wantErr && (!errors.Is(err, tc.checkErr) || !strings.HasPrefix(err.Error(), "invalid config: ")) {
+				t.Errorf("err %q should wrap the check error with the invalid config: prefix", err)
+			}
+			if got := notice != ""; got != tc.wantNotice {
+				t.Errorf("notice = %q, want notice %v", notice, tc.wantNotice)
+			}
+		})
+	}
+}
