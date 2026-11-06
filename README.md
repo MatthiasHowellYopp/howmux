@@ -169,8 +169,8 @@ For the manual/headless flow, editing the single-line `decision_notes:` field in
 
 By default every review waits for a human to set its decision. The auto-post gate can remove that step for reviews that clearly pass, so only doubtful ones reach you. After a review completes — on both the automatic watcher loop and a manual `howmux review <URL>` — the gate runs two layers in order:
 
-1. **Deterministic guardrail** (pure, no model): the verdict parses, every finding anchors to the PR diff, the reviewed SHA matches the current head, the record and body verdicts agree, no machine paths or key-shaped tokens appear in the body, and the finding count is under the cap. A failure here never auto-posts — it leaves the review in `pending/` for you.
-2. **Adversarial auditor** (the `review-auditor` agent): runs only if the guardrail passes, and challenges the review against the diff. It returns `POST_OK` (auto-post), `NEEDS_HUMAN` (leave in `pending/`), or `DISCARD` (archive without posting).
+1. **Deterministic guardrail** (pure, no model): the verdict parses, every finding anchors to the PR diff, the reviewed SHA matches the current head, the record and body verdicts agree, no machine paths or key-shaped tokens appear in the body, the finding count is under the cap, and the review's prompt-injection scan (the spool's `injection_guard:` key) didn't flag the PR or the review. A failure here never auto-posts — it leaves the review in `pending/` for you.
+2. **Adversarial auditor** (the `review-auditor` agent): runs only if the guardrail passes, and challenges the review against the diff. It returns `POST_OK` (auto-post), `NEEDS_HUMAN` (leave in `pending/`), or `DISCARD` (archive without posting). If the auditor's `NOTES:` line starts with `INJECTION:`, it found an injected instruction in the review, and the gate leaves the review for you whatever the verdict.
 
 The gate is **fail-closed**: anything it cannot be sure about — a failed check, a `NEEDS_HUMAN` verdict, or the auditor agent not being installed — leaves the review for a human. It can only reduce your review load, never post something you never saw.
 

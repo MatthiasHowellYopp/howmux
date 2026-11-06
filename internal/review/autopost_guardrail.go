@@ -78,6 +78,8 @@ var secretPathMarkers = []*regexp.Regexp{
 //   - maxFindings: the finding-count cap (check #6)
 //   - prior:       the spool's prior feedback as loaded by the caller; nil when
 //     the spool has no prior_feedback key (check #7)
+//   - injectionGuard: the spool's injection_guard front-matter value, as
+//     returned by injectionGuardValue; "" when the key is absent (check #8)
 //
 // The checks, in order (all deterministic):
 //  1. verdict_parseable  — parseVerdict(body) != "UNKNOWN"
@@ -88,7 +90,9 @@ var secretPathMarkers = []*regexp.Regexp{
 //  6. finding_count         — finding count within [0, maxFindings]
 //  7. not_already_raised    — no finding sits on an open (unresolved, not
 //     outdated) prior review thread
-func evaluateAutoPostGuardrail(verdict, body, headSHA, reviewedSHA string, commentable map[string]map[int]bool, maxFindings int, language string, prior *LoadedPriorFeedback) gateResult {
+//  8. no_injection          — pr_review.py's prompt-injection scan did not
+//     flag the PR content or the review body
+func evaluateAutoPostGuardrail(verdict, body, headSHA, reviewedSHA string, commentable map[string]map[int]bool, maxFindings int, language string, prior *LoadedPriorFeedback, injectionGuard string) gateResult {
 	var checks []gateCheck
 
 	// 0. A generic (non-specialist) review is never auto-posted. It covers a
@@ -192,6 +196,9 @@ func evaluateAutoPostGuardrail(verdict, body, headSHA, reviewedSHA string, comme
 	// 7. Not already raised.
 	checks = append(checks, checkNotAlreadyRaised(body, prior))
 
+	// 8. No prompt injection flagged by pr_review.py's scan.
+	checks = append(checks, checkNoInjection(injectionGuard))
+
 	clean := true
 	for _, c := range checks {
 		if !c.passed {
@@ -270,4 +277,57 @@ func checkNotAlreadyRaised(body string, prior *LoadedPriorFeedback) gateCheck {
 			detail: "findings repeat open prior review threads: " + strings.Join(hits, ", ")}
 	}
 	return gateCheck{name: name, passed: true}
+}
+
+// injectionGuardKey is the spool front-matter key pr_review.py writes with the
+// result of its deterministic prompt-injection scan over the PR content and
+// the consolidated review body.
+const injectionGuardKey = "injection_guard"
+
+// Placeholder injection_guard values for states the scan itself never writes.
+// Neither is "clean" or "context:…", so checkNoInjection fails them closed.
+const (
+	injectionGuardBlank      = "(blank)"
+	injectionGuardUnreadable = "(spool front-matter unreadable)"
+)
+
+// injectionGuardValue returns the spool's injection_guard value for
+// checkNoInjection: "" when the key is absent (a spool written before the scan
+// existed), injectionGuardBlank when the key is present with no value, else
+// the value as written.
+func injectionGuardValue(fm map[string]string) string {
+	v, present := fm[injectionGuardKey]
+	if !present {
+		return ""
+	}
+	if strings.TrimSpace(v) == "" {
+		return injectionGuardBlank
+	}
+	return v
+}
+
+// checkNoInjection fails when pr_review.py's prompt-injection scan flagged
+// the review. The spool's injection_guard value is one of:
+//
+//   - "clean"                 — no hits; passes
+//   - "context: <n>"          — hits only in unchanged diff context lines; the
+//     lenses were warned, so it passes
+//   - "flagged: <sources>"    — hits in changed lines, the PR body or the
+//     review body; fails (a human must look)
+//
+// Matching is case-insensitive after trimming spaces. An absent key ("", an
+// older spool) passes, the same convention as a missing prior_feedback key.
+// Any other value — blank, unreadable front-matter, or a word the scan does
+// not write — fails closed: the gate cannot tell it is safe.
+func checkNoInjection(value string) gateCheck {
+	const name = "no_injection"
+	v := strings.ToLower(strings.TrimSpace(value))
+	switch {
+	case v == "", v == "clean", strings.HasPrefix(v, "context:"):
+		return gateCheck{name: name, passed: true, detail: fmt.Sprintf("injection_guard %q", value)}
+	case strings.HasPrefix(v, "flagged"):
+		return gateCheck{name: name, passed: false, detail: fmt.Sprintf("injection_guard %q: prompt-injection text in PR content or review body", strings.TrimSpace(value))}
+	default:
+		return gateCheck{name: name, passed: false, detail: fmt.Sprintf("injection_guard %q: unrecognized value, failing closed", strings.TrimSpace(value))}
+	}
 }

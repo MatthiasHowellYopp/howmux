@@ -251,7 +251,7 @@ func TestEvaluateAutoPostGuardrail(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := evaluateAutoPostGuardrail(tt.verdict, tt.body, tt.headSHA, tt.reviewedSHA, tt.commentable, tt.maxFindings, tt.language, tt.prior)
+			got := evaluateAutoPostGuardrail(tt.verdict, tt.body, tt.headSHA, tt.reviewedSHA, tt.commentable, tt.maxFindings, tt.language, tt.prior, "")
 			if got.clean != tt.wantClean {
 				t.Fatalf("clean = %v, want %v (checks: %+v)", got.clean, tt.wantClean, got.checks)
 			}
@@ -354,14 +354,14 @@ func TestCheckNotAlreadyRaised(t *testing.T) {
 // wired into the aggregate result.
 func TestEvaluateAutoPostGuardrail_NotAlreadyRaised(t *testing.T) {
 	prior := priorWithThreads(PriorThread{Path: "internal/foo.go", Line: intPtr(10)})
-	got := evaluateAutoPostGuardrail("COMMENT", cleanBody, "abc", "abc", commentableFixture(), 25, "go", prior)
+	got := evaluateAutoPostGuardrail("COMMENT", cleanBody, "abc", "abc", commentableFixture(), 25, "go", prior, "")
 	if got.clean {
 		t.Fatal("clean = true, want the not_already_raised check to fail")
 	}
 	if ff := got.firstFailure(); !strings.Contains(ff, "not_already_raised") || !strings.Contains(ff, "internal/foo.go:10") {
 		t.Errorf("firstFailure() = %q", ff)
 	}
-	if got := evaluateAutoPostGuardrail("COMMENT", cleanBody, "abc", "abc", commentableFixture(), 25, "go", nil); !got.clean {
+	if got := evaluateAutoPostGuardrail("COMMENT", cleanBody, "abc", "abc", commentableFixture(), 25, "go", nil, ""); !got.clean {
 		t.Errorf("nil prior should be clean, got %q", got.firstFailure())
 	}
 }

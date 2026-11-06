@@ -49,6 +49,10 @@ type AutoPostConfig struct {
 	OwnRepoOwners []string     // owners allowed to auto-post in own-repos mode (owner part of owner/repo)
 	AuditorModel  string       // kiro-cli --model for the review-auditor; "" = kiro-cli's default
 	Language      string       // the review's language lens (spool "language:"); "generic" is forced to a human
+	// InjectionGuard is the spool's "injection_guard:" value (see
+	// injectionGuardValue); "" when absent. A "flagged…" value is forced to a
+	// human by the no_injection guardrail check.
+	InjectionGuard string
 }
 
 // ActsOn reports whether the trust mode lets the gate take a real action
@@ -148,7 +152,7 @@ func EvaluateAndMaybePost(ctx context.Context, rec Record, body, verdict, headSH
 
 	// Step 1: deterministic guardrail.
 	commentable := parseDiffCommentableLines(diff)
-	g := evaluateAutoPostGuardrail(verdict, body, headSHA, reviewedSHA, commentable, cfg.MaxFindings, cfg.Language, prior)
+	g := evaluateAutoPostGuardrail(verdict, body, headSHA, reviewedSHA, commentable, cfg.MaxFindings, cfg.Language, prior, cfg.InjectionGuard)
 	if !g.clean {
 		reason := "guardrail failed: " + g.firstFailure()
 		recordAudit(audit, auditStep{step: "guardrail", status: "fail", detail: reason})
@@ -189,11 +193,30 @@ func EvaluateAndMaybePost(ctx context.Context, rec Record, body, verdict, headSH
 		would = outcomePunted
 	}
 
+	// Late catch: the auditor marks injected instructions it found in the
+	// review body with a NOTES: INJECTION: line. That always goes to a human,
+	// whatever verdict the auditor gave, since the verdict itself may be what
+	// the injected text asked for.
+	injectionReason := ""
+	if note, ok := auditorInjectionNote(ar.meta.Answer); ok {
+		if note == "" {
+			note = "(no text quoted)"
+		}
+		note = truncateRunes(note, maxInjectionNoteRunes)
+		recordAudit(audit, auditStep{step: "injection", status: "fail", detail: "caught late by auditor: " + note})
+		injectionReason = "auditor flagged prompt injection in the review: " + note
+		would = outcomePunted
+	}
+
 	// Step 3: apply trust mode. Dry-run never acts. own-repos acts only for
 	// permitted owners. A would-be punch is a punch regardless of mode.
 	if cfg.Mode == "" || cfg.Mode == ModeDryRun {
 		recordAudit(audit, auditStep{step: "outcome", status: "pass", detail: "dry-run; would " + string(would)})
 		return GateResult{Outcome: outcomeDryRun, WouldHaveDone: would, Reason: "dry-run; would " + string(would)}, nil
+	}
+	if injectionReason != "" {
+		recordAudit(audit, auditStep{step: "outcome", status: "pass", detail: string(outcomePunted) + " (auditor caught prompt injection)"})
+		return GateResult{Outcome: outcomePunted, WouldHaveDone: outcomePunted, Reason: injectionReason}, nil
 	}
 	if would == outcomePunted {
 		recordAudit(audit, auditStep{step: "outcome", status: "pass", detail: string(outcomePunted) + " (auditor NEEDS_HUMAN)"})
@@ -274,6 +297,41 @@ func ownerAllowed(repo string, owners []string) bool {
 	return false
 }
 
+// readSpoolFileFunc reads the spool for its front-matter; a seam for tests.
+var readSpoolFileFunc = os.ReadFile
+
+// spoolGateInputs are the gate inputs taken from the spool front-matter.
+type spoolGateInputs struct {
+	reviewedSHA    string
+	prior          *LoadedPriorFeedback
+	language       string // the review's language lens; "generic" is forced to a human
+	injectionGuard string // pr_review.py's prompt-injection scan result; "" for older spools
+}
+
+// readSpoolGateInputs re-reads the spool front-matter. reviewed_sha falls back
+// to fallbackSHA (the record's LastReviewedSHA) when the front-matter lacks
+// it. If the spool can't be re-read, the keys' presence is unknown, so both
+// checks that depend on them fail closed: prior feedback is an unreadable
+// file (not an older spool without one), and injection_guard is
+// injectionGuardUnreadable.
+func readSpoolGateInputs(path, fallbackSHA string) spoolGateInputs {
+	in := spoolGateInputs{reviewedSHA: fallbackSHA}
+	data, err := readSpoolFileFunc(path)
+	if err != nil {
+		in.prior = &LoadedPriorFeedback{Err: fmt.Errorf("re-read spool front-matter: %w", err)}
+		in.injectionGuard = injectionGuardUnreadable
+		return in
+	}
+	fm := ParseSpoolFrontMatter(data)
+	in.prior = loadPriorFeedback(fm)
+	if fm["reviewed_sha"] != "" {
+		in.reviewedSHA = fm["reviewed_sha"]
+	}
+	in.language = fm["language"]
+	in.injectionGuard = injectionGuardValue(fm)
+	return in
+}
+
 // RunAutoPostGate is the default runAutoPostGateFunc seam implementation the
 // watcher calls after a successful review. It gathers the inputs
 // EvaluateAndMaybePost needs — the freshly-updated record (for SpoolPath and
@@ -305,27 +363,13 @@ func RunAutoPostGate(ctx context.Context, rec Record, headSHA string, store Stor
 		return GateResult{}, fmt.Errorf("auto-post gate: cannot read spool body for %s#%d: %s", rec.Repo, rec.PR, updated.SpoolPath)
 	}
 
-	// reviewed_sha from the spool front-matter (RunReview stamps it). Fall back
-	// to the record's LastReviewedSHA if the front-matter lacks it.
-	//
-	// prior_feedback (pr_review.py's prior-feedback snapshot) is loaded here so
-	// the guardrail stays pure. If the spool can't be re-read, the key's
-	// presence is unknown: treat that as an unreadable prior-feedback file
-	// (fail closed) rather than as an older spool without one.
-	reviewedSHA := updated.LastReviewedSHA
-	var prior *LoadedPriorFeedback
-	if data, readErr := os.ReadFile(updated.SpoolPath); readErr != nil {
-		prior = &LoadedPriorFeedback{Err: fmt.Errorf("re-read spool front-matter: %w", readErr)}
-	} else {
-		fm := ParseSpoolFrontMatter(data)
-		prior = loadPriorFeedback(fm)
-		if fm["reviewed_sha"] != "" {
-			reviewedSHA = fm["reviewed_sha"]
-		}
-		// The language lens the review used. A "generic" (non-specialist)
-		// review is forced to a human by the guardrail, never auto-posted.
-		cfg.Language = fm["language"]
-	}
+	// Front-matter inputs (reviewed_sha, prior feedback, language,
+	// injection_guard) are loaded here so the guardrail stays pure; see
+	// readSpoolGateInputs for the fail-closed rules.
+	in := readSpoolGateInputs(updated.SpoolPath, updated.LastReviewedSHA)
+	reviewedSHA, prior := in.reviewedSHA, in.prior
+	cfg.Language = in.language
+	cfg.InjectionGuard = in.injectionGuard
 
 	// Fetch the PR diff to a temp file, then read it back. The guardrail's
 	// anchoring check and the auditor both need it.

@@ -231,6 +231,14 @@ func buildGateRows(lines []auditLine) []AgreementRow {
 				r.GateWould = gateWouldPunch
 				r.PunchReason = l.Detail
 			}
+		case "injection":
+			// The auditor's late injection catch overrides its verdict: the
+			// gate punches whatever the auditor said. Recorded after the
+			// auditor step, so it wins.
+			if l.Status != "pass" {
+				r.GateWould = gateWouldPunch
+				r.PunchReason = l.Detail
+			}
 		case "outcome":
 			switch {
 			case l.Status == "error":
