@@ -172,10 +172,21 @@ func TestBuildAuditorPrompt_PriorFeedback(t *testing.T) {
 // it, and fakes the diff fetch. Returns the record and store.
 func gateSpoolFixture(t *testing.T, priorKey string) (Record, StoreInterface) {
 	t.Helper()
+	var extra map[string]string
+	if priorKey != "" {
+		extra = map[string]string{"prior_feedback": priorKey}
+	}
+	return gateSpoolFixtureFM(t, extra)
+}
+
+// gateSpoolFixtureFM is gateSpoolFixture with arbitrary extra front-matter
+// keys added to the spool.
+func gateSpoolFixtureFM(t *testing.T, extra map[string]string) (Record, StoreInterface) {
+	t.Helper()
 	base := t.TempDir()
 	fm := map[string]string{"repo": "Bit-Quill/flowdra", "pr": "42", "verdict": "COMMENT", "reviewed_sha": "abc123", "language": "go"}
-	if priorKey != "" {
-		fm["prior_feedback"] = priorKey
+	for k, v := range extra {
+		fm[k] = v
 	}
 	body := "# Review\n\n## Summary\nTidies foo.\n\n## Findings\n- internal/foo.go:10 - low - unused var -> remove it\n\n" +
 		"## Reviewer notes\nAlready raised (dropped): internal/foo.go:11 - see alice's thread\n\nVERDICT: COMMENT\n"

@@ -77,6 +77,42 @@ func auditorRationale(answer string) string {
 	}
 }
 
+// auditorInjectionMarker is the prefix the review-auditor persona puts at the
+// start of its NOTES: content when the review body contains an injected
+// instruction, followed by the quoted text. It is matched case-sensitively to
+// the persona contract, which spells it in upper case: a note that begins
+// with lower-case "injection: …" is ordinary prose about a finding (say, a
+// SQL injection the review reports), not the auditor's alarm.
+const auditorInjectionMarker = "INJECTION:"
+
+// maxInjectionNoteRunes caps the auditor's injection note in the audit detail
+// and the gate's Reason, so the quoted text cannot crowd out the rest.
+const maxInjectionNoteRunes = 300
+
+// auditorInjectionNote reports whether any NOTES: line in the auditor's answer
+// starts (after leading spaces) with auditorInjectionMarker, and returns the
+// text after the marker, trimmed. The first marked NOTES: line wins. The
+// marker anywhere else — later in a NOTES: line, or outside NOTES: — does not
+// count: the contract places it at the start so that quoted review text
+// mentioning the word cannot trigger or suppress it.
+func auditorInjectionNote(answer string) (string, bool) {
+	for _, m := range auditorNotesLineRe.FindAllStringSubmatch(answer, -1) {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(m[1]), auditorInjectionMarker); ok {
+			return strings.TrimSpace(rest), true
+		}
+	}
+	return "", false
+}
+
+// truncateRunes cuts s to at most n runes, appending "…" when it cut.
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
 // parseAuditorVerdict returns the value of the LAST matching VERDICT: line in
 // the agent's answer, and ok=false when no well-formed verdict line is present
 // (which the caller treats as fail-closed → NEEDS_HUMAN).
