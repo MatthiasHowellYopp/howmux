@@ -215,14 +215,14 @@ func EvaluateAndMaybePost(ctx context.Context, rec Record, body, verdict, headSH
 	case outcomePosted:
 		n, err := postReviewFunc(ctx, rec)
 		if err != nil {
-			recordAudit(audit, auditStep{step: "outcome", status: "error", detail: "post failed: " + err.Error()})
+			recordAudit(audit, auditStep{step: "outcome", status: outcomeErrStatus(err), detail: "post failed: " + err.Error()})
 			return GateResult{Outcome: outcomePunted, WouldHaveDone: outcomePosted, Reason: "post failed: " + err.Error()}, err
 		}
 		recordAudit(audit, auditStep{step: "outcome", status: "pass", detail: "posted"})
 		return GateResult{Outcome: outcomePosted, WouldHaveDone: outcomePosted, Reason: "auto-posted", CommentsPosted: n}, nil
 	case outcomeDiscarded:
 		if err := discardReviewFunc(rec); err != nil {
-			recordAudit(audit, auditStep{step: "outcome", status: "error", detail: "discard failed: " + err.Error()})
+			recordAudit(audit, auditStep{step: "outcome", status: outcomeErrStatus(err), detail: "discard failed: " + err.Error()})
 			return GateResult{Outcome: outcomePunted, WouldHaveDone: outcomeDiscarded, Reason: "discard failed: " + err.Error()}, err
 		}
 		recordAudit(audit, auditStep{step: "outcome", status: "pass", detail: "discarded"})
@@ -231,6 +231,15 @@ func EvaluateAndMaybePost(ctx context.Context, rec Record, body, verdict, headSH
 
 	// Unreachable (would is one of posted/discarded/punted, punted handled above).
 	return GateResult{Outcome: outcomePunted, WouldHaveDone: would, Reason: "no action"}, nil
+}
+
+// outcomeErrStatus is the audit status for a failed gate action: "fail" when a
+// guard refused it (someone else finalized the review first), else "error".
+func outcomeErrStatus(err error) string {
+	if IsGuardStop(err) {
+		return "fail"
+	}
+	return "error"
 }
 
 // recordAudit writes one audit step, logging (not returning) any write error —

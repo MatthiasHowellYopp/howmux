@@ -710,6 +710,12 @@ func buildReviewPayload(repo string, pr int, verdict string, body string, commen
 // caller needs to know the file may now be inconsistent (decision written
 // but not yet archived).
 func DiscardReview(rec Record) error {
+	unlock, err := lockFinalize(rec.SpoolPath)
+	if err != nil {
+		return fmt.Errorf("discard %s#%d: %w", rec.Repo, rec.PR, err)
+	}
+	defer unlock()
+
 	dw := NewDecisionWriter()
 	if err := dw.SetDecision(rec.SpoolPath, "discard"); err != nil {
 		return err
@@ -748,6 +754,14 @@ func DiscardReview(rec Record) error {
 //
 // Returns the number of inline comments posted on success.
 func PostReview(ctx context.Context, rec Record) (commentsPosted int, err error) {
+	// Held across the done/ check, the post and the archive, so a second
+	// finalizer can't post the same review during the seconds the post takes.
+	unlock, err := lockFinalize(rec.SpoolPath)
+	if err != nil {
+		return 0, fmt.Errorf("post %s#%d: %w", rec.Repo, rec.PR, err)
+	}
+	defer unlock()
+
 	dw := NewDecisionWriter()
 	if err := dw.SetDecision(rec.SpoolPath, "post"); err != nil {
 		return 0, err
@@ -758,7 +772,7 @@ func PostReview(ctx context.Context, rec Record) (commentsPosted int, err error)
 		return 0, fmt.Errorf("no spool file for %s#%d (spool path resolution changed mid-operation): %s", rec.Repo, rec.PR, rec.SpoolPath)
 	}
 	if inDoneDir {
-		return 0, fmt.Errorf("review already finalized (archived to done/); cannot post: %s", resolved)
+		return 0, fmt.Errorf("%w; cannot post: %s", ErrAlreadyFinalized, resolved)
 	}
 
 	body, info := ReadSpoolBody(resolved, "")
@@ -980,12 +994,18 @@ Print the whole review as your reply. End with a final line exactly:
 // buildRevisePrompt interpolates them verbatim into a multi-line prompt, so
 // multi-line notes are accepted as-is.
 func ReviseReview(ctx context.Context, rec Record, inlineNotes string) (newVerdict string, err error) {
+	unlock, err := lockFinalize(rec.SpoolPath)
+	if err != nil {
+		return "", fmt.Errorf("revise %s#%d: %w", rec.Repo, rec.PR, err)
+	}
+	defer unlock()
+
 	resolved, found, inDoneDir := resolveSpoolPath(rec.SpoolPath)
 	if !found {
 		return "", fmt.Errorf("no spool file for %s#%d: %s", rec.Repo, rec.PR, rec.SpoolPath)
 	}
 	if inDoneDir {
-		return "", fmt.Errorf("review already finalized (archived to done/); cannot revise: %s", resolved)
+		return "", fmt.Errorf("%w; cannot revise: %s", ErrAlreadyFinalized, resolved)
 	}
 
 	body, info := ReadSpoolBody(resolved, "")
@@ -1040,12 +1060,18 @@ func ReviseReview(ctx context.Context, rec Record, inlineNotes string) (newVerdi
 // caller can tell the user the result is missing those lenses. A diff fetch
 // failure is returned as an error; rereview never falls back to a revise.
 func RereviewReview(ctx context.Context, rec Record, inlineNotes string) (newVerdict string, warning string, err error) {
+	unlock, err := lockFinalize(rec.SpoolPath)
+	if err != nil {
+		return "", "", fmt.Errorf("rereview %s#%d: %w", rec.Repo, rec.PR, err)
+	}
+	defer unlock()
+
 	resolved, found, inDoneDir := resolveSpoolPath(rec.SpoolPath)
 	if !found {
 		return "", "", fmt.Errorf("no spool file for %s#%d: %s", rec.Repo, rec.PR, rec.SpoolPath)
 	}
 	if inDoneDir {
-		return "", "", fmt.Errorf("review already finalized (archived to done/); cannot rereview: %s", resolved)
+		return "", "", fmt.Errorf("%w; cannot rereview: %s", ErrAlreadyFinalized, resolved)
 	}
 
 	data, readErr := os.ReadFile(resolved)

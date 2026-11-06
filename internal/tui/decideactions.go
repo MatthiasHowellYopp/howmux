@@ -329,6 +329,13 @@ func (m model) launchDecideDiscard(rec review.Record) (model, tea.Cmd) {
 // it waits, so p then R can open the composer under it, and both could
 // otherwise launch against the same spool.
 func (m model) refuseIfDecideInFlight(rec review.Record) (model, bool) {
+	// A review or auto-post gate still running on this PR may post, discard
+	// or rewrite the spool any second; deciding now would race it.
+	if reviewInFlightFunc(rec.Repo, rec.PR) {
+		m = m.appendActivity(m.styles.Warning.Render(fmt.Sprintf(
+			"Review or auto-post gate still running for %s#%d — wait for it to finish before deciding", rec.Repo, rec.PR)))
+		return m, true
+	}
 	rt := m.findReviewsTab()
 	if rt == nil {
 		return m, false
@@ -369,6 +376,9 @@ func (m model) clearDecideInFlight(rec review.Record) {
 var recordHumanDecisionFunc = func(rec review.Record, decision string) func(error) {
 	return review.BeginHumanDecision(rec, decision).Finish
 }
+
+// reviewInFlightFunc wraps review.ReviewInFlight for testability.
+var reviewInFlightFunc = review.ReviewInFlight
 
 // postReviewFunc wraps review.PostReview for testability, mirroring
 // runReviewFunc's/ensureCheckoutFunc's existing seam pattern in commands.go.

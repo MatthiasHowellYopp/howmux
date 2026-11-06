@@ -364,6 +364,15 @@ func (w *Watcher) dispatch(rec Record, headSHA string) {
 		logging.Debug("concurrency cap reached, skipping review", "repo", rec.Repo, "pr", rec.PR, "active", len(w.activeReviews), "max", w.maxConcurrent)
 		return
 	}
+	// Process-wide guard: a manual `review <URL>` run of this PR isn't in
+	// activeReviews, and its record still looks never-reviewed until it
+	// finishes.
+	release, ok := ClaimReview(rec.Repo, rec.PR)
+	if !ok {
+		w.mu.Unlock()
+		logging.Debug("review already in flight elsewhere for PR, skipping", "repo", rec.Repo, "pr", rec.PR)
+		return
+	}
 	w.activeReviews[prKey] = true
 	w.mu.Unlock()
 
@@ -376,6 +385,7 @@ func (w *Watcher) dispatch(rec Record, headSHA string) {
 			w.mu.Lock()
 			delete(w.activeReviews, key)
 			w.mu.Unlock()
+			release() // held through the gate below
 			logging.Debug("review completed, slot freed", "repo", r.Repo, "pr", r.PR)
 		}()
 

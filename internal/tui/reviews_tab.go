@@ -428,6 +428,10 @@ func (rt *ReviewsTab) resolveSpoolInfo(sorted []review.Record) []review.SpoolInf
 		infos[i] = spoolInfoForFunc(rec.SpoolPath, homeDir)
 		if action, ok := rt.InFlightAction(rec); ok {
 			infos[i].DecisionState = inFlightLabel(action)
+		} else if reviewInFlightFunc(rec.Repo, rec.PR) {
+			// The review or its auto-post gate is still running; decisions
+			// are refused until it finishes.
+			infos[i].DecisionState = "auto-review running..."
 		}
 	}
 	return infos

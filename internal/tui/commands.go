@@ -427,6 +427,9 @@ var getPRFunc = func(repo string, pr int) (github.PR, error) {
 	return github.GetPR(repo, pr)
 }
 
+// claimReviewFunc wraps review.ClaimReview for testability.
+var claimReviewFunc = review.ClaimReview
+
 // runReviewFunc wraps review.RunReview for testability
 var runReviewFunc = func(ctx context.Context, rec review.Record, headSHA string, storeImpl review.StoreInterface, tabWriter io.Writer) error {
 	return review.RunReview(ctx, rec, headSHA, storeImpl, tabWriter)
@@ -1008,6 +1011,16 @@ func (m model) handleReview(args []string) (model, tea.Cmd) {
 		m = m.appendActivity(m.styles.Success.Render(fmt.Sprintf("Enrolled PR #%d for review", prNum)))
 	}
 
+	// Claim the PR for the whole review and gate, so the watcher's next poll
+	// (which sees a never-reviewed record) doesn't start a second review, and
+	// so a second `review` of the same URL is refused rather than duplicated.
+	releaseClaim, claimed := claimReviewFunc(fullRepo, prNum)
+	if !claimed {
+		m = m.appendActivity(m.styles.Warning.Render(fmt.Sprintf(
+			"A review of %s#%d is already in progress; not starting another", fullRepo, prNum)))
+		return m, nil
+	}
+
 	// Immediate feedback before async dispatch
 	m = m.appendActivity(m.styles.Activity.Render(fmt.Sprintf("Starting review of PR #%d...", prNum)))
 
@@ -1033,6 +1046,8 @@ func (m model) handleReview(args []string) (model, tea.Cmd) {
 
 	// Store cancel function in a closure for cleanup
 	reviewCmd := func() tea.Msg {
+		defer releaseClaim()
+
 		// Fetch PR metadata for head SHA
 		prData, err := getPRFunc(fullRepo, prNum)
 		if err != nil {

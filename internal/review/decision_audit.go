@@ -79,6 +79,11 @@ func (hd *HumanDecision) Finish(actErr error) {
 	detail := formatKV("decision", hd.decision, "verdict", hd.verdict, "reviewed_sha", hd.reviewedSHA)
 	if actErr != nil {
 		status = "error"
+		if IsGuardStop(actErr) {
+			// Refused because the review was already finalized or busy: a
+			// guard working, not a broken run.
+			status = "fail"
+		}
 		detail += decisionErrorSep + actErr.Error()
 	}
 	// Stamp the record with the decision time, not the finish time: revise and
