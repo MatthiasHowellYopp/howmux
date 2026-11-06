@@ -82,7 +82,7 @@ func (dw *DecisionWriter) SetDecision(spoolPath, decision string) error {
 		return fmt.Errorf("no spool file for this PR (nothing to decide on): %s", spoolPath)
 	}
 	if inDoneDir {
-		return fmt.Errorf("review already finalized (archived to done/); its decision can no longer be changed: %s", resolved)
+		return fmt.Errorf("%w; its decision can no longer be changed: %s", ErrAlreadyFinalized, resolved)
 	}
 
 	scriptPath := scriptPathFunc()

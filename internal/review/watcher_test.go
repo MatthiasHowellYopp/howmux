@@ -897,3 +897,83 @@ func TestWatcherEnrolledCount_ConcurrentWithRealStore(t *testing.T) {
 		t.Errorf("EnrolledCount() = %d after removing all records, want 0", got)
 	}
 }
+
+// A review started outside the watcher (the manual `review <URL>` command)
+// claims the PR; the watcher must not start a second review of it.
+func TestWatcherSkipsPRClaimedElsewhere(t *testing.T) {
+	store := &fakeStore{
+		records: []Record{
+			{Repo: "owner/repo", PR: 7, URL: "url7", Status: StatusWatching, EnrolledAt: time.Now().Format(time.RFC3339)},
+		},
+	}
+	origFetch, origDispatch, origGate := fetchPRFunc, dispatchReviewFunc, runAutoPostGateFunc
+	t.Cleanup(func() { fetchPRFunc, dispatchReviewFunc, runAutoPostGateFunc = origFetch, origDispatch, origGate })
+	fetchPRFunc = func(repo string, pr int) (github.PR, error) {
+		return github.PR{State: "OPEN", HeadRefOid: "sha-1"}, nil
+	}
+	var dispatched int32
+	done := make(chan struct{}, 1)
+	dispatchReviewFunc = func(ctx context.Context, rec Record, headSHA string, store StoreInterface, tabWriter io.Writer) error {
+		atomic.AddInt32(&dispatched, 1)
+		return nil
+	}
+	var claimedDuringGate bool
+	runAutoPostGateFunc = func(ctx context.Context, rec Record, headSHA string, store StoreInterface, cfg AutoPostConfig) (GateResult, error) {
+		claimedDuringGate = ReviewInFlight(rec.Repo, rec.PR)
+		done <- struct{}{}
+		return GateResult{}, nil
+	}
+
+	release, ok := ClaimReview("owner/repo", 7)
+	if !ok {
+		t.Fatal("initial claim failed")
+	}
+	w := NewWatcher(store, time.Second, 5, "test-reviewer")
+	w.pollOnce()
+	time.Sleep(50 * time.Millisecond)
+	if got := atomic.LoadInt32(&dispatched); got != 0 {
+		t.Fatalf("watcher dispatched %d reviews of a PR already in flight, want 0", got)
+	}
+
+	release()
+	w.pollOnce()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("watcher did not dispatch after the claim was released")
+	}
+	w.wg.Wait()
+	if got := atomic.LoadInt32(&dispatched); got != 1 {
+		t.Errorf("dispatched %d after release, want 1", got)
+	}
+	if !claimedDuringGate {
+		t.Error("the watcher's claim was not held through the auto-post gate")
+	}
+	if ReviewInFlight("owner/repo", 7) {
+		t.Error("claim not released after the review and gate finished")
+	}
+}
+
+func TestClaimReview(t *testing.T) {
+	r1, ok := ClaimReview("o/r", 1)
+	if !ok {
+		t.Fatal("first claim failed")
+	}
+	if _, ok := ClaimReview("o/r", 1); ok {
+		t.Error("second claim of the same PR succeeded")
+	}
+	if _, ok := ClaimReview("o/r", 2); !ok {
+		t.Error("claim of a different PR failed")
+	}
+	r1()
+	r1() // idempotent
+	r3, ok := ClaimReview("o/r", 1)
+	if !ok {
+		t.Error("claim after release failed")
+	}
+	r3()
+	// clean up PR 2
+	inflight.mu.Lock()
+	delete(inflight.m, inflightKey("o/r", 2))
+	inflight.mu.Unlock()
+}

@@ -10,9 +10,14 @@ import (
 )
 
 // TestMain stubs the human-decision audit seam for the whole package, so no
-// TUI test writes decision records into the real ~/PR-Review/audit.
+// TUI test writes decision records into the real ~/PR-Review/audit. It also
+// makes PR claims always succeed: many review-command tests never run the
+// returned tea.Cmd, which is what releases a real claim, so a real claim
+// would leak into later tests of the same PR. Tests of the claim itself opt
+// in with withRealReviewClaims.
 func TestMain(m *testing.M) {
 	recordHumanDecisionFunc = func(review.Record, string) func(error) { return func(error) {} }
+	claimReviewFunc = func(string, int) (func(), bool) { return func() {}, true }
 	os.Exit(m.Run())
 }
 
@@ -87,7 +92,7 @@ func TestDecideActions_RecordHumanDecision(t *testing.T) {
 	}
 
 	m := newDecideRoutingTestModel()
-	launchDecidePostCmd(rec, "COMMENT")()
+	launchDecidePostCmd(rec, "COMMENT", func() {})()
 	_, cmd := m.launchDecideRevise(rec, "")
 	cmd()
 	_, cmd = m.launchDecideRereview(rec, "")

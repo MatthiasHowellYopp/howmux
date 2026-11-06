@@ -245,8 +245,12 @@ var countFindingsFunc = countFindingsForPrompt
 // the spool file) but is threaded through for symmetry with the design
 // spec's documented model fields; kept as a parameter so a future caller
 // that already has the verdict in hand need not re-read it.
-func launchDecidePostCmd(rec review.Record, _ string) tea.Cmd {
+//
+// release drops the PR claim taken by claimForDecide; the Cmd runs it when
+// the post finishes.
+func launchDecidePostCmd(rec review.Record, _ string, release func()) tea.Cmd {
 	return func() tea.Msg {
+		defer release()
 		ctx, cancel := context.WithTimeout(context.Background(), decidePostTimeout)
 		defer cancel()
 		finish := recordHumanDecisionFunc(rec, "post")
@@ -266,9 +270,14 @@ func launchDecidePostCmd(rec review.Record, _ string) tea.Cmd {
 // case ReviseReview falls back to the persisted decision_notes). They are
 // passed straight to the seam and never persisted to the spool.
 func (m model) launchDecideRevise(rec review.Record, inlineNotes string) (model, tea.Cmd) {
+	m, release, ok := m.claimForDecide(rec)
+	if !ok {
+		return m, nil
+	}
 	m.markDecideInFlight(rec, "revise")
 	m = m.appendActivity(m.styles.Activity.Render(fmt.Sprintf("Revising review for %s#%d...", rec.Repo, rec.PR)))
 	return m, func() tea.Msg {
+		defer release()
 		ctx, cancel := context.WithTimeout(context.Background(), decideReviseTimeout)
 		defer cancel()
 		finish := recordHumanDecisionFunc(rec, "revise")
@@ -287,9 +296,14 @@ func (m model) launchDecideRevise(rec review.Record, inlineNotes string) (model,
 // multi-line instructions the user typed into the in-app composer (empty if
 // none), threaded to the seam identically to launchDecideRevise.
 func (m model) launchDecideRereview(rec review.Record, inlineNotes string) (model, tea.Cmd) {
+	m, release, ok := m.claimForDecide(rec)
+	if !ok {
+		return m, nil
+	}
 	m.markDecideInFlight(rec, "rereview")
 	m = m.appendActivity(m.styles.Activity.Render(fmt.Sprintf("Re-reviewing %s#%d (this can take several minutes)...", rec.Repo, rec.PR)))
 	return m, func() tea.Msg {
+		defer release()
 		ctx, cancel := context.WithTimeout(context.Background(), decideRereviewTimeout)
 		defer cancel()
 		finish := recordHumanDecisionFunc(rec, "rereview")
@@ -308,8 +322,13 @@ func (m model) launchDecideRereview(rec review.Record, inlineNotes string) (mode
 // still returns a tea.Cmd (rather than a direct (model, nil)) for
 // structural uniformity with the other three decide actions.
 func (m model) launchDecideDiscard(rec review.Record) (model, tea.Cmd) {
+	m, release, ok := m.claimForDecide(rec)
+	if !ok {
+		return m, nil
+	}
 	m.markDecideInFlight(rec, "discard")
 	return m, func() tea.Msg {
+		defer release()
 		finish := recordHumanDecisionFunc(rec, "discard")
 		err := discardReviewFunc(rec)
 		finish(err)
@@ -329,17 +348,39 @@ func (m model) launchDecideDiscard(rec review.Record) (model, tea.Cmd) {
 // it waits, so p then R can open the composer under it, and both could
 // otherwise launch against the same spool.
 func (m model) refuseIfDecideInFlight(rec review.Record) (model, bool) {
-	rt := m.findReviewsTab()
-	if rt == nil {
-		return m, false
+	// Check this tab's own decisions first: they hold the PR claim too, so
+	// the review check below would otherwise misreport them as a review.
+	if rt := m.findReviewsTab(); rt != nil {
+		if running, ok := rt.InFlightAction(rec); ok {
+			m = m.appendActivity(m.styles.Warning.Render(fmt.Sprintf(
+				"%s already running for %s#%d — wait for it to finish before deciding again", running, rec.Repo, rec.PR)))
+			return m, true
+		}
 	}
-	running, ok := rt.InFlightAction(rec)
+	// A review or auto-post gate still running on this PR may post, discard
+	// or rewrite the spool any second; deciding now would race it.
+	if reviewInFlightFunc(rec.Repo, rec.PR) {
+		m = m.appendActivity(m.styles.Warning.Render(fmt.Sprintf(
+			"Review or auto-post gate still running for %s#%d — wait for it to finish before deciding", rec.Repo, rec.PR)))
+		return m, true
+	}
+	return m, false
+}
+
+// claimForDecide claims rec's PR for a human decision, the same claim a
+// review holds, so neither the watcher nor a manual `review <URL>` starts a
+// review that would rewrite the spool while the decision is still working on
+// it. On success the caller's Cmd must run release when the decision ends. A
+// failed claim (a review started since refuseIfDecideInFlight checked) is
+// refused with the same warning.
+func (m model) claimForDecide(rec review.Record) (model, func(), bool) {
+	release, ok := claimReviewFunc(rec.Repo, rec.PR)
 	if !ok {
-		return m, false
+		m = m.appendActivity(m.styles.Warning.Render(fmt.Sprintf(
+			"Review or auto-post gate still running for %s#%d — wait for it to finish before deciding", rec.Repo, rec.PR)))
+		return m, nil, false
 	}
-	m = m.appendActivity(m.styles.Warning.Render(fmt.Sprintf(
-		"%s already running for %s#%d — wait for it to finish before deciding again", running, rec.Repo, rec.PR)))
-	return m, true
+	return m, release, true
 }
 
 // markDecideInFlight flags rec as having a running decide action on the
@@ -369,6 +410,9 @@ func (m model) clearDecideInFlight(rec review.Record) {
 var recordHumanDecisionFunc = func(rec review.Record, decision string) func(error) {
 	return review.BeginHumanDecision(rec, decision).Finish
 }
+
+// reviewInFlightFunc wraps review.ReviewInFlight for testability.
+var reviewInFlightFunc = review.ReviewInFlight
 
 // postReviewFunc wraps review.PostReview for testability, mirroring
 // runReviewFunc's/ensureCheckoutFunc's existing seam pattern in commands.go.
