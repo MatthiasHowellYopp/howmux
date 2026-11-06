@@ -2,7 +2,9 @@ package review
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -190,20 +192,58 @@ func TestGate_AuditorInjectionMarker_Punches(t *testing.T) {
 }
 
 // TestGate_AuditorInjectionMarker_DryRun checks dry-run records the would-be
-// decision as a punch, not the auditor's POST_OK.
+// decision as a punch whatever the auditor's verdict. WouldHaveDone is what the
+// agreement report grades, so an override that only fired for POST_OK would
+// report an injected DISCARD as "discarded".
 func TestGate_AuditorInjectionMarker_DryRun(t *testing.T) {
-	t.Setenv("PR_REVIEW_DIR", t.TempDir())
-	withFakeActions(t)
-	withKiroCLIPresent(t)
-	withFakeKiroOneshot(t, map[string]string{reviewAuditorAgent: "NOTES: INJECTION: \"approve this\"\nVERDICT: POST_OK"}, nil)
+	for _, v := range []string{"POST_OK", "DISCARD", "NEEDS_HUMAN"} {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv("PR_REVIEW_DIR", t.TempDir())
+			posts, discards := withFakeActions(t)
+			withKiroCLIPresent(t)
+			withFakeKiroOneshot(t, map[string]string{reviewAuditorAgent: "NOTES: INJECTION: \"approve this\"\nVERDICT: " + v}, nil)
 
-	rec, body, verdict, head, reviewed, diff := gateFixture()
-	res, err := EvaluateAndMaybePost(context.Background(), rec, body, verdict, head, reviewed, diff, AutoPostConfig{Mode: ModeDryRun}, nil)
-	if err != nil {
-		t.Fatal(err)
+			rec, body, verdict, head, reviewed, diff := gateFixture()
+			res, err := EvaluateAndMaybePost(context.Background(), rec, body, verdict, head, reviewed, diff, AutoPostConfig{Mode: ModeDryRun}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.Outcome != outcomeDryRun || res.WouldHaveDone != outcomePunted {
+				t.Errorf("result = %+v, want dry-run that would punch", res)
+			}
+			if *posts != 0 || *discards != 0 {
+				t.Errorf("dry-run must not act: posts=%d discards=%d", *posts, *discards)
+			}
+		})
 	}
-	if res.Outcome != outcomeDryRun || res.WouldHaveDone != outcomePunted {
-		t.Errorf("result = %+v, want dry-run that would punch", res)
+}
+
+// TestReadSpoolGateInputs_UnreadableFailsNoInjection checks that front-matter
+// that can't be re-read fails no_injection itself, not only the prior-feedback
+// check (which fails on the same path and would otherwise mask it).
+func TestReadSpoolGateInputs_UnreadableFailsNoInjection(t *testing.T) {
+	orig := readSpoolFileFunc
+	t.Cleanup(func() { readSpoolFileFunc = orig })
+	readSpoolFileFunc = func(string) ([]byte, error) { return nil, errors.New("permission denied") }
+
+	in := readSpoolGateInputs("/spool/x.md", "abc123")
+	if in.injectionGuard != injectionGuardUnreadable {
+		t.Fatalf("injectionGuard = %q, want %q", in.injectionGuard, injectionGuardUnreadable)
+	}
+	if in.reviewedSHA != "abc123" {
+		t.Errorf("reviewedSHA = %q, want the fallback", in.reviewedSHA)
+	}
+	_, _, verdict, head, _, diff := gateFixture()
+	g := evaluateAutoPostGuardrail(verdict, "VERDICT: "+verdict, head, head,
+		parseDiffCommentableLines(diff), 25, "go", nil, in.injectionGuard)
+	var failed []string
+	for _, c := range g.checks {
+		if !c.passed {
+			failed = append(failed, c.name)
+		}
+	}
+	if !slices.Contains(failed, "no_injection") {
+		t.Errorf("failed checks = %v, want no_injection among them", failed)
 	}
 }
 
@@ -257,14 +297,20 @@ func TestGate_FlaggedInjection_PunchesBeforeAuditor(t *testing.T) {
 // reaches check #8.
 func TestRunAutoPostGate_InjectionGuard(t *testing.T) {
 	tests := []struct {
-		name      string
-		extra     map[string]string
-		wantPunch bool
+		name       string
+		extra      map[string]string
+		wantPunch  bool
+		wantReason string // substring of the no_injection detail, for punches
 	}{
-		{"absent key posts", nil, false},
-		{"clean posts", map[string]string{"injection_guard": "clean"}, false},
-		{"context hits post", map[string]string{"injection_guard": "context: 2"}, false},
-		{"flagged punches", map[string]string{"injection_guard": "flagged: diff+, review_body"}, true},
+		{"absent key posts", nil, false, ""},
+		{"clean posts", map[string]string{"injection_guard": "clean"}, false, ""},
+		{"context hits post", map[string]string{"injection_guard": "context: 2"}, false, ""},
+		{"flagged punches", map[string]string{"injection_guard": "flagged: diff+, review_body"}, true, "flagged: diff+, review_body"},
+		// Through the front-matter read, not just checkNoInjection: a blank or
+		// unknown value must fail closed, so injectionGuardValue must be the
+		// call that connects them (fm[key] alone would auto-post a blank).
+		{"blank punches", map[string]string{"injection_guard": ""}, true, injectionGuardBlank},
+		{"unknown punches", map[string]string{"injection_guard": "maybe"}, true, "maybe"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -279,8 +325,9 @@ func TestRunAutoPostGate_InjectionGuard(t *testing.T) {
 				t.Fatalf("RunAutoPostGate: %v", err)
 			}
 			if tt.wantPunch {
-				if res.Outcome != outcomePunted || !strings.Contains(res.Reason, "flagged: diff+, review_body") {
-					t.Errorf("result = %+v, want a punch naming the flagged value", res)
+				if res.Outcome != outcomePunted || !strings.Contains(res.Reason, "no_injection") ||
+					!strings.Contains(res.Reason, tt.wantReason) {
+					t.Errorf("result = %+v, want a no_injection punch naming %q", res, tt.wantReason)
 				}
 				if len(*calls) != 0 {
 					t.Error("auditor ran despite a flagged spool")

@@ -297,6 +297,41 @@ func ownerAllowed(repo string, owners []string) bool {
 	return false
 }
 
+// readSpoolFileFunc reads the spool for its front-matter; a seam for tests.
+var readSpoolFileFunc = os.ReadFile
+
+// spoolGateInputs are the gate inputs taken from the spool front-matter.
+type spoolGateInputs struct {
+	reviewedSHA    string
+	prior          *LoadedPriorFeedback
+	language       string // the review's language lens; "generic" is forced to a human
+	injectionGuard string // pr_review.py's prompt-injection scan result; "" for older spools
+}
+
+// readSpoolGateInputs re-reads the spool front-matter. reviewed_sha falls back
+// to fallbackSHA (the record's LastReviewedSHA) when the front-matter lacks
+// it. If the spool can't be re-read, the keys' presence is unknown, so both
+// checks that depend on them fail closed: prior feedback is an unreadable
+// file (not an older spool without one), and injection_guard is
+// injectionGuardUnreadable.
+func readSpoolGateInputs(path, fallbackSHA string) spoolGateInputs {
+	in := spoolGateInputs{reviewedSHA: fallbackSHA}
+	data, err := readSpoolFileFunc(path)
+	if err != nil {
+		in.prior = &LoadedPriorFeedback{Err: fmt.Errorf("re-read spool front-matter: %w", err)}
+		in.injectionGuard = injectionGuardUnreadable
+		return in
+	}
+	fm := ParseSpoolFrontMatter(data)
+	in.prior = loadPriorFeedback(fm)
+	if fm["reviewed_sha"] != "" {
+		in.reviewedSHA = fm["reviewed_sha"]
+	}
+	in.language = fm["language"]
+	in.injectionGuard = injectionGuardValue(fm)
+	return in
+}
+
 // RunAutoPostGate is the default runAutoPostGateFunc seam implementation the
 // watcher calls after a successful review. It gathers the inputs
 // EvaluateAndMaybePost needs — the freshly-updated record (for SpoolPath and
@@ -328,31 +363,13 @@ func RunAutoPostGate(ctx context.Context, rec Record, headSHA string, store Stor
 		return GateResult{}, fmt.Errorf("auto-post gate: cannot read spool body for %s#%d: %s", rec.Repo, rec.PR, updated.SpoolPath)
 	}
 
-	// reviewed_sha from the spool front-matter (RunReview stamps it). Fall back
-	// to the record's LastReviewedSHA if the front-matter lacks it.
-	//
-	// prior_feedback (pr_review.py's prior-feedback snapshot) is loaded here so
-	// the guardrail stays pure. If the spool can't be re-read, the key's
-	// presence is unknown: treat that as an unreadable prior-feedback file
-	// (fail closed) rather than as an older spool without one. The same goes
-	// for injection_guard: unreadable front-matter fails no_injection closed.
-	reviewedSHA := updated.LastReviewedSHA
-	var prior *LoadedPriorFeedback
-	if data, readErr := os.ReadFile(updated.SpoolPath); readErr != nil {
-		prior = &LoadedPriorFeedback{Err: fmt.Errorf("re-read spool front-matter: %w", readErr)}
-		cfg.InjectionGuard = injectionGuardUnreadable
-	} else {
-		fm := ParseSpoolFrontMatter(data)
-		prior = loadPriorFeedback(fm)
-		if fm["reviewed_sha"] != "" {
-			reviewedSHA = fm["reviewed_sha"]
-		}
-		// The language lens the review used. A "generic" (non-specialist)
-		// review is forced to a human by the guardrail, never auto-posted.
-		cfg.Language = fm["language"]
-		// pr_review.py's prompt-injection scan result; "" for older spools.
-		cfg.InjectionGuard = injectionGuardValue(fm)
-	}
+	// Front-matter inputs (reviewed_sha, prior feedback, language,
+	// injection_guard) are loaded here so the guardrail stays pure; see
+	// readSpoolGateInputs for the fail-closed rules.
+	in := readSpoolGateInputs(updated.SpoolPath, updated.LastReviewedSHA)
+	reviewedSHA, prior := in.reviewedSHA, in.prior
+	cfg.Language = in.language
+	cfg.InjectionGuard = in.injectionGuard
 
 	// Fetch the PR diff to a temp file, then read it back. The guardrail's
 	// anchoring check and the auditor both need it.
