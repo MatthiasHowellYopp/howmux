@@ -118,6 +118,12 @@ func TestPostReview_RefusedWhileReviseRuns(t *testing.T) {
 	if err := DiscardReview(rec); !errors.Is(err, ErrReviewBusy) {
 		t.Errorf("discard during another action: err = %v, want ErrReviewBusy", err)
 	}
+	if _, err := ReviseReview(context.Background(), rec, ""); !errors.Is(err, ErrReviewBusy) {
+		t.Errorf("revise during another action: err = %v, want ErrReviewBusy", err)
+	}
+	if _, _, err := RereviewReview(context.Background(), rec, ""); !errors.Is(err, ErrReviewBusy) {
+		t.Errorf("rereview during another action: err = %v, want ErrReviewBusy", err)
+	}
 }
 
 // A refused action (already finalized, or busy) is recorded as "fail", a guard
@@ -175,6 +181,20 @@ func TestAlreadyFinalizedMessagesUnchanged(t *testing.T) {
 	if !errors.Is(err, ErrAlreadyFinalized) ||
 		!strings.HasPrefix(err.Error(), "review already finalized (archived to done/); its decision can no longer be changed: ") {
 		t.Errorf("SetDecision on done/ review: %v", err)
+	}
+
+	// Revise and rereview refusals must wrap the sentinel too, or they are
+	// logged as "error" again.
+	rec := recordForSpool("o/r", 30, spool)
+	_, err = ReviseReview(context.Background(), rec, "")
+	if !errors.Is(err, ErrAlreadyFinalized) ||
+		!strings.HasPrefix(err.Error(), "review already finalized (archived to done/); cannot revise: ") {
+		t.Errorf("ReviseReview on done/ review: %v", err)
+	}
+	_, _, err = RereviewReview(context.Background(), rec, "")
+	if !errors.Is(err, ErrAlreadyFinalized) ||
+		!strings.HasPrefix(err.Error(), "review already finalized (archived to done/); cannot rereview: ") {
+		t.Errorf("RereviewReview on done/ review: %v", err)
 	}
 }
 

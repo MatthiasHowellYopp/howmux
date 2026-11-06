@@ -1147,10 +1147,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m, refused := m.refuseIfDecideInFlight(rec); refused {
 					return m, nil
 				}
+				m, release, ok := m.claimForDecide(rec)
+				if !ok {
+					return m, nil
+				}
 				m.markDecideInFlight(rec, "post")
 				m = m.appendActivity(m.styles.Activity.Render(
 					fmt.Sprintf("Posting review for %s#%d...", rec.Repo, rec.PR)))
-				return m, launchDecidePostCmd(rec, verdict)
+				return m, launchDecidePostCmd(rec, verdict, release)
 			case "n", "no", "esc":
 				m.decidePostConfirmState = decidePostConfirmIdle
 				m = m.appendActivity(m.styles.Warning.Render(

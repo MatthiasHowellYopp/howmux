@@ -92,7 +92,7 @@ func TestDecideActions_RecordHumanDecision(t *testing.T) {
 	}
 
 	m := newDecideRoutingTestModel()
-	launchDecidePostCmd(rec, "COMMENT")()
+	launchDecidePostCmd(rec, "COMMENT", func() {})()
 	_, cmd := m.launchDecideRevise(rec, "")
 	cmd()
 	_, cmd = m.launchDecideRereview(rec, "")

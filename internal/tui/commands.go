@@ -427,6 +427,10 @@ var getPRFunc = func(repo string, pr int) (github.PR, error) {
 	return github.GetPR(repo, pr)
 }
 
+// checkReviewAssetsFunc wraps review.CheckReviewAssets for testability, so
+// handleReview's tests don't depend on the machine's ~/.kiro.
+var checkReviewAssetsFunc = review.CheckReviewAssets
+
 // claimReviewFunc wraps review.ClaimReview for testability.
 var claimReviewFunc = review.ClaimReview
 
@@ -920,7 +924,7 @@ func (m model) handleReview(args []string) (model, tea.Cmd) {
 		return m, nil
 	}
 	kiroDir := filepath.Join(homeDir, ".kiro")
-	if err := review.CheckReviewAssets(kiroDir); err != nil {
+	if err := checkReviewAssetsFunc(kiroDir); err != nil {
 		m = m.appendActivity(m.styles.Error.Render("PR-review preflight failed:"))
 		m = m.appendActivity(m.styles.Error.Render(err.Error()))
 		return m, nil
