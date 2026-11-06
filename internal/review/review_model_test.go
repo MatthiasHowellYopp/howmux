@@ -196,3 +196,49 @@ func TestGate_AuditorFallsBackToReviewModel(t *testing.T) {
 		t.Errorf("auditor models = %v, want [claude-sonnet-4.6]", got)
 	}
 }
+
+// Revise runs the consolidator one-shot; it must carry the pinned model.
+func TestReviseUsesReviewModel(t *testing.T) {
+	withReviewModel(t, "claude-sonnet-4.6")
+	spoolPath := writeFakeSpoolFile(t, t.TempDir(), map[string]string{
+		"repo": "owner/repo", "pr": "11", "verdict": "COMMENT", "decision": "revise",
+	}, "# Old Review\n\nold findings\nVERDICT: COMMENT\n")
+	calls := withFakeKiroOneshot(t, map[string]string{
+		"review-consolidator": "# Revised Review\n\nVERDICT: COMMENT",
+	}, nil)
+	if _, err := ReviseReview(context.Background(), recordForSpool("owner/repo", 11, spoolPath), "recheck"); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, c := range *calls {
+		if c.agentName == "review-consolidator" {
+			got = append(got, c.model)
+		}
+	}
+	if len(got) != 1 || got[0] != "claude-sonnet-4.6" {
+		t.Errorf("revise consolidator models = %v, want [claude-sonnet-4.6]", got)
+	}
+}
+
+// Rereview re-runs pr_review.py; its argv must carry --model like RunReview's.
+func TestRereviewPassesReviewModel(t *testing.T) {
+	for _, tc := range []struct{ model, want string }{
+		{"claude-sonnet-4.6", "claude-sonnet-4.6"},
+		{"", ""},
+	} {
+		withReviewModel(t, tc.model)
+		spoolPath := writeFakeSpoolFile(t, t.TempDir(), map[string]string{
+			"repo": "owner/repo", "pr": "23", "verdict": "COMMENT", "decision": "rereview",
+		}, "# Review\n\nVERDICT: COMMENT\n")
+		run := withFakeRereviewSeams(t, "head123", "COMMENT", "", nil, nil)
+		if _, _, err := RereviewReview(context.Background(), recordForSpool("owner/repo", 23, spoolPath), ""); err != nil {
+			t.Fatal(err)
+		}
+		if got := argValue(run.argv, "--model"); got != tc.want {
+			t.Errorf("review model %q: --model = %q, want %q (argv %v)", tc.model, got, tc.want, run.argv)
+		}
+		if tc.want == "" && hasArg(run.argv, "--model") {
+			t.Errorf("no review model: argv %v should not pass --model", run.argv)
+		}
+	}
+}

@@ -40,12 +40,20 @@ type AutoPostConfig struct {
 	AuditorModel  string   `yaml:"auditor_model"`   // kiro-cli --model for the review-auditor; "" = kiro-cli's default
 }
 
+// DefaultReviewModel is review.model when the config doesn't set it. It must
+// match ai-resources workflows/kiro_oneshot.py WORKFLOW_MODEL, which
+// pr_review.py falls back to when howmux passes no --model. Otherwise an
+// unset review.model splits the workflow: the lenses and consolidator run on
+// WORKFLOW_MODEL while the humanizer, revise and auditor run on "auto".
+const DefaultReviewModel = "claude-sonnet-5.5"
+
 // ReviewConfig groups review-workflow configuration.
 type ReviewConfig struct {
 	// Model pins the kiro-cli --model for every agent step of the review
 	// workflow (lenses, consolidator, humanizer, and the auditor unless
-	// auto_post.auditor_model is set). "" leaves kiro-cli's default ("auto"),
-	// which never names the model it picked, so the audit trail can't record it.
+	// auto_post.auditor_model is set). Defaults to DefaultReviewModel when the
+	// key is absent. An explicit "" leaves kiro-cli's default ("auto"), which
+	// never names the model it picked, so the audit trail can't record it.
 	Model    string         `yaml:"model"`
 	AutoPost AutoPostConfig `yaml:"auto_post"`
 	// DiscoverRequested makes the watcher scan every repo that already has an
@@ -100,6 +108,7 @@ func Load() (*Config, error) {
 			LogDir:         ".howmux/logs",
 		},
 		Review: ReviewConfig{
+			Model: DefaultReviewModel,
 			AutoPost: AutoPostConfig{
 				Mode:          "dry-run", // safe default: never auto-posts
 				MaxFindings:   25,

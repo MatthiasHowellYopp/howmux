@@ -157,8 +157,26 @@ func TestLoad_ReviewModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
+	if got := cfg.Review.Model; got != DefaultReviewModel {
+		t.Errorf("default Review.Model = %q, want %q", got, DefaultReviewModel)
+	}
+
+	// A review block without a model key still gets the default.
+	cfg, err = loadConfigFrom(t, "repo: test/repo\nreview:\n  auto_post:\n    mode: dry-run")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.Review.Model; got != DefaultReviewModel {
+		t.Errorf("review block without model: Review.Model = %q, want %q", got, DefaultReviewModel)
+	}
+
+	// An explicit empty model opts out to kiro-cli's default.
+	cfg, err = loadConfigFrom(t, "repo: test/repo\nreview:\n  model: \"\"")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
 	if got := cfg.Review.Model; got != "" {
-		t.Errorf("default Review.Model = %q, want empty (kiro-cli default)", got)
+		t.Errorf("explicit empty model: Review.Model = %q, want empty", got)
 	}
 
 	for _, v := range []string{`claude sonnet`, `--help`, `"claude;rm"`} {

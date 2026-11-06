@@ -263,6 +263,8 @@ func TestParseStreamJSON_Model(t *testing.T) {
 		{"model_pinned_last_wins", lines(t, modelOption("s6", "auto"), modelOption("s6", "claude-sonnet-4.6"), finished("s6")), "claude-sonnet-4.6", f(1.3)},
 		{"model_without_rate", lines(t, modelOption("s7", "claude-no-rate"), finished("s7")), "claude-no-rate", nil},
 		{"model_absent", lines(t, chunk("s8", "hi"), finished("s8")), "", nil},
+		// A later model without a rate must not inherit the earlier one's.
+		{"model_rate_reset", lines(t, modelOption("s9", "auto"), modelOption("s9", "claude-no-rate"), finished("s9")), "claude-no-rate", nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
